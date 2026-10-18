@@ -3,6 +3,7 @@ import logging
 import multiprocessing
 import socket
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -107,6 +108,9 @@ class FakeResponse:
 
     def read1(self, size):
         return self.data.read(size)
+
+    def isclosed(self):
+        return False
 
 
 def stub_connection(monkeypatch, response):
@@ -218,3 +222,13 @@ def test_extraction_child_does_not_log_reading_url(monkeypatch, settings, caplog
         logging.disable(previous_level)
     assert sensitive_url not in caplog.text
     assert messages == [(False, "No readable article found")]
+
+
+def test_real_trafilatura_extracts_article_title_and_body(monkeypatch, settings):
+    html = (Path(__file__).parent / "fixtures" / "article.html").read_bytes()
+    stub_connection(monkeypatch, FakeResponse(html, {"Content-Type": "text/html"}))
+    article = fetching._fetch_document("https://example.com/article", settings)
+    assert article.title == "Retrieval practice and memory"
+    assert PASSAGE.strip() in article.text
+    assert "Subscribe for updates" not in article.text
+    assert not article.truncated

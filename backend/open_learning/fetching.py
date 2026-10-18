@@ -125,7 +125,7 @@ def _fetch_document(url: str, settings: Settings) -> FetchedDocument:
             if length and (not length.isdigit() or int(length) > settings.fetch_max_bytes):
                 raise FetchError("Source exceeds download size limit")
             content = bytearray()
-            while True:
+            while not response.isclosed():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise FetchError("Fetch timed out")
@@ -137,13 +137,17 @@ def _fetch_document(url: str, settings: Settings) -> FetchedDocument:
                 content.extend(block)
                 if len(content) > settings.fetch_max_bytes:
                     raise FetchError("Source exceeds download size limit")
+            if length and len(content) != int(length):
+                raise FetchError("Incomplete source response")
             raw = bytes(content).decode("utf-8", errors="replace")
             if media_type == "text/plain":
                 title, text = host, raw
             else:
                 import trafilatura
 
-                extracted = trafilatura.bare_extraction(raw, url=url, favor_precision=True)
+                extracted = trafilatura.bare_extraction(
+                    raw, url=url, favor_precision=True, with_metadata=True
+                )
                 if extracted is None:
                     raise FetchError("No readable article found")
                 title, text = extracted.title or host, extracted.text or ""
