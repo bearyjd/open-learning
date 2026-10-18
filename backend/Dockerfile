@@ -2,8 +2,8 @@ FROM python:3.12-slim
 WORKDIR /app
 RUN pip install --no-cache-dir uv==0.11.6 \
     && useradd --uid 10001 --create-home app
-COPY pyproject.toml ./
-RUN uv sync --no-dev --no-install-project --default-index https://pypi.org/simple
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 COPY open_learning ./open_learning
 COPY migrations ./migrations
 COPY alembic.ini ./

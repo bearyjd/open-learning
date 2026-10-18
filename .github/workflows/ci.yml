@@ -31,8 +31,8 @@ jobs:
         with:
           version: '0.11.6'
           enable-cache: true
-          cache-dependency-glob: backend/pyproject.toml
-      - run: uv sync --python 3.12 --default-index https://pypi.org/simple
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen --python 3.12
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync alembic upgrade head
       - run: uv run --no-sync alembic check
