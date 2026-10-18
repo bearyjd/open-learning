@@ -7,7 +7,7 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 
 | Area | Evidence |
 | --- | --- |
-| Backend | 45 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 17 Python files. |
+| Backend | 46 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 18 Python files. |
 | Extraction and HTTP | Real Trafilatura extraction and local TCP HTTP regression tests cover article titles, complete body reads, and rejection of incomplete declared bodies. Model HTTP boundary tests use controlled responses. |
 | Database | Independent fresh PostgreSQL/pgvector migration upgrade, `alembic check`, and repeated upgrade pass. |
 | Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
@@ -28,6 +28,13 @@ truncation, and model metadata in API JSON.
 The model HTTP contract test verifies strict JSON-schema requests and rejection
 of an oversized 2,001-character response after simplifying generation constraints.
 Full Pydantic validation still applies to returned content.
+
+The feed concurrency regression failed with a duplicate-key error before the
+fix. It coordinates two authenticated API requests at the real PostgreSQL insert
+boundary; both now return the same persisted feed with at most ten unique usable
+cards. It also verifies dismissal and refill with new content. This boundary
+does not exercise Android or model behavior. On SQLite, the suite passes 45 tests
+and skips this PostgreSQL-specific concurrency test.
 
 The extraction and response-body fixes were checked with failing regression
 tests before the fixes and passing tests afterward. Android lint warnings concern
@@ -68,9 +75,7 @@ output as intended. No model weights are bundled.
   KVM starts crashed and software boot remained offline. The APK has not been
   validated through a device UI, including offline reading and queued import
   recovery.
-- Concurrent first requests for a daily feed can race while creating its unique
-  database row. This remains follow-up work. Backend tests emit an upstream
-  Starlette TestClient deprecation warning.
+- Backend tests emit an upstream Starlette TestClient deprecation warning.
 - Restart/recovery still needs acceptance checks.
 
 The manual [live smoke script](../scripts/smoke_live.py) uses real API requests

@@ -73,7 +73,18 @@ def serialize_review(db: Session, item: ReviewItem) -> dict:
 
 def today_feed(db: Session) -> list[dict]:
     day = now().date().isoformat()
-    feed = db.get(DailyFeed, day)
+    feed = db.get(DailyFeed, day, with_for_update=True)
+    if feed is None:
+        try:
+            with db.begin_nested():
+                feed = DailyFeed(day=day, insight_ids=[])
+                db.add(feed)
+                db.flush()
+        except IntegrityError:
+            # Another first request created today's row; keep this transaction usable.
+            feed = db.get(DailyFeed, day, with_for_update=True)
+            if feed is None:
+                raise
     candidates = list(
         db.scalars(
             select(Insight)
@@ -82,9 +93,6 @@ def today_feed(db: Session) -> list[dict]:
             .limit(10)
         )
     )
-    if feed is None:
-        feed = DailyFeed(day=day, insight_ids=[])
-        db.add(feed)
     valid_ids = [
         key
         for key in feed.insight_ids
