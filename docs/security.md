@@ -26,8 +26,13 @@ Only extracted plain text is rendered; scripts and HTML are not displayed in a
 WebView. The first milestone has no document upload endpoint. Future upload
 adapters must enforce compressed and decompressed limits and prevent archive
 path traversal. Source text can contain malicious model instructions; the AI
-prompt treats it as data and output must cite an exact available passage. A
-matching quote proves provenance, not factual correctness or logical entailment.
+prompt treats it as data. Insight output selects a known source-span ID, which
+the backend resolves to canonical text; unknown IDs and model-written quote/index
+fields are rejected. Tutor output also selects a supplied span before its answer
+and question. Both paths verify the canonical text against the original passage. These checks
+establish provenance, not factual correctness or logical entailment. ID selection
+removes fabricated quote copying as a failure signal, so valid references can
+still accompany unsupported prose.
 Tutor feedback remains labeled AI interpretation and can be wrong.
 
 Normal API access logs are disabled in deployment because URLs and query strings

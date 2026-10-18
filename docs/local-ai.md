@@ -5,8 +5,17 @@ default is local; there is no automatic cloud fallback. Both insight generation
 and tutoring require strict `response_format` JSON-schema output from a chat
 completions endpoint. OpenAI API compatibility alone is insufficient: a server
 supporting only JSON-object output fails closed.
-Malformed output or evidence that does not match the supplied text causes a
-failed operation rather than publication of an unsupported card.
+Insight generation asks for one narrow idea and a supplied source-span ID before
+drafting its content. The backend resolves that ID to the original text and chunk;
+it does not repair or search for a model-written quotation. Unknown IDs, malformed
+content, and legacy quotation/index fields fail the operation. Tutoring uses the
+same ID-first selection before its answer and follow-up question. Both paths
+verify the resolved canonical quotation against the original source chunk.
+
+Valid citations establish provenance, not whether generated claims follow from
+the cited text. Selecting an existing ID can accompany an unsupported explanation.
+This design removes fabricated quote copying as a rejection signal; it does not
+provide a semantic fact checker. Generated cards remain AI interpretation.
 
 ## llama.cpp
 
@@ -16,6 +25,8 @@ license. Choose a size and quantization that fit your hardware; memory use also
 depends on context size and GPU layer count. CPU inference may require a smaller
 model and longer request timeouts.
 No particular model is required by the application.
+For a pinned Vulkan binary and optional four-bit model setup on an 8 GB NVIDIA
+GPU, see [the Vulkan example](local-vulkan.md).
 
 Example using an already downloaded model:
 
@@ -74,11 +85,12 @@ and cross-document RAG are not implemented yet.
 
 ## Verify your setup
 
-A real local-model workflow passed on a short public page; a longer article
-failed evidence validation without publishing insights. General article/model
-quality and device acceptance remain pending. See the
-[live model results](verification.md#live-model-results) for the tested model,
-server flags, and limits of that result.
+The current source-span contract passed the full API learning loop on a longer
+Python tutorial using local 7B four-bit inference on an 8 GB NVIDIA GPU. Earlier
+direct-quote generation failed safely on that article. General model quality and
+Android-to-live-model acceptance remain pending; controlled Android device
+checks passed separately. See the [live model results](verification.md#live-model-results)
+for exact configurations and limits.
 The [manual smoke procedure](verification.md#acceptance-still-pending) exercises
 the real API, extraction, model, tutor, and review loop. It requires
 `OL_API_TOKEN`, accepts `OL_SERVER_URL` and `OL_SMOKE_URL`, and modifies the

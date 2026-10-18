@@ -7,7 +7,7 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 
 | Area | Evidence |
 | --- | --- |
-| Backend | 46 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 18 Python files. |
+| Backend | 68 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 21 Python files. |
 | Extraction and HTTP | Real Trafilatura extraction and local TCP HTTP regression tests cover article titles, complete body reads, and rejection of incomplete declared bodies. Model HTTP boundary tests use controlled responses. |
 | Database | Independent fresh PostgreSQL/pgvector migration upgrade, `alembic check`, and repeated upgrade pass. |
 | Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
@@ -15,7 +15,7 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 | Device acceptance | Six instrumentation tests pass on a physical Pixel 10 Pro Fold running API 37, using the isolated `org.openlearning.app.acceptance` package and a device-loopback HTTP fixture server. Scope is described below. |
 | APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
 | Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
-| Live workflow | All seven smoke stages pass using a short public page, real Compose services, PostgreSQL, and local CPU inference. Scope and model limitations are below. |
+| Live workflow | All seven smoke stages pass on a longer Python tutorial using real API/worker processes, PostgreSQL, and local Vulkan inference on an 8 GB GPU. An earlier short-page workflow also passed with Compose and CPU inference. Scope and limitations are below. |
 | Backup restore | `pg_dump` of the public-sample database restores into a fresh isolated PostgreSQL database; one insight and one review-history row were verified before removing that isolated database. |
 
 Backend tests cover authentication, the learning loop, source citations, saving,
@@ -28,13 +28,31 @@ truncation, and model metadata in API JSON.
 
 The model HTTP contract test verifies strict JSON-schema requests and rejection
 of an oversized 2,001-character response after simplifying generation constraints.
-Full Pydantic validation still applies to returned content.
+Full Pydantic validation still applies to returned content. The current insight
+and tutor wire schemas select an ID before nested generated content; published
+quotations are resolved from supplied source spans.
+
+Fixed-response HTTP tests exercise the real model adapter and worker. A valid
+later-passage span ID is published with canonical source text and the correct
+original chunk. Mixed batches containing an unknown or non-string ID, forbidden
+legacy quote/index fields, or excessive tags fail atomically. Existing source,
+document, chunk, insight, review, and feed records remain unchanged; failed jobs
+remain retryable. Tutor transport tests cover canonical citation materialization
+and rejection of unknown IDs, legacy quotations, and invalid content without
+writing chat, interaction, or review state.
+
+The source-ID wire contract was checked failing before implementation and passing
+afterward. Span tests cover bounds, duplicate text with distinct original chunks,
+immutable request-local mappings, short tails, and whitespace-heavy input. Review
+caught a sparse-prefix loss; its regression failed before the correction. Source
+text eligible for citation is preserved in bounded contiguous spans or processing
+fails explicitly; an evidence span needs at least 20 normalized characters.
 
 The feed concurrency regression failed with a duplicate-key error before the
 fix. It coordinates two authenticated API requests at the real PostgreSQL insert
 boundary; both now return the same persisted feed with at most ten unique usable
 cards. It also verifies dismissal and refill with new content. This boundary
-does not exercise Android or model behavior. On SQLite, the suite passes 45 tests
+does not exercise Android or model behavior. On SQLite, the suite passes 67 tests
 and skips this PostgreSQL-specific concurrency test.
 
 The extraction and response-body fixes were checked with failing regression
@@ -85,6 +103,35 @@ assertions; test-only AndroidX Test/Espresso updates resolved it.
 
 ## Live model results
 
+With the current source-ID contract, all seven live smoke stages pass against
+`https://docs.python.org/3/tutorial/introduction.html`: health/authentication, URL
+ingestion, feed/source attribution, saving/library, tutor start, the learner
+explanation/follow-up, and a remembered review scheduled three days ahead. The
+run used a fresh isolated PostgreSQL/pgvector database with migrated schema,
+actual host API/worker processes, and llama.cpp b9551 Vulkan with official
+Qwen2.5-7B-Instruct Q4_K_M weights on an RTX 4070 Laptop GPU (8 GB). No inference
+responses were substituted. [Pinned setup and checksums](local-vulkan.md).
+
+Context was 8,192 tokens with one inference slot and all model layers offloaded
+to the NVIDIA device. Total device memory sampled every 500 ms during the
+acceptance work reached a maximum observed 4,741 MiB, including ordinary display usage; this is
+not an isolated model-memory benchmark or a guarantee for other workloads.
+
+The source-ID prototype produced one manually reviewed acceptable narrow card.
+A deliberately false learner claim about division types was corrected in one
+three-turn tutor prototype. These observations do not validate general model
+accuracy: feedback could be repetitive, correct answers were not always
+explicitly assessed, and one follow-up question was ambiguous. Independent review
+also accepted the final API card against its selected span. Tutor responses were
+consistent with the cited integer examples, but described floor division as
+returning an integer without qualifying operand types. With floating operands,
+`17.0 // 3` returns the float `5.0`; this precision limitation remains. See
+[Python numeric types](https://docs.python.org/3/library/stdtypes.html#numeric-types-int-float-complex).
+Broad article
+quality, entailment, and misconception-detection reliability remain unverified.
+
+### Earlier direct-quote results
+
 The full API workflow passed against `https://example.com/`, a short public
 page, using llama.cpp b9551 on CPU with
 [Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF).
@@ -95,16 +142,30 @@ used `--no-jinja --chat-template chatml`; those flags are model-specific.
 
 The longer Python introduction at
 `https://docs.python.org/3/tutorial/introduction.html` fetched and extracted
-successfully, but the same small model returned a quote absent from the selected
-passage. The job failed with `Model returned evidence absent from the source`
+successfully, but the same small model returned a quote absent from the supplied
+passages. The job failed with `Model returned evidence absent from the source`
 and published no insights. Larger-article and general model-quality acceptance
-have therefore **not passed**. Evidence validation rejected the unsupported
-output as intended. No model weights are bundled.
+did not pass under the former direct-quote contract. Evidence validation rejected
+the unsupported output as intended. No model weights are bundled.
+
+A fresh diagnostic used seven passages (16,282 passage characters). The 1.5B
+model returned three paraphrases as evidence, all absent from every passage,
+and exceeded the six-tag limit on two cards. Stronger quotation instructions and
+explicit passage indices produced tag counts within the limit in that trial but
+still produced invented evidence. An unchanged single-passage request also
+returned invented evidence and an invalid passage index. All responses finished
+normally; these were not
+truncated JSON responses. Neither experimental prompting nor a smaller passage
+budget was shipped as a fix. The 7B model also edited quotations and selected
+incorrect passage numbers with that contract. Those invalid direct-quote
+responses were rejected. The current explicit span-selection contract was then
+verified test-first; it removes copying as a model task rather than repairing
+its generated quotations.
 
 ## Acceptance still pending
 
-- General article/model-quality acceptance remains pending beyond the short
-  public-page workflow above. Controlled inference tests establish API behavior;
+- General article/model-quality acceptance remains pending beyond the bounded
+  live workflows above. Controlled inference tests establish API behavior;
   generation never silently substitutes demo cards.
 - Process-death/device-reboot recovery and folded/unfolded layout transitions
   remain unverified. Earlier host emulator attempts failed; the device results
@@ -139,7 +200,9 @@ over saved cards. WorkManager synchronizes article ingestion jobs; offline
 reading uses cached cards and manual refresh, verified with the device fixture
 checks above.
 
-Exact quotation validation establishes provenance, not logical entailment or
-source truth. Live model quality, misconception detection, and opposing-viewpoint
+Validated source-span references and their canonical quotations establish provenance,
+not logical entailment or source truth. Valid IDs can accompany unsupported
+explanations; ID selection removes fabricated quote copying as a rejection signal.
+General live model quality, misconception detection, and opposing-viewpoint
 generation have not been independently validated. This milestone does not
 complete the entire requested platform or an Android-to-live-model acceptance run.
