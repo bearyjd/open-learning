@@ -110,16 +110,16 @@ def test_model_adapter_sends_request_and_validates_grounded_response(settings, o
     }
 
 
-@pytest.mark.parametrize("valid_quote", [True, False])
-def test_tutor_keeps_verbatim_quote_contract(monkeypatch, settings, valid_quote):
+@pytest.mark.parametrize("legacy_quote", [False, True])
+def test_tutor_selects_canonical_source_span(monkeypatch, settings, legacy_quote):
     received = []
-    response = {
+    content = {
         "answer": "Recall the idea before rereading.",
         "question": "How does retrieval practice support memory?",
-        "evidence": PASSAGE
-        if valid_quote
-        else "This invented quotation does not appear in the source.",
     }
+    response = {"evidence_id": "e0", "content": content}
+    if legacy_quote:
+        response["evidence"] = "This invented quotation does not appear in the source."
 
     def respond(request):
         received.append(json.loads(request.content))
@@ -134,17 +134,23 @@ def test_tutor_keeps_verbatim_quote_contract(monkeypatch, settings, valid_quote)
         lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs),
     )
     model = ModelClient(settings)
-    if valid_quote:
-        assert model.tutor(PASSAGE, "Retrieval", "", []).model_dump() == response
-    else:
-        with pytest.raises(ModelError, match="evidence absent from the source"):
+    if legacy_quote:
+        with pytest.raises(ModelError, match="invalid structured output"):
             model.tutor(PASSAGE, "Retrieval", "", [])
+    else:
+        assert model.tutor(PASSAGE, "Retrieval", "", []).model_dump() == {
+            **content,
+            "evidence": PASSAGE,
+        }
     request = received[0]
-    assert request["response_format"]["json_schema"]["name"] == "TutorResult"
-    assert "Evidence must be an exact verbatim quote" in request["messages"][0]["content"]
-    assert "Evidence is selected by evidence_id" not in request["messages"][0]["content"]
+    shape = request["response_format"]["json_schema"]
+    assert shape["name"] == "_TutorDraft"
+    assert shape["schema"]["required"] == ["evidence_id", "content"]
+    assert shape["schema"]["additionalProperties"] is False
+    assert "Evidence must be an exact verbatim quote" not in request["messages"][0]["content"]
+    assert "Evidence is selected by evidence_id" in request["messages"][0]["content"]
     assert json.loads(request["messages"][1]["content"]) == {
-        "passage": PASSAGE,
+        "spans": [{"evidence_id": "e0", "text": PASSAGE}],
         "title": "Retrieval",
         "user_message": "",
         "history": [],

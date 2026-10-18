@@ -47,11 +47,20 @@ class _InsightDraftBatch(BaseModel):
     insights: list[_InsightDraft] = Field(min_length=1, max_length=3)
 
 
-class TutorResult(BaseModel):
+class _TutorContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     answer: ShortText
     question: Annotated[str, Field(min_length=5, max_length=500)]
+
+
+class TutorResult(_TutorContent):
     evidence: Annotated[str, Field(min_length=20, max_length=1000)]
+
+
+class _TutorDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    evidence_id: Annotated[str, Field(strict=True, min_length=1, max_length=40)]
+    content: _TutorContent
 
 
 def normalized(text: str) -> str:
@@ -204,11 +213,26 @@ class ModelClient:
         return InsightBatch(insights=insights)
 
     def tutor(self, passage: str, title: str, message: str, history: list[dict]) -> TutorResult:
+        spans = _source_spans([passage])
+        if not spans:
+            raise ModelError("No source spans are long enough for evidence")
         result = self.complete(
-            TutorResult,
+            _TutorDraft,
             "Explain the idea briefly and ask one recall question. If an answer is supplied, evaluate "
-            "its accuracy against the passage, correct misconceptions, then ask a follow-up question.",
-            {"passage": passage, "title": title, "user_message": message, "history": history},
+            "its accuracy against the selected span, correct misconceptions, then ask a follow-up "
+            "question. First select one evidence_id, then write content using only that selected "
+            "span. Keep your factual claims and the premises of the question supported by it. "
+            "Return evidence_id first and content with answer and question second.",
+            {
+                "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
+                "title": title,
+                "user_message": message,
+                "history": history,
+            },
+            evidence_mode="id",
         )
-        verify_quote(result.evidence, passage)
-        return result
+        if result.evidence_id not in spans:
+            raise ModelError("Model selected an unknown source span")
+        span = spans[result.evidence_id]
+        verify_quote(span.text, passage)
+        return TutorResult(**result.content.model_dump(), evidence=span.text)
