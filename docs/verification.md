@@ -11,7 +11,8 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 | Extraction and HTTP | Real Trafilatura extraction and local TCP HTTP regression tests cover article titles, complete body reads, and rejection of incomplete declared bodies. Model HTTP boundary tests use controlled responses. |
 | Database | Independent fresh PostgreSQL/pgvector migration upgrade, `alembic check`, and repeated upgrade pass. |
 | Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
-| Android | Full Gradle `assembleDebug testDebugUnitTest lintDebug` succeeds with a full Temurin 21 JDK and SDK 36. Four unit tests pass; lint reports zero errors and 14 warnings. |
+| Android | Full Gradle `assembleDebug testDebugUnitTest lintDebug` succeeds with a full Temurin 21 JDK and SDK 36. Four unit tests pass; lint reports zero errors and 15 warnings. |
+| Device acceptance | Six instrumentation tests pass on a physical Pixel 10 Pro Fold running API 37, using the isolated `org.openlearning.app.acceptance` package and a device-loopback HTTP fixture server. Scope is described below. |
 | APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
 | Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
 | Live workflow | All seven smoke stages pass using a short public page, real Compose services, PostgreSQL, and local CPU inference. Scope and model limitations are below. |
@@ -48,6 +49,40 @@ passed at commit `081fd279`, before the final model adapter compatibility change
 see [draft PR #1 checks](https://github.com/bearyjd/open-learning/pull/1/checks)
 for the current commit.
 
+## Android device results
+
+The acceptance suite exercises production Compose UI, ViewModels, Retrofit,
+Room, Android Keystore, and scheduled WorkManager jobs. Only the remote HTTP
+service is replaced with controlled responses. Its six cases cover:
+
+- Android sharing prefills an editable article URL without submitting it.
+- Saving online, making the fixture server unreachable, and reopening the
+  Activity preserves saved Library cards and source details. A fresh credentials
+  reader decrypts the saved connection; switching accounts hides the old library.
+- An import submitted through sharing and Add resumes its existing server job
+  after Activity/ViewModel recreation and a real WorkManager retry, without a
+  duplicate URL submission.
+- A late feed response from the previous account stays in that account's cache
+  and never appears in the new account's UI.
+- Work for a different account pauses; reconnecting the original account and
+  retrying polls the existing job without resubmitting the URL.
+- Tutor messages and source citations render, recall answers stay hidden until
+  revealed, and a remembered rating is sent before the due queue updates.
+
+Tests reset only the acceptance package's data and do not change device network,
+rotation, or fold settings. No personal reading data is used. See the
+[device test commands](../android/README.md#device-acceptance-tests).
+CI compiles both acceptance APKs; connected execution requires a device or emulator.
+
+These checks validate the client against controlled API responses, separately
+from the real backend/model workflow below. They do not establish model quality,
+process-death or device-reboot recovery, or transitions between folded and
+unfolded layouts. Activity/ViewModel recreation runs within the same app process.
+The app reported a 443 × 970 dp portrait window during testing, covering compact
+bottom navigation; expanded navigation rail behavior remains unverified.
+The initial API 37 run failed inside older Espresso initialization before app
+assertions; test-only AndroidX Test/Espresso updates resolved it.
+
 ## Live model results
 
 The full API workflow passed against `https://example.com/`, a short public
@@ -71,12 +106,11 @@ output as intended. No model weights are bundled.
 - General article/model-quality acceptance remains pending beyond the short
   public-page workflow above. Controlled inference tests establish API behavior;
   generation never silently substitutes demo cards.
-- Emulator attempts with versions 35 and 37 failed to produce a usable device:
-  KVM starts crashed and software boot remained offline. The APK has not been
-  validated through a device UI, including offline reading and queued import
-  recovery.
+- Process-death/device-reboot recovery and folded/unfolded layout transitions
+  remain unverified. Earlier host emulator attempts failed; the device results
+  above use physical hardware.
 - Backend tests emit an upstream Starlette TestClient deprecation warning.
-- Restart/recovery still needs acceptance checks.
+- Backend service restart/recovery still needs live acceptance checks.
 
 The manual [live smoke script](../scripts/smoke_live.py) uses real API requests
 to check health/authentication, ingestion, feed attribution, saving, two tutor
@@ -102,10 +136,10 @@ embeddings and semantic search; cross-document Explore/RAG; personalized
 recommendations; collections/notes editing; progress charts; FSRS; and
 media/transcript/audio features remain unimplemented. Explore is lexical search
 over saved cards. WorkManager synchronizes article ingestion jobs; offline
-reading is implemented through cached cards and manual refresh, with device
-acceptance still pending.
+reading uses cached cards and manual refresh, verified with the device fixture
+checks above.
 
 Exact quotation validation establishes provenance, not logical entailment or
 source truth. Live model quality, misconception detection, and opposing-viewpoint
 generation have not been independently validated. This milestone does not
-complete the entire requested platform or the device acceptance test.
+complete the entire requested platform or an Android-to-live-model acceptance run.
