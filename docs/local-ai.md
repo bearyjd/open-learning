@@ -74,7 +74,11 @@ and cross-document RAG are not implemented yet.
 
 ## Verify your setup
 
-Live local-model acceptance remains pending in the current verification report.
+A real local-model workflow passed on a short public page; a longer article
+failed evidence validation without publishing insights. General article/model
+quality and device acceptance remain pending. See the
+[live model results](verification.md#live-model-results) for the tested model,
+server flags, and limits of that result.
 The [manual smoke procedure](verification.md#acceptance-still-pending) exercises
 the real API, extraction, model, tutor, and review loop. It requires
 `OL_API_TOKEN`, accepts `OL_SERVER_URL` and `OL_SMOKE_URL`, and modifies the

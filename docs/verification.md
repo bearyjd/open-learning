@@ -14,6 +14,8 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 | Android | Full Gradle `assembleDebug testDebugUnitTest lintDebug` succeeds with a full Temurin 21 JDK and SDK 36. Four unit tests pass; lint reports zero errors and 14 warnings. |
 | APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
 | Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
+| Live workflow | All seven smoke stages pass using a short public page, real Compose services, PostgreSQL, and local CPU inference. Scope and model limitations are below. |
+| Backup restore | `pg_dump` of the public-sample database restores into a fresh isolated PostgreSQL database; one insight and one review-history row were verified before removing that isolated database. |
 
 Backend tests cover authentication, the learning loop, source citations, saving,
 failed-job retry, atomic publication, stale-worker fencing, duplicate ingestion,
@@ -33,20 +35,35 @@ dependency updates, backup metadata, kapt/ktx usage, and a missing application
 icon. A full JDK is required: a JRE without `jlink` cannot perform this build.
 
 Commands are in [README](../README.md). PostgreSQL tests require a disposable
-database because their fixture creates and drops application tables. Local
+database because their fixture creates and drops application tables.
 Both jobs in [GitHub Actions run 39151607375](https://github.com/bearyjd/open-learning/actions/runs/39151607375)
 passed at commit `081fd279`, before the final model adapter compatibility change;
-the latest rerun is pending. Work is tracked in [draft PR #1](https://github.com/bearyjd/open-learning/pull/1).
+see [draft PR #1 checks](https://github.com/bearyjd/open-learning/pull/1/checks)
+for the current commit.
+
+## Live model results
+
+The full API workflow passed against `https://example.com/`, a short public
+page, using llama.cpp b9551 on CPU with
+[Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF).
+All seven smoke stages passed: health/authentication, ingestion, feed/source
+attribution, save/library, tutor start, the learner's explanation and follow-up,
+and rating a remembered review with a future due date. This model/server test
+used `--no-jinja --chat-template chatml`; those flags are model-specific.
+
+The longer Python introduction at
+`https://docs.python.org/3/tutorial/introduction.html` fetched and extracted
+successfully, but the same small model returned a quote absent from the selected
+passage. The job failed with `Model returned evidence absent from the source`
+and published no insights. Larger-article and general model-quality acceptance
+have therefore **not passed**. Evidence validation rejected the unsupported
+output as intended. No model weights are bundled.
 
 ## Acceptance still pending
 
-- Live local-model acceptance is pending. Controlled inference tests establish
-  API behavior, not the quality or reliability of a specific model. No model is
-  bundled and generation never silently substitutes demo cards.
-  A direct llama.cpp b9551 CPU probe with
-  [Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
-  produced a valid insight with exact source evidence; the full API flow remains
-  pending.
+- General article/model-quality acceptance remains pending beyond the short
+  public-page workflow above. Controlled inference tests establish API behavior;
+  generation never silently substitutes demo cards.
 - Emulator attempts with versions 35 and 37 failed to produce a usable device:
   KVM starts crashed and software boot remained offline. The APK has not been
   validated through a device UI, including offline reading and queued import
@@ -54,7 +71,7 @@ the latest rerun is pending. Work is tracked in [draft PR #1](https://github.com
 - Concurrent first requests for a daily feed can race while creating its unique
   database row. This remains follow-up work. API logs also contain an upstream
   Starlette deprecation warning.
-- Restart/recovery and database restore still need acceptance checks.
+- Restart/recovery still needs acceptance checks.
 
 The manual [live smoke script](../scripts/smoke_live.py) uses real API requests
 to check health/authentication, ingestion, feed attribution, saving, two tutor
@@ -64,7 +81,7 @@ fresh source and database so the review is initially due:
 ```sh
 # From backend/, with OL_API_TOKEN already set:
 export OL_SERVER_URL='http://127.0.0.1:8000'
-export OL_SMOKE_URL='https://example.org/a-fresh-public-article'
+export OL_SMOKE_URL='https://example.com/'
 uv run --frozen python ../scripts/smoke_live.py
 ```
 
