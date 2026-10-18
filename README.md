@@ -57,15 +57,15 @@ To run Python processes directly, provision PostgreSQL first, then:
 
 ```sh
 cd backend
-uv sync --python 3.12
+uv sync --frozen --python 3.12
 export OL_DATABASE_URL='postgresql+psycopg2://openlearning:YOUR_PASSWORD@127.0.0.1:5432/openlearning'
 export OL_API_TOKEN='YOUR_GENERATED_API_TOKEN'
 export OL_AI_BASE_URL='http://127.0.0.1:8080/v1'
 export OL_AI_MODEL='local-model'
-uv run alembic upgrade head
-uv run uvicorn open_learning.main:app --host 127.0.0.1 --port 8000 --no-access-log
+uv run --frozen alembic upgrade head
+uv run --frozen uvicorn open_learning.main:app --host 127.0.0.1 --port 8000 --no-access-log
 # In a second terminal with the same environment:
-uv run python -m open_learning.worker
+uv run --frozen python -m open_learning.worker
 ```
 
 The Compose database deliberately has no host port. For direct Python development,
@@ -73,7 +73,8 @@ use a separate local PostgreSQL instance or a private development port mapping.
 
 ## Android
 
-Install JDK 17 and Android SDK platform 36/build-tools 36.0.0. Set `ANDROID_HOME`
+Install a full JDK 17+ (the build was verified with Temurin 21) and Android SDK
+platform 36/build-tools 36.0.0. A JRE alone lacks required build tools. Set `ANDROID_HOME`
 to your SDK directory (or use Android Studio's SDK configuration), then:
 
 ```sh
@@ -107,7 +108,7 @@ validates request and response models. The app uses the same real endpoints.
 To export the OpenAPI contract from `backend`, run:
 
 ```sh
-uv run python -c 'import json; from open_learning.main import app; print(json.dumps(app.openapi(), indent=2))' > openapi.json
+uv run --frozen python -c 'import json; from open_learning.main import app; print(json.dumps(app.openapi(), indent=2))' > openapi.json
 ```
 
 Interactive public API documentation is disabled. Example submission:
@@ -125,16 +126,21 @@ error code, correct the source or model configuration, and retry it using
 
 ```sh
 cd backend
-uv run pytest -q
-uv run ruff check .
+uv run --frozen pytest -q
+uv run --frozen ruff check .
 ```
 
 Tests use original, legally distributable sample text and controlled inference
 responses. They do not prove a specific live model will generate accurate cards.
+Real extraction and HTTP boundary regression tests also run in the backend suite.
+For manual acceptance against your running API, worker, and model, see the
+[live smoke procedure](docs/verification.md#acceptance-still-pending); it modifies
+the connected library.
 See the verification report for dependency and runtime checks completed here.
-Direct Python dependencies are pinned. A complete transitive lockfile could not
-be generated without network access; Docker and CI resolve dependencies from
-PyPI. Generate and review `uv.lock` on a connected machine before a release.
+Python dependencies are locked in `backend/uv.lock`; local setup, Docker, and CI
+use frozen installs. PostgreSQL integration tests use `OL_TEST_DATABASE_URL`,
+which must point to a **disposable test database**: the test fixture creates and
+drops application tables. Never use your personal library database for tests.
 
 ## Roadmap and operation
 

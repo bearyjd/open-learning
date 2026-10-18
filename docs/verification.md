@@ -1,85 +1,89 @@
 # Verification and remaining work
 
-Verification performed on 2026-10-18. This environment permits source edits and
-cached tools, but blocks shell DNS/network access and has read-only Git metadata
-and container runtime paths. These limits prevent a complete acceptance run.
+Verification performed on 2026-10-18 with normal network, container, and build
+access. The earlier sandbox restrictions no longer describe the checks below.
 
 ## Completed checks
 
-- **40 backend tests pass.** They cover the authenticated API learning loop, saving, source
-  citations, failed-job retry, atomic publication, stale-worker fencing,
-  duplicate ingestion, saved-only search, and all four review ratings/history.
-- Security tests reject non-public destinations and redirects, mixed DNS
-  answers, fabricated/empty evidence, oversized bodies, and slow DNS/headers.
-  Connection tests check that validated IPs are used without another DNS lookup.
-- Fresh SQLite Alembic upgrade and model/migration parity were independently
-  checked. SQLite is a test dialect; PostgreSQL remains the production database.
-- Three Android Kotlin/JUnit tests pass for server validation and explicit HTTP
-  consent, shared URL parsing, and server/account cache isolation. They ran using
-  cached compiler/JUnit dependencies rather than Gradle.
-- Android XML and deployment/workflow YAML parse. Independent source review covered
-  authentication, fetch safety, job completion, Android credential handling,
-  cache isolation, and safe plain-text rendering.
+| Area | Evidence |
+| --- | --- |
+| Backend | 45 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 17 Python files. |
+| Extraction and HTTP | Real Trafilatura extraction and local TCP HTTP regression tests cover article titles, complete body reads, and rejection of incomplete declared bodies. Model HTTP boundary tests use controlled responses. |
+| Database | Independent fresh PostgreSQL/pgvector migration upgrade, `alembic check`, and repeated upgrade pass. |
+| Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
+| Android | Full Gradle `assembleDebug testDebugUnitTest lintDebug` succeeds with a full Temurin 21 JDK and SDK 36. Four unit tests pass; lint reports zero errors and 14 warnings. |
+| APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
+| Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
 
-The initial 33 backend tests passed with normal pytest. After final changes,
-Starlette's test client hung because the sandbox denies asyncio UNIX-socket
-wakeups (a minimal FastAPI test reproduced it). The final 40 passed in an
-independently inspected temporary harness that caps selector sleep at 10 ms;
-application code, test inputs, and assertions were unchanged. Ruff and formatting
-checks pass for all 15 Python files. PostgreSQL migration SQL also compiles
-offline, with extension creation before vector columns; this does not validate
-the SQL against a running server.
+Backend tests cover authentication, the learning loop, source citations, saving,
+failed-job retry, atomic publication, stale-worker fencing, duplicate ingestion,
+saved-only search, and review scheduling/history. Fetch safety checks cover
+non-public destinations and redirects, mixed DNS answers, pinned connections,
+oversized responses, and timeouts. Android tests cover connection validation,
+shared URLs, account cache isolation, and preservation of source coverage,
+truncation, and model metadata in API JSON.
 
-Normal verification commands are in [README](../README.md); CI runs backend
-tests against PostgreSQL and builds/tests/lints Android when published.
+The model HTTP contract test verifies strict JSON-schema requests and rejection
+of an oversized 2,001-character response after simplifying generation constraints.
+Full Pydantic validation still applies to returned content.
 
-## Checks blocked here
+The extraction and response-body fixes were checked with failing regression
+tests before the fixes and passing tests afterward. Android lint warnings concern
+dependency updates, backup metadata, kapt/ktx usage, and a missing application
+icon. A full JDK is required: a JRE without `jlink` cannot perform this build.
 
-- `./gradlew --no-daemon assembleDebug` fails before dependency resolution:
-  `Could not create service of type FileLockContentionHandler` followed by
-  `Could not determine a usable wildcard IP for this machine`. IPv4/no-daemon
-  options did not fix it. No APK has been produced or installed. A separate
-  cached Kotlin check found and fixed UI type errors, but cannot replace a real
-  build because Retrofit artifacts are not cached.
-- Trafilatura is unavailable in the cache. Backend pipeline tests explicitly
-  inject extracted original sample text and controlled model responses. Actual
-  HTML extraction and a live llama.cpp/Ollama response were not tested. No model
-  is bundled, and generation never silently substitutes demo cards.
-- Podman cannot access its runtime configuration: `chmod /run/user/1000/libpod:
-  read-only file system`. Compose was inspected and parsed, but not launched.
-  PostgreSQL/pgvector migrations, row locks, container networking, and the
-  Android device learning loop still need live verification.
-- `uv lock --offline` cannot resolve the complete dependency metadata. Direct
-  Python versions are pinned, but no transitive lockfile is claimed. Docker and
-  CI resolve the manifest from PyPI; they need network access. Generate/review
-  `uv.lock` on a connected machine and use frozen installs before a release.
-- Shell GitHub access fails DNS resolution; the connected GitHub app reads the
-  repository but rejects branch creation with HTTP 403, `Resource not accessible
-  by integration`. Remote push and PR creation could not be completed.
+Commands are in [README](../README.md). PostgreSQL tests require a disposable
+database because their fixture creates and drops application tables. Local
+Both jobs in [GitHub Actions run 39151607375](https://github.com/bearyjd/open-learning/actions/runs/39151607375)
+passed at commit `081fd279`, before the final model adapter compatibility change;
+the latest rerun is pending. Work is tracked in [draft PR #1](https://github.com/bearyjd/open-learning/pull/1).
 
-## Next acceptance run
+## Acceptance still pending
 
-1. On a connected Linux machine, resolve dependencies, run backend tests and
-   lint, then start Compose with generated secrets and a reachable local model.
-2. Verify `alembic upgrade head` and `alembic check` against PostgreSQL/pgvector.
-3. Build/test/lint Android with Gradle, install the debug APK on a device or
-   emulator, enter the backend URL/token, and submit a permitted public article.
-4. Confirm job completion, inspect source quotes, save a card, explain it to the
-   tutor, reveal a recall answer, rate it, and verify the future due date.
-5. Disconnect the network and confirm saved cards remain readable. Reconnect,
-   restart API/worker, and confirm queued work recovers. Test a database restore.
+- Live local-model acceptance is pending. Controlled inference tests establish
+  API behavior, not the quality or reliability of a specific model. No model is
+  bundled and generation never silently substitutes demo cards.
+  A direct llama.cpp b9551 CPU probe with
+  [Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
+  produced a valid insight with exact source evidence; the full API flow remains
+  pending.
+- Emulator attempts with versions 35 and 37 failed to produce a usable device:
+  KVM starts crashed and software boot remained offline. The APK has not been
+  validated through a device UI, including offline reading and queued import
+  recovery.
+- Concurrent first requests for a daily feed can race while creating its unique
+  database row. This remains follow-up work. API logs also contain an upstream
+  Starlette deprecation warning.
+- Restart/recovery and database restore still need acceptance checks.
+
+The manual [live smoke script](../scripts/smoke_live.py) uses real API requests
+to check health/authentication, ingestion, feed attribution, saving, two tutor
+turns, and review scheduling. With the API, worker, and model running, use a
+fresh source and database so the review is initially due:
+
+```sh
+# From backend/, with OL_API_TOKEN already set:
+export OL_SERVER_URL='http://127.0.0.1:8000'
+export OL_SMOKE_URL='https://example.org/a-fresh-public-article'
+uv run --frozen python ../scripts/smoke_live.py
+```
+
+This modifies the connected library: it imports an article, saves an insight,
+creates tutor turns, and rates a review. Keep tokens, private server addresses,
+and personal reading URLs out of published logs. See
+[local inference](local-ai.md) for container connectivity.
 
 ## Deliberately unfinished
 
-RSS ingestion; plain-text/Markdown/PDF/EPUB document picker/imports; Kobo/Libby
-export adapters; embeddings and semantic search; natural-language cross-document
-Explore/RAG; topic-diverse recommendation ranking; collections/notes editing;
-progress charts; FSRS; media/transcript/audio features. The initial Explore
-screen is lexical search over saved cards. WorkManager currently synchronizes
-article ingestion jobs; offline reading uses cached cards and manual refresh.
+RSS ingestion; plain-text/Markdown/PDF/EPUB imports; Kobo/Libby export adapters;
+embeddings and semantic search; cross-document Explore/RAG; personalized
+recommendations; collections/notes editing; progress charts; FSRS; and
+media/transcript/audio features remain unimplemented. Explore is lexical search
+over saved cards. WorkManager synchronizes article ingestion jobs; offline
+reading is implemented through cached cards and manual refresh, with device
+acceptance still pending.
 
 Exact quotation validation establishes provenance, not logical entailment or
 source truth. Live model quality, misconception detection, and opposing-viewpoint
-generation have not been independently validated. This milestone must not be
-presented as completing the entire requested platform or the device acceptance
-test.
+generation have not been independently validated. This milestone does not
+complete the entire requested platform or the device acceptance test.
