@@ -1,0 +1,60 @@
+name: open-learning
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: openlearning
+      POSTGRES_DB: openlearning
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - knowledge:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U openlearning -d openlearning]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build:
+      context: ../backend
+    image: localhost/open-learning-backend:dev
+    environment: &backend-environment
+      OL_DATABASE_URL: postgresql+psycopg2://openlearning:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/openlearning
+      OL_API_TOKEN: ${OL_API_TOKEN:?Set OL_API_TOKEN in .env}
+      OL_AI_BASE_URL: ${OL_AI_BASE_URL:-http://host.containers.internal:8080/v1}
+      OL_AI_API_KEY: ${OL_AI_API_KEY:-local}
+      OL_AI_MODEL: ${OL_AI_MODEL:-local-model}
+      OL_EMBEDDING_MODEL: ${OL_EMBEDDING_MODEL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: [.venv/bin/alembic, upgrade, head]
+  api:
+    image: localhost/open-learning-backend:dev
+    environment: *backend-environment
+    extra_hosts:
+      - host.containers.internal:host-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - ${OL_BIND_ADDRESS:-127.0.0.1}:8000:8000
+    command: [.venv/bin/uvicorn, open_learning.main:app, --host, 0.0.0.0, --port, '8000', --no-access-log]
+    healthcheck:
+      test: [CMD, .venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+  worker:
+    image: localhost/open-learning-backend:dev
+    environment: *backend-environment
+    extra_hosts:
+      - host.containers.internal:host-gateway
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: [.venv/bin/python, -m, open_learning.worker]
+    restart: unless-stopped
+volumes:
+  knowledge:
