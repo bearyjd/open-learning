@@ -23,6 +23,7 @@ data class Insight(
     val explanation: String = "", val whyItMatters: String = "", val sourceTitle: String = "",
     val sourceUrl: String = "", val documentId: String = "", val evidence: String = "",
     val tags: List<String> = emptyList(), val saved: Boolean = false,
+    val coverage: String = "", val sourceTruncated: Boolean = false, val model: String = "",
 )
 data class IngestJob(val id: String, val status: String, val error: String? = null)
 data class UrlRequest(val url: String)

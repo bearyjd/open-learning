@@ -203,12 +203,14 @@ private enum class Destination(val title: String, val icon: ImageVector) {
             Button(onClick = { model.learn(item) }) { Text("Learn this idea") }
             OutlinedButton(onClick = { model.save(item) }, enabled = !item.saved) { Text(if (item.saved) "Saved" else "Save") }
         } }
+        item { Text("AI interpretation", style = MaterialTheme.typography.labelMedium, color = Clay) }
         item { SelectionContainer { Text(item.idea, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif) } }
         item { SelectionContainer { Text(item.explanation, style = MaterialTheme.typography.bodyLarge) } }
         if (item.whyItMatters.isNotBlank()) item { Text("Why it matters", style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(8.dp)); Text(item.whyItMatters) }
         if (item.evidence.isNotBlank()) item { Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("FROM THE SOURCE", style = MaterialTheme.typography.labelSmall)
+                SourceCoverage(item)
                 SelectionContainer { Text(item.evidence, fontFamily = FontFamily.Serif, style = MaterialTheme.typography.bodyLarge) }
                 SourceLink(item.sourceUrl)
             }
@@ -216,16 +218,21 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         item { SourceLink(item.sourceUrl, item.sourceTitle.ifBlank { "Open source article" }) }
     }
 }
+@Composable private fun SourceCoverage(item: Insight) {
+    Text("Source: ${item.coverage.ifBlank { "coverage unavailable" }}", style = MaterialTheme.typography.labelMedium)
+    if (item.sourceTruncated) Text("The source was shortened before AI processing. Check the original article for full context.", style = MaterialTheme.typography.bodySmall)
+}
 @Composable private fun Tutor(state: ScreenState, model: LearningViewModel) {
     var message by rememberSaveable(state.selected?.id) { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
             item { PageTitle("Make it yours.", state.selected?.title.orEmpty()) }
+            state.selected?.let { insight -> item { SourceCoverage(insight) } }
             if (state.chat.isEmpty() && !state.chatBusy) item { Button(onClick = { model.chat("") }) { Text("Start explanation") } }
             items(state.chat) { line ->
                 Surface(color = if (line.role == "You") MaterialTheme.colorScheme.surfaceVariant else Color.White, shape = RoundedCornerShape(18.dp)) {
                     Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(line.role.uppercase(), style = MaterialTheme.typography.labelSmall, color = Clay)
+                        Text(if (line.role == "You") "YOU" else "AI INTERPRETATION", style = MaterialTheme.typography.labelSmall, color = Clay)
                         SelectionContainer { Text(line.text, style = MaterialTheme.typography.bodyLarge) }
                         if (line.question.isNotBlank()) Text(line.question, style = MaterialTheme.typography.titleMedium, color = Ink)
                         line.citations.forEach { citation ->
