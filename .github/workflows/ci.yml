@@ -54,7 +54,7 @@ jobs:
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Build and test
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest lintDebug :app:assembleAcceptance :app:assembleAcceptanceAndroidTest
       - uses: actions/upload-artifact@v4
         with:
           name: open-learning-debug

@@ -26,8 +26,8 @@ source as required by GPLv3.
 | pytest | MIT |
 | Ruff | MIT |
 | Kotlin, kotlinx.coroutines | Apache-2.0 |
-| AndroidX Compose, Material 3, Room, WorkManager, Lifecycle | Apache-2.0 |
-| Retrofit, OkHttp, Gson | Apache-2.0 |
+| AndroidX Compose, Material 3, Room, WorkManager, Lifecycle, AndroidX Test | Apache-2.0 |
+| Retrofit, OkHttp (including test-only MockWebServer), Gson | Apache-2.0 |
 | Gradle | Apache-2.0 |
 | JUnit 4 (tests only, not shipped in the app) | EPL-1.0 |
 
