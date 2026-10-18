@@ -1,0 +1,24 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.db
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+captures/
+.idea/
+.omc/
+*.bundle
+*.patch
+private-backups/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
