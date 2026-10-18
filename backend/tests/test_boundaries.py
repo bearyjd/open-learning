@@ -169,7 +169,7 @@ def test_wallclock_bound_covers_slow_dns_and_headers(monkeypatch, settings, stag
     assert time.monotonic() - start < 2
 
 
-def test_real_model_client_validates_structure_and_quotes(monkeypatch, settings):
+def test_real_model_client_rejects_legacy_quotes_and_invalid_structure(monkeypatch, settings):
     original = httpx.Client
     response = {
         "choices": [
@@ -187,7 +187,7 @@ def test_real_model_client_validates_structure_and_quotes(monkeypatch, settings)
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json=response))
         ),
     )
-    with pytest.raises(ModelError, match="absent"):
+    with pytest.raises(ModelError, match="invalid structured"):
         ModelClient(settings).insights([PASSAGE])
     response["choices"][0]["message"]["content"] = '{"insights": []}'
     with pytest.raises(ModelError, match="invalid structured"):

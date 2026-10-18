@@ -30,9 +30,10 @@ ARTICLE = (
     "mode,error",
     [
         ("valid", None),
-        ("paraphrased-quote", "Model returned evidence absent from the source"),
-        ("wrong-index", "Model returned evidence absent from the source"),
-        ("missing-index", "Model selected a missing source passage"),
+        ("unknown-id", "Model selected an unknown source span"),
+        ("non-string-id", "Model unavailable or returned invalid structured output"),
+        ("legacy-quote", "Model unavailable or returned invalid structured output"),
+        ("legacy-index", "Model unavailable or returned invalid structured output"),
         ("too-many-tags", "Model unavailable or returned invalid structured output"),
     ],
 )
@@ -57,31 +58,41 @@ def test_model_http_batch_publication_is_atomic(client, factory, settings, mode,
             }
 
     before = snapshot()
-    first = {
+    first_content = {
         "title": "Aster beds",
         "idea": "Rainwater stays near shallow roots.",
         "explanation": "Aster beds retain rainwater in shallow roots.",
         "why_it_matters": "The source describes where rainwater remains.",
-        "evidence": FIRST_QUOTE,
-        "chunk_index": 0,
         "tags": ["garden"],
     }
+    first = {"evidence_id": "e0", "content": first_content}
     second = {
-        **first,
-        "title": "Cobalt reeds",
-        "idea": "Reeds shade the bank.",
-        "explanation": "Cobalt reeds shade the bank during hot afternoons.",
-        "evidence": LATER_QUOTE,
-        "chunk_index": 1,
+        "evidence_id": "e3",
+        "content": {
+            **first_content,
+            "title": "Cobalt reeds",
+            "idea": "Reeds shade the bank.",
+            "explanation": "Cobalt reeds shade the bank during hot afternoons.",
+        },
     }
-    if mode == "paraphrased-quote":
+    if mode == "unknown-id":
+        second["evidence_id"] = "e999"
+    elif mode == "non-string-id":
+        second["evidence_id"] = 3
+    elif mode == "legacy-quote":
         second["evidence"] = "Cobalt reeds keep the entire garden cool throughout the day."
-    elif mode == "wrong-index":
+    elif mode == "legacy-index":
         second["chunk_index"] = 0
-    elif mode == "missing-index":
-        second["chunk_index"] = 99
     elif mode == "too-many-tags":
-        second["tags"] = ["garden", "reeds", "bank", "shade", "weather", "plants", "soil"]
+        second["content"]["tags"] = [
+            "garden",
+            "reeds",
+            "bank",
+            "shade",
+            "weather",
+            "plants",
+            "soil",
+        ]
     response_body = json.dumps(
         {"choices": [{"message": {"content": json.dumps({"insights": [first, second]})}}]}
     ).encode()
@@ -119,11 +130,13 @@ def test_model_http_batch_publication_is_atomic(client, factory, settings, mode,
     assert len(requests) == 1
     path, request = requests[0]
     assert path == "/v1/chat/completions"
-    passages = json.loads(request["messages"][1]["content"])["passages"]
-    assert len(passages) > 2
-    assert FIRST_QUOTE in passages[0]
-    assert LATER_QUOTE in passages[1]
-    assert LATER_QUOTE not in passages[0]
+    spans = json.loads(request["messages"][1]["content"])["spans"]
+    assert len(spans) > 3
+    assert spans[0]["evidence_id"] == "e0"
+    assert FIRST_QUOTE in spans[0]["text"]
+    assert spans[3]["evidence_id"] == "e3"
+    assert LATER_QUOTE in spans[3]["text"]
+    assert LATER_QUOTE not in spans[0]["text"]
     assert "Cobalt reeds keep the entire garden cool throughout the day." not in ARTICLE
     status = client.get(API + "/jobs/" + job["id"]).json()
     after = snapshot()
@@ -144,7 +157,7 @@ def test_model_http_batch_publication_is_atomic(client, factory, settings, mode,
             assert all(row in after[entity] for row in rows)
         assert len(after[Source]) == len(before[Source]) + 1
         assert len(after[Document]) == len(before[Document]) + 1
-        assert len(after[Chunk]) == len(before[Chunk]) + len(passages)
+        assert len(after[Chunk]) > len(before[Chunk]) + 2
         assert len(after[Insight]) == len(before[Insight]) + 2
         new_document = next(row for row in after[Document] if row["title"] == "Garden observations")
         assert new_document["text"] == ARTICLE
@@ -153,8 +166,10 @@ def test_model_http_batch_publication_is_atomic(client, factory, settings, mode,
             later = db.scalar(select(Insight).where(Insight.title == "Cobalt reeds"))
             chunk = db.get(Chunk, later.chunk_id)
             assert chunk.position == 1
-            assert later.evidence == LATER_QUOTE
+            assert later.evidence == spans[3]["text"]
             assert LATER_QUOTE in chunk.text
+            first_card = db.scalar(select(Insight).where(Insight.title == "Aster beds"))
+            assert first_card.evidence == spans[0]["text"]
         cards = client.get(API + "/feed/today").json()
         assert {card["title"] for card in cards} == {
             existing_card["title"],

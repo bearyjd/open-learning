@@ -4,6 +4,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import httpx
 import pytest
 from conftest import PASSAGE
 
@@ -13,15 +14,14 @@ from open_learning.ai import ModelClient, ModelError
 @pytest.mark.parametrize("overlong", [False, True], ids=["valid", "oversized"])
 def test_model_adapter_sends_request_and_validates_grounded_response(settings, overlong):
     received = []
-    insight = {
+    content = {
         "title": "Retrieval practice",
         "idea": "A" * 2001 if overlong else "Recall before rereading.",
         "explanation": "Trying to recall strengthens memory.",
         "why_it_matters": "Study more effectively.",
-        "evidence": PASSAGE.strip(),
-        "chunk_index": 0,
         "tags": ["learning"],
     }
+    draft = {"evidence_id": "e0", "content": content}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -33,7 +33,7 @@ def test_model_adapter_sends_request_and_validates_grounded_response(settings, o
                 )
             )
             body = json.dumps(
-                {"choices": [{"message": {"content": json.dumps({"insights": [insight]})}}]}
+                {"choices": [{"message": {"content": json.dumps({"insights": [draft]})}}]}
             ).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -62,7 +62,11 @@ def test_model_adapter_sends_request_and_validates_grounded_response(settings, o
         thread.join(timeout=2)
 
     if not overlong:
-        assert result.insights[0].model_dump() == insight
+        assert result.insights[0].model_dump() == {
+            **content,
+            "evidence": PASSAGE,
+            "chunk_index": 0,
+        }
     path, authorization, payload = received[0]
     assert path == "/v1/chat/completions"
     assert authorization == "Bearer fixture-key"
@@ -71,7 +75,7 @@ def test_model_adapter_sends_request_and_validates_grounded_response(settings, o
     assert payload["response_format"] == {
         "type": "json_schema",
         "json_schema": {
-            "name": "InsightBatch",
+            "name": "_InsightDraftBatch",
             "schema": shape,
             "strict": True,
         },
@@ -84,18 +88,64 @@ def test_model_adapter_sends_request_and_validates_grounded_response(settings, o
     assert shape["properties"]["insights"] == {
         "type": "array",
         "title": "Insights",
-        "items": {"$ref": "#/$defs/GroundedInsight"},
+        "items": {"$ref": "#/$defs/_InsightDraft"},
     }
-    item_shape = shape["$defs"]["GroundedInsight"]
+    item_shape = shape["$defs"]["_InsightDraft"]
     assert item_shape["type"] == "object"
-    assert set(item_shape["required"]) == set(insight)
+    assert item_shape["required"] == ["evidence_id", "content"]
+    assert list(item_shape["properties"]) == ["evidence_id", "content"]
     assert item_shape["additionalProperties"] is False
-    assert item_shape["properties"]["title"]["type"] == "string"
-    assert item_shape["properties"]["tags"]["items"]["type"] == "string"
-    assert item_shape["properties"]["chunk_index"]["minimum"] == 0
+    assert item_shape["properties"]["evidence_id"]["type"] == "string"
+    content_shape = shape["$defs"]["_InsightContent"]
+    assert set(content_shape["required"]) == set(content)
+    assert content_shape["additionalProperties"] is False
+    assert content_shape["properties"]["title"]["type"] == "string"
+    assert content_shape["properties"]["tags"]["items"]["type"] == "string"
     assert '"maxLength": 2000' in payload["messages"][0]["content"]
-    assert (
-        "Every insight must include title, idea, explanation, why_it_matters, evidence, "
-        "chunk_index, tags"
-    ) in payload["messages"][0]["content"]
-    assert json.loads(payload["messages"][1]["content"]) == {"passages": [PASSAGE]}
+    assert "Extract exactly ONE narrow useful idea" in payload["messages"][0]["content"]
+    assert "Evidence is selected by evidence_id" in payload["messages"][0]["content"]
+    assert "Evidence must be an exact verbatim quote" not in payload["messages"][0]["content"]
+    assert json.loads(payload["messages"][1]["content"]) == {
+        "spans": [{"evidence_id": "e0", "text": PASSAGE}]
+    }
+
+
+@pytest.mark.parametrize("valid_quote", [True, False])
+def test_tutor_keeps_verbatim_quote_contract(monkeypatch, settings, valid_quote):
+    received = []
+    response = {
+        "answer": "Recall the idea before rereading.",
+        "question": "How does retrieval practice support memory?",
+        "evidence": PASSAGE
+        if valid_quote
+        else "This invented quotation does not appear in the source.",
+    }
+
+    def respond(request):
+        received.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(response)}}]}
+        )
+
+    original_client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    model = ModelClient(settings)
+    if valid_quote:
+        assert model.tutor(PASSAGE, "Retrieval", "", []).model_dump() == response
+    else:
+        with pytest.raises(ModelError, match="evidence absent from the source"):
+            model.tutor(PASSAGE, "Retrieval", "", [])
+    request = received[0]
+    assert request["response_format"]["json_schema"]["name"] == "TutorResult"
+    assert "Evidence must be an exact verbatim quote" in request["messages"][0]["content"]
+    assert "Evidence is selected by evidence_id" not in request["messages"][0]["content"]
+    assert json.loads(request["messages"][1]["content"]) == {
+        "passage": PASSAGE,
+        "title": "Retrieval",
+        "user_message": "",
+        "history": [],
+    }
