@@ -13,8 +13,8 @@ The five destinations use the real `/api/v1` API: daily insights, saved library,
 Room stores source text and explanations in app-private storage. Saved items remain readable when offline. Every cache record is scoped to a SHA-256 digest of the exact normalized server URL and token; switching either never displays the other account's content. Bearer tokens are encrypted with an Android Keystore AES-GCM key, bound to the server URL, and excluded from backup. Tokens never enter WorkManager input data. Background imports for a different account pause until that account is reconnected and the import retried.
 
 Tutor and source content are displayed as plain text. Original source URLs open in your browser. Recall ratings are sent only after the user reveals the explanation. No model keys are stored or requested on the phone.
-Source details include coverage, truncation, and model labels so partial material
-can be distinguished when reading an insight.
+Source details show coverage and truncation, and generated text is labeled AI
+interpretation. Model metadata is retained in cached cards.
 
 The current server contract accepts article URLs only. Android accepts shared text containing a URL; raw text/Markdown/PDF uploads are not exposed until a matching backend ingestion endpoint exists. Network operations other than ingestion require a live connection; failed save/review/chat requests are reported rather than pretending to have synced.
 

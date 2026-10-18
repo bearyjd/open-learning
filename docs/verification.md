@@ -69,8 +69,8 @@ output as intended. No model weights are bundled.
   validated through a device UI, including offline reading and queued import
   recovery.
 - Concurrent first requests for a daily feed can race while creating its unique
-  database row. This remains follow-up work. API logs also contain an upstream
-  Starlette deprecation warning.
+  database row. This remains follow-up work. Backend tests emit an upstream
+  Starlette TestClient deprecation warning.
 - Restart/recovery still needs acceptance checks.
 
 The manual [live smoke script](../scripts/smoke_live.py) uses real API requests
