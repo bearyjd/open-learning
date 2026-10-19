@@ -63,6 +63,8 @@ not a provider display name. Create a dedicated inference key in the OpenRouter
 dashboard with a nonresetting spending limit equal to
 `OL_OPENROUTER_KEY_LIMIT_USD`. Do not use a management or provisioning key. Keep
 these values on the backend; Android uses only the private API token.
+When enabled, article passages and tutor messages/history are sent to OpenRouter
+and the selected ZDR endpoint for inference.
 
 Configure positive Decimal USD request, lifetime, and key limits, with request
 and key limits no greater than the lifetime limit. Set the nonnegative
