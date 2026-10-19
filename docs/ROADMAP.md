@@ -69,6 +69,9 @@ semantic gate: eight contract-valid outputs, three meeting the rubric, and two
 critical failures under independent AI-assisted review. See
 [model evaluation](model-evaluation.md). Improving the failing behavior takes
 priority over expanding ingestion; broad model quality remains unverified.
+The held-out evaluation in [PR #5](https://github.com/bearyjd/open-learning/pull/5)
+records a prompt candidate that failed to improve these samples; the candidate
+was reverted. Comparing another compact local model is the next quality step.
 
 **Deliver:** A small, versioned corpus of legally reusable passages and questions,
 including misleading premises, partial excerpts, unsupported questions, and

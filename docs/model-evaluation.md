@@ -34,6 +34,38 @@ contain only the project's original fictional data and generated sample outputs.
 No private library content or credentials are included. Ordinary run artifacts
 remain private; do not publish personal-source evaluations this way.
 
+## Held-out prompt experiment
+
+An independent author froze a separate [holdout corpus](../backend/evaluation/HOLDOUT.md)
+before holdout inference or prompt edits. The prompt author did not read its
+inputs. Both corpora used the original anchored rubric and acceptance threshold.
+One general prompt revision was evaluated once per case, with separate reviewers
+scoring its primary and holdout outputs without baseline scores or prompt access.
+
+| Run | Contract-valid | Meets rubric | Critical failures |
+| --- | --- | --- | --- |
+| [Original, primary](../backend/evaluation/results/qwen2.5-7b-q4-2026-10-19-score.json) | 8/8 | 3/8 | 2 |
+| [Original, holdout](../backend/evaluation/results/qwen2.5-7b-q4-holdout-baseline-2026-10-19-score.json) | 8/8 | 4/8 | 0 |
+| [Candidate, primary](../backend/evaluation/results/qwen2.5-7b-q4-primary-candidate-2026-10-19-score.json) | 8/8 | 3/8 | 3 |
+| [Candidate, holdout](../backend/evaluation/results/qwen2.5-7b-q4-holdout-candidate-2026-10-19-score.json) | 8/8 | 4/8 | 0 |
+
+All four runs fail the fixed quality gate. The candidate did not demonstrate an
+improvement: unsupported benefits, instruction-following failures, and weak
+feedback remained. **The candidate was rejected and its prompt changes reverted.**
+Production prompts retain their previous behavior. Preserving the experiment is
+not a claim that source grounding or injection resistance is fixed.
+
+Each score has adjacent `-run.json` and `-review.json` artifacts preserving the
+original synthetic outputs and bound AI-assisted ratings. Reproduce original
+holdout scoring with production code at `4f96489`; candidate reports require
+`f71e08b`, before the revert. Do not rewrite their code hashes to rescore them
+against different prompts. No cases, rubric anchors, or thresholds were changed
+after outputs were observed, and no case was retried to select a better response.
+
+These are single runs at temperature 0.2 with AI-assisted reviewers. They are
+descriptive sample results, not a statistical estimate or proof that one prompt
+is generally better or worse. Model selection remains open work.
+
 ## Run locally
 
 With the locked backend dependencies and a local model server running:
