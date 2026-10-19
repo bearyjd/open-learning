@@ -71,7 +71,11 @@ critical failures under independent AI-assisted review. See
 priority over expanding ingestion; broad model quality remains unverified.
 The held-out evaluation in [PR #5](https://github.com/bearyjd/open-learning/pull/5)
 records a prompt candidate that failed to improve these samples; the candidate
-was reverted. Comparing another compact local model is the next quality step.
+was reverted. A compact local model was compared next.
+The text-only Qwen3-VL 4B comparison also failed the fixed semantic gate on
+both primary and holdout samples; see the [bound results](model-evaluation.md#compact-local-model-comparison).
+No model change has been selected. Source-grounded claims, explicit learner
+assessment, and useful follow-up questions remain the next quality work.
 
 **Deliver:** A small, versioned corpus of legally reusable passages and questions,
 including misleading premises, partial excerpts, unsupported questions, and
