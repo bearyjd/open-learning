@@ -66,6 +66,35 @@ These are single runs at temperature 0.2 with AI-assisted reviewers. They are
 descriptive sample results, not a statistical estimate or proof that one prompt
 is generally better or worse. Model selection remains open work.
 
+## Compact local model comparison
+
+The official [Qwen3-VL-4B-Instruct Q4_K_M GGUF](local-vulkan.md#compact-model-comparison)
+was tested with text only, using its embedded Jinja chat template and no vision
+encoder. The two frozen corpora, original production prompts (`ai.py` SHA256
+`6d9f4273b7ba349af3c53af5e024674e371314bb677b0d7609a557e61d07be71`),
+rubric, and temperature 0.2 were unchanged. Each case had one attempt, with no
+retries or output selection. Independent AI-assisted reviewers scored the outputs.
+
+| Run | Contract-valid | Meets rubric | Critical failures | Measured inference time |
+| --- | --- | --- | --- | --- |
+| [4B, primary](../backend/evaluation/results/qwen3-vl-4b-q4-primary-2026-10-19-score.json) | 8/8 | 2/8 | 1 | 40.830 s |
+| [4B, holdout](../backend/evaluation/results/qwen3-vl-4b-q4-holdout-2026-10-19-score.json) | 8/8 | 4/8 | 1 | 36.090 s |
+
+Both runs **fail the fixed quality gate**. On the primary corpus, the insight
+invented safety and compliance benefits absent from the fictional rule. The
+correct-learner response did not assess the learner's answer, and follow-up
+questions were weak. On the holdout, an insight incorrectly said a batch with
+both stamps also qualified for packing, contrary to the no-diamond condition; it
+also invented a quality-control benefit. These are reviewer findings, not evidence
+of general model performance. The 7B baseline's original primary and holdout
+scores were 3/8 and 4/8 respectively, but one sample per case and AI-assisted
+ratings do not establish a reliable quality difference between models. No default
+model or production prompt changed; model selection remains open.
+
+Each linked score has adjacent `-run.json` and `-review.json` artifacts with the
+original fictional outputs and bound ratings. This comparison used the same
+predeclared acceptance threshold as the earlier runs.
+
 ## Run locally
 
 With the locked backend dependencies and a local model server running:
