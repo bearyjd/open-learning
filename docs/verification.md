@@ -13,6 +13,8 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 | Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
 | Android | Full Gradle `assembleDebug testDebugUnitTest lintDebug` succeeds with a full Temurin 21 JDK and SDK 36. Four unit tests pass; lint reports zero errors and 15 warnings. |
 | Device acceptance | Six instrumentation tests pass on a physical Pixel 10 Pro Fold running API 37, using the isolated `org.openlearning.app.acceptance` package and a device-loopback HTTP fixture server. Scope is described below. |
+| Live Android acceptance | One opt-in instrumentation test passes on the same physical phone against actual API/worker processes, fresh PostgreSQL, and local GPU inference. All learning mutations originate in the UI; independent database checks confirm retained three-day scheduling. |
+| Live runner safeguards | Ten standard-library tests pass, including isolation, private credential transport, redirect refusal, failed/skipped instrumentation, and owned-resource cleanup. CI runs these without a device or model. |
 | APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
 | Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
 | Live workflow | All seven smoke stages pass on a longer Python tutorial using real API/worker processes, PostgreSQL, and local Vulkan inference on an 8 GB GPU. An earlier short-page workflow also passed with Compose and CPU inference. Scope and limitations are below. |
@@ -100,6 +102,46 @@ The app reported a 443 × 970 dp portrait window during testing, covering compac
 bottom navigation; expanded navigation rail behavior remains unverified.
 The initial API 37 run failed inside older Espresso initialization before app
 assertions; test-only AndroidX Test/Espresso updates resolved it.
+
+### Android UI against the live stack
+
+The opt-in `LiveLearningLoopTest` passed in 51.529 seconds on October 18, 2026,
+on the physical Pixel 10 Pro Fold (API 37). It used the isolated acceptance
+package, actual host API and worker, a fresh migrated PostgreSQL/pgvector
+database, and the local llama.cpp/Qwen configuration documented below. The
+source was the public Python tutorial at
+`https://docs.python.org/3/tutorial/introduction.html`. No HTTP fixture or model
+response substitution participated in this test.
+
+The UI submitted the URL, waited for real WorkManager completion, displayed the
+generated card's source/evidence, saved it, started tutoring, submitted a learner
+reply, revealed the recall explanation, and sent a Remembered rating. The test
+checked two persisted assistant responses and the learner message, a three-day
+future-date notice, and the due queue. Closing and reopening the Activity and
+ViewModel preserved the saved Library item and empty due queue.
+
+An independent verifier used a read-only database transaction to confirm one
+source, one document, seven chunks, one insight, one saved item, three tutor
+messages, one retained review, one review-history row, and one completed job
+with one attempt. Tutor roles were assistant, user, assistant. The rating and
+review both retained `interval_days=3`; the due time was October 21, 2026 at
+22:55:02 UTC, three days after the October 18 rating. Canonical insight evidence
+matched its linked source chunk. Persisted model provenance and the running
+loopback llama-server matched `qwen2.5-7b-instruct-q4_k_m`.
+
+The runner's private configuration file and owned adb reverse mapping were
+removed. The existing six fixture tests also passed separately in 22.020 seconds,
+and debug assembly, JVM test task, and lint completed successfully. The new live
+test is skipped by default; CI compiles it but needs an authorized device and
+isolated live stack to execute it. See the
+[explicit live acceptance commands](../android/README.md#opt-in-android-ui-against-the-live-backend).
+
+This establishes integration for one public article and model configuration.
+It does not assess general factual accuracy or Socratic teaching quality. The
+learner reply restates the generated central idea; it is not an independent
+comprehension evaluation. Relaunch remains within the same process. Process
+death, reboot, expanded/fold transitions, offline tutor/review writes, and live
+service-restart recovery remain outside this check.
 
 ## Live model results
 

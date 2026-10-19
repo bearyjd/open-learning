@@ -35,9 +35,13 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - run: uv sync --frozen --python 3.12
       - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff check ../scripts/android_live.py ../scripts/tests/test_android_live.py
       - run: uv run --no-sync alembic upgrade head
       - run: uv run --no-sync alembic check
       - run: uv run --no-sync pytest -q
+      - name: Check live Android runner safeguards
+        working-directory: .
+        run: python3 -m unittest discover -s scripts/tests -v
   android:
     runs-on: ubuntu-latest
     steps:
