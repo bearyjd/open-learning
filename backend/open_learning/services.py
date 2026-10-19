@@ -208,7 +208,7 @@ def process_job(
     article = fetcher(url, settings)
     texts = chunk_text(article.text)
     # Extraction stores the full bounded document; generation uses at most eight passages.
-    batch = (model or ModelClient(settings)).insights(texts[:8])
+    batch = (model or ModelClient(settings, factory)).insights(texts[:8])
     with factory.begin() as db:
         job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if job is None or job.status != "running" or job.lease_token != token:
@@ -256,8 +256,8 @@ def process_job(
                         why_it_matters=item.why_it_matters,
                         evidence=item.evidence,
                         tags=item.tags,
-                        model=settings.ai_model,
-                        model_endpoint=settings.ai_base_url,
+                        model=settings.effective_ai_model,
+                        model_endpoint=settings.effective_ai_endpoint,
                     )
                 )
         job.status, job.error, job.lease_until, job.lease_token = "completed", None, None, None

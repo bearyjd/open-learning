@@ -123,8 +123,15 @@ def generation_schema(value):
 
 
 class ModelClient:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, factory=None):
         self.settings = settings
+        self.factory = factory
+        if settings.ai_backend == "openrouter" and (
+            factory is None
+            or factory.kw.get("bind") is None
+            or factory.kw["bind"].dialect.name != "postgresql"
+        ):
+            raise ModelError("Cloud spending requires a PostgreSQL session factory")
 
     def complete(
         self,
@@ -154,28 +161,39 @@ class ModelClient:
             + "Return only JSON matching this schema: "
             + json.dumps(output_schema)
         )
+        body = {
+            "model": self.settings.ai_model,
+            "temperature": 0.2,
+            "max_tokens": 3000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema.__name__,
+                    "schema": generation_schema(output_schema),
+                    "strict": True,
+                },
+            },
+            "messages": [
+                {"role": "system", "content": system + "\n" + instruction},
+                {"role": "user", "content": json.dumps(payload)},
+            ],
+        }
+        if self.settings.ai_backend == "openrouter":
+            from .openrouter import complete as cloud_complete
+
+            try:
+                content = cloud_complete(self.settings, self.factory, body)
+                return schema.model_validate_json(content)
+            except Exception:
+                raise ModelError(
+                    "Model unavailable or returned invalid structured output"
+                ) from None
         try:
             with httpx.Client(timeout=self.settings.ai_timeout_seconds, trust_env=False) as client:
                 response = client.post(
                     self.settings.ai_base_url + "/chat/completions",
                     headers={"Authorization": "Bearer " + self.settings.ai_api_key},
-                    json={
-                        "model": self.settings.ai_model,
-                        "temperature": 0.2,
-                        "max_tokens": 3000,
-                        "response_format": {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": schema.__name__,
-                                "schema": generation_schema(output_schema),
-                                "strict": True,
-                            },
-                        },
-                        "messages": [
-                            {"role": "system", "content": system + "\n" + instruction},
-                            {"role": "user", "content": json.dumps(payload)},
-                        ],
-                    },
+                    json=body,
                 )
                 response.raise_for_status()
                 return schema.model_validate_json(

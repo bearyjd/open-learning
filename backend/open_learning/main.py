@@ -30,7 +30,9 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         application.state.factory = factory or session_factory(
             application.state.settings.database_url
         )
-        application.state.model = model or ModelClient(application.state.settings)
+        application.state.model = model or ModelClient(
+            application.state.settings, application.state.factory
+        )
         yield
 
     app = FastAPI(

@@ -22,6 +22,7 @@ source as required by GPLv3.
 | psycopg2-binary | LGPL-3.0-or-later with exceptions; bundled libraries have their own notices |
 | Trafilatura | Apache-2.0 |
 | HTTPX | BSD-3-Clause |
+| simplejson | MIT or AFL-2.1 (dual licensed) |
 | uv | MIT or Apache-2.0 |
 | pytest | MIT |
 | Ruff | MIT |
@@ -40,4 +41,5 @@ GPL merely because this application can connect to it.
 Upstream references: [pgvector extension](https://github.com/pgvector/pgvector/blob/master/LICENSE),
 [Python adapter](https://github.com/pgvector/pgvector-python/blob/master/LICENSE),
 [Psycopg](https://github.com/psycopg/psycopg2/blob/master/LICENSE),
-[Trafilatura](https://trafilatura.readthedocs.io/en/stable/).
+[Trafilatura](https://trafilatura.readthedocs.io/en/stable/),
+[simplejson](https://github.com/simplejson/simplejson/blob/main/LICENSE.txt).
