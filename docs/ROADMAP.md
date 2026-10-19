@@ -17,13 +17,13 @@ workflow with Qwen 2.5 7B on an 8 GB GPU. See the pinned
 [PR #3](https://github.com/bearyjd/open-learning/pull/3) adds the complete
 Android-to-live-model acceptance test. The live test passed on a physical phone,
 with independent database verification, and its backend and Android CI jobs
-passed. PR #3 remains open against `main`; its acceptance coverage is not yet
-merged. See its pinned [verification record](https://github.com/bearyjd/open-learning/blob/e6ed60683b5806124f97dbaf6505700290cebf63/docs/verification.md#android-ui-against-the-live-stack).
+passed. PR #3 is merged into `main`. See its pinned
+[verification record](https://github.com/bearyjd/open-learning/blob/e6ed60683b5806124f97dbaf6505700290cebf63/docs/verification.md#android-ui-against-the-live-stack).
 
 General factual accuracy, reliable Socratic tutoring, and process-death, reboot,
 and fold-transition recovery remain unverified. A valid source ID proves
 provenance; it does not prove the generated explanation follows from the passage.
-The next implementation milestone is PR-B: model and tutoring quality evaluation.
+PR-B establishes evaluation before further quality improvements and model selection.
 
 ## 2. Delivery rules
 
@@ -49,8 +49,8 @@ tests as live acceptance or a proposed feature as shipped.
 ### PR-A — Verify the complete Android article workflow
 
 **Status:** Implemented and verified in [PR #3](https://github.com/bearyjd/open-learning/pull/3),
-which is open and awaiting merge. Its test covers same-process Activity/ViewModel
-relaunch; process-death and reboot recovery remain PR-D work.
+which is merged. Its test covers same-process Activity/ViewModel relaunch;
+process-death and reboot recovery remain PR-D work.
 
 **Deliver:** Run import → processing → feed → save → two tutor turns → due review
 through the Android UI against the actual API, worker, database, and local model.
@@ -62,6 +62,13 @@ observed failures. Retain sanitized evidence and record timings/errors without
 publishing private reading material. **Depends on:** #1.
 
 ### PR-B — Establish model and tutoring quality gates
+
+**Status:** Evaluation tooling and the first local baseline are in
+[PR #4](https://github.com/bearyjd/open-learning/pull/4). The baseline fails the
+semantic gate: eight contract-valid outputs, three meeting the rubric, and two
+critical failures under independent AI-assisted review. See
+[model evaluation](model-evaluation.md). Improving the failing behavior takes
+priority over expanding ingestion; broad model quality remains unverified.
 
 **Deliver:** A small, versioned corpus of legally reusable passages and questions,
 including misleading premises, partial excerpts, unsupported questions, and
