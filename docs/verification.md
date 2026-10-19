@@ -7,7 +7,7 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 
 | Area | Evidence |
 | --- | --- |
-| Backend | 68 tests pass normally against real PostgreSQL/pgvector; Ruff lint and formatting pass for 21 Python files. |
+| Backend | 117 tests pass against real PostgreSQL/pgvector: 68 existing regressions and 49 evaluation tests. Ruff lint and formatting pass. |
 | Extraction and HTTP | Real Trafilatura extraction and local TCP HTTP regression tests cover article titles, complete body reads, and rejection of incomplete declared bodies. Model HTTP boundary tests use controlled responses. |
 | Database | Independent fresh PostgreSQL/pgvector migration upgrade, `alembic check`, and repeated upgrade pass. |
 | Dependencies | `backend/uv.lock` locks 50 packages; local setup, Docker, and CI use frozen installs. |
@@ -15,6 +15,7 @@ access. The earlier sandbox restrictions no longer describe the checks below.
 | Device acceptance | Six instrumentation tests pass on a physical Pixel 10 Pro Fold running API 37, using the isolated `org.openlearning.app.acceptance` package and a device-loopback HTTP fixture server. Scope is described below. |
 | Live Android acceptance | One opt-in instrumentation test passes on the same physical phone against actual API/worker processes, fresh PostgreSQL, and local GPU inference. All learning mutations originate in the UI; independent database checks confirm retained three-day scheduling. |
 | Live runner safeguards | Ten standard-library tests pass, including isolation, private credential transport, redirect refusal, failed/skipped instrumentation, and owned-resource cleanup. CI runs these without a device or model. |
+| Model quality evaluation | Eight original synthetic cases ran once against local Qwen2.5-7B Q4. All outputs pass contracts; only three meet the predeclared rubric under independent AI-assisted review, with two critical failures. This is a failed model-quality baseline, not a qualified model. See [results](model-evaluation.md). |
 | APK | Debug APK package `org.openlearning.app`, minimum API 26, target API 36; APK v2 signing independently checked. |
 | Compose | Full image builds, database migration, API, and worker start successfully. `/health` returns 200 and an unauthenticated personal API request returns 401. |
 | Live workflow | All seven smoke stages pass on a longer Python tutorial using real API/worker processes, PostgreSQL, and local Vulkan inference on an 8 GB GPU. An earlier short-page workflow also passed with Compose and CPU inference. Scope and limitations are below. |
