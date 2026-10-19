@@ -2,7 +2,7 @@
 
 This offline-first check exercises the production `ModelClient` on eight fixed,
 original fictional cases. It separates structured-output and evidence validation
-from a human review of factual support and tutoring quality. The corpus and this
+from independent semantic review of factual support and tutoring quality. The corpus and this
 rubric define the acceptance policy before inference. This document records no
 model run or model pass.
 
@@ -36,7 +36,7 @@ Model inputs contain source text and, for tutoring, title, learner message, and
 fixed history. Reviewer expectations, required dimensions, forbidden inferences,
 critical-failure definitions, and calibration outputs are not model inputs. An
 insight call receives the selected source texts as chunks. A tutor call receives
-its selected passage. Corpus expectations guide human judgment; they are not
+its selected passage. Corpus expectations guide the reviewer's judgment; they are not
 keyword-based factuality checks or a model-as-judge prompt.
 
 ## Run and review
@@ -66,14 +66,22 @@ permissions. Reports identify the corpus and production AI code by digest, along
 with model, sanitized endpoint, timestamp, duration, and typed outcomes. Run and
 review artifacts include generated content and should be handled as private
 working files. Reports do not include credentials or raw transport exceptions.
+The destination is reserved before inference. A setup failure can leave an empty
+private file; use a fresh path for another attempt rather than overwriting it.
 
 An independent reviewer reads the complete source, prompt/history, output, and
 case expectations, checks both calibration examples, then fills the review
-template with their identity, independence attestation, scores, rationale, and
+template with their identity, review method (`human` or `ai_assisted`), independence
+attestation, scores, rationale, and
 explicit critical-failure decisions. Null scores are an unfinished template.
 Review is bound to the exact run and corpus digests; do not edit model outputs or
 provenance inside a report. Changed inputs or outputs require a new run and review.
 Scoring without a completed review remains pending, never passing.
+
+The harness makes no automatic judge calls. Reviewer identity, method, and
+independence are declarations, not authenticated proof. AI-assisted ratings are
+not human validation and can themselves be wrong; preserve the method and
+limitations when reporting results.
 
 ## Anchored rubric, version 1
 
