@@ -53,6 +53,46 @@ verify its behavior with your Podman Compose provider. A server bound only to th
 host's loopback address may need a private bridge address instead. Keep inference
 ports firewalled. See [local AI configuration](docs/local-ai.md).
 
+## Optional OpenRouter backend
+
+The backend defaults to local inference. To use OpenRouter, set the commented
+`OL_AI_BACKEND`, `OL_CLOUD_OPT_IN`, and `OL_OPENROUTER_*` values in `.env` before
+starting Compose. Set an exact model ID and endpoint **tag** from OpenRouter's
+[model endpoint data](https://openrouter.ai/docs/api/api-reference/endpoints/list-endpoints),
+not a provider display name. Create a dedicated inference key in the OpenRouter
+dashboard with a nonresetting spending limit equal to
+`OL_OPENROUTER_KEY_LIMIT_USD`. Do not use a management or provisioning key. Keep
+these values on the backend; Android uses only the private API token.
+When enabled, article passages and tutor messages/history are sent to OpenRouter
+and the selected ZDR endpoint for inference.
+
+Configure positive Decimal USD request, lifetime, and key limits, with request
+and key limits no greater than the lifetime limit. Set the nonnegative
+`OL_OPENROUTER_REQUEST_FEE_CAP_USD` explicitly. The configured key limit must
+match the provider's current key metadata; an effective account or workspace
+budget with less remaining allowance also blocks a request. There is no funded
+default. The lifetime limit is recorded in PostgreSQL on first admission and
+cannot be changed by editing `.env`; a mismatch fails closed. Each cloud call
+reserves its full context and bounded output at the freshly checked endpoint
+rates plus the full request fee cap, commits that hold before sending one POST,
+and settles only when the response provides a validated final `usage.cost`.
+Application validation can reject a paid response after settlement. Failed or
+uncertain calls retain their full holds, and an actual cost above the reservation
+records persistent debt that blocks later dispatch. Job retry creates another
+reservation. No prompt, response text, key, or source URL enters the ledger.
+
+Run `uv run --frozen python -m open_learning.openrouter inspect-held --limit 100`
+from `backend` with the same backend environment to inspect unresolved holds.
+The command makes bounded, read-only generation lookups and never releases a
+hold. The documented [generation API](https://openrouter.ai/docs/api/api-reference/generations/get-generation)
+returns a provider display name, not the exact endpoint tag, so it cannot prove
+the route required for safe automatic reconciliation. In particular, sampled
+`azure` and `azure/swedencentral` endpoints share the display name `Azure`.
+Attempts without a generation ID also stay held. Do not reset or delete the
+ledger to work around a hold; investigate the provider activity and obtain exact
+endpoint evidence before adding a future reconciliation mechanism. No live
+inference is used by the test suite.
+
 To run Python processes directly, provision PostgreSQL first, then:
 
 ```sh

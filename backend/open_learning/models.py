@@ -1,17 +1,21 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
+    Uuid,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -154,3 +158,69 @@ class Job(Base):
     lease_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CloudBudget(Base):
+    __tablename__ = "cloud_budget"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_cloud_budget_singleton"),
+        CheckConstraint(
+            "lifetime_limit IS NULL OR (lifetime_limit > 0 AND lifetime_limit < 1000000000000000000)",
+            name="ck_cloud_limit",
+        ),
+        CheckConstraint(
+            "spent >= 0 AND spent < 1000000000000000000 AND held >= 0 AND held < 1000000000000000000 AND debt >= 0 AND debt < 1000000000000000000",
+            name="ck_cloud_balances",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lifetime_limit: Mapped[Decimal | None] = mapped_column(Numeric(30, 12))
+    spent: Mapped[Decimal] = mapped_column(Numeric(30, 12), default=Decimal(0))
+    held: Mapped[Decimal] = mapped_column(Numeric(30, 12), default=Decimal(0))
+    debt: Mapped[Decimal] = mapped_column(Numeric(30, 12), default=Decimal(0))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CloudAttempt(Base):
+    __tablename__ = "cloud_attempt"
+    __table_args__ = (
+        CheckConstraint(
+            "reserved >= 0 AND reserved < 1000000000000000000 AND "
+            "prompt_rate >= 0 AND prompt_rate < 1000000000000000000 AND "
+            "completion_rate >= 0 AND completion_rate < 1000000000000000000 AND "
+            "request_fee_cap >= 0 AND request_fee_cap < 1000000000000000000",
+            name="ck_cloud_attempt_amounts",
+        ),
+    )
+    id: Mapped[str] = mapped_column(Uuid(as_uuid=False), primary_key=True, default=ident)
+    budget_id: Mapped[int] = mapped_column(ForeignKey("cloud_budget.id"), default=1)
+    key_sha256: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(Text)
+    provider_tag: Mapped[str] = mapped_column(Text)
+    provider_name: Mapped[str] = mapped_column(Text)
+    provider_name_unique: Mapped[bool] = mapped_column(Boolean)
+    context_length: Mapped[int] = mapped_column(Integer)
+    output_tokens: Mapped[int] = mapped_column(Integer)
+    prompt_rate: Mapped[Decimal] = mapped_column(Numeric(30, 12))
+    completion_rate: Mapped[Decimal] = mapped_column(Numeric(30, 12))
+    request_fee_cap: Mapped[Decimal] = mapped_column(Numeric(30, 12))
+    reserved: Mapped[Decimal] = mapped_column(Numeric(30, 12))
+    metadata_sha256: Mapped[str] = mapped_column(String(64))
+    metadata_checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    request_bytes: Mapped[int] = mapped_column(Integer)
+    generation_id: Mapped[str | None] = mapped_column(Text, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CloudSettlement(Base):
+    __tablename__ = "cloud_settlement"
+    __table_args__ = (
+        CheckConstraint("actual >= 0 AND actual < 1000000000000000000", name="ck_cloud_actual"),
+    )
+    attempt_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), ForeignKey("cloud_attempt.id"), primary_key=True
+    )
+    actual: Mapped[Decimal] = mapped_column(Numeric(30, 12))
+    generation_id: Mapped[str] = mapped_column(Text)
+    settled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
