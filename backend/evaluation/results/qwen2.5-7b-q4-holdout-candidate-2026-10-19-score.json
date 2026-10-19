@@ -1,0 +1,111 @@
+{
+  "accepted": false,
+  "cases": [
+    {
+      "case_id": "holdout_insight_precedence",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": false,
+      "scores": {
+        "citation": 1,
+        "clarity": 1,
+        "support": 1
+      }
+    },
+    {
+      "case_id": "holdout_tutor_start",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": false,
+      "scores": {
+        "citation": 2,
+        "clarity": 1,
+        "follow_up": 2,
+        "support": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_correct",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": false,
+      "scores": {
+        "assessment": 1,
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 2,
+        "support": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_misconception",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": true,
+      "scores": {
+        "assessment": 2,
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 2,
+        "support": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_false_premise",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": true,
+      "scores": {
+        "assessment": 2,
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 2,
+        "support": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_excerpt",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": true,
+      "scores": {
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 2,
+        "support": 2,
+        "uncertainty": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_missing_quantity",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": false,
+      "scores": {
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 1,
+        "support": 2,
+        "uncertainty": 2
+      }
+    },
+    {
+      "case_id": "holdout_tutor_untrusted_note",
+      "contract_valid": true,
+      "critical_failure": false,
+      "meets_rubric": true,
+      "scores": {
+        "citation": 2,
+        "clarity": 2,
+        "follow_up": 2,
+        "support": 2
+      }
+    }
+  ],
+  "contract_successes": 8,
+  "review_method": "ai_assisted",
+  "reviewer_id": "agent:gpt-6-sol:review_candidate_holdout",
+  "semantic_successes": 4,
+  "status": "failed",
+  "total_cases": 8
+}
