@@ -2,12 +2,10 @@
 
 ## 1. Current PR and verified baseline
 
-As of October 18, 2026, the open draft is [PR #1: Add native Android learning
-foundation and private article loop](https://github.com/bearyjd/open-learning/pull/1),
-on `feat/learning-foundation` at `ec5b5ca`. Both CI jobs passed. Treat this as
-the bootstrap baseline; stop adding unrelated features to it. Do not rewrite or
-split its history without an explicit request. Merging requires separate user
-authorization.
+As of October 18, 2026, [PR #1: Add native Android learning foundation and private
+article loop](https://github.com/bearyjd/open-learning/pull/1) is merged into
+`main` at `6ed9d6c`. Its backend and Android CI jobs passed. This is the bootstrap
+baseline for subsequent focused PRs.
 
 The baseline includes native Android screens, article ingestion, local inference,
 source-linked cards, saving, tutoring, review scheduling, and lexical search.
@@ -16,11 +14,16 @@ HTTP responses, four Android JVM tests, and a seven-stage real backend/model
 workflow with Qwen 2.5 7B on an 8 GB GPU. See the pinned
 [verification record](https://github.com/bearyjd/open-learning/blob/ec5b5ca60296964b57cb1ca5a5b40df24e966a9d/docs/verification.md).
 
-These checks do not establish the complete Android-to-live-model experience,
-general factual accuracy, reliable Socratic tutoring, or process-death, reboot,
-and fold-transition recovery. A valid source ID proves provenance; it does not
-prove the generated explanation follows from the passage. Those gaps lead the
-next PRs.
+[PR #3](https://github.com/bearyjd/open-learning/pull/3) adds the complete
+Android-to-live-model acceptance test. The live test passed on a physical phone,
+with independent database verification, and its backend and Android CI jobs
+passed. PR #3 remains open against `main`; its acceptance coverage is not yet
+merged. See its pinned [verification record](https://github.com/bearyjd/open-learning/blob/e6ed60683b5806124f97dbaf6505700290cebf63/docs/verification.md#android-ui-against-the-live-stack).
+
+General factual accuracy, reliable Socratic tutoring, and process-death, reboot,
+and fold-transition recovery remain unverified. A valid source ID proves
+provenance; it does not prove the generated explanation follows from the passage.
+The next implementation milestone is PR-B: model and tutoring quality evaluation.
 
 ## 2. Delivery rules
 
@@ -30,9 +33,9 @@ inference by default. Cloud inference remains optional. Keep the canonical store
 in PostgreSQL, deployment Podman-compatible, and access private and authenticated.
 
 The labels below are planning labels, not assigned GitHub numbers. Each item is
-one focused PR with a user-visible outcome. After #1 is integrated, create new
-branches from current `main`; dependent work waits for its prerequisite or uses
-an explicitly documented stack. Keep unrelated changes out of #1.
+one focused PR with a user-visible outcome. Create new branches from current
+`main`; dependent work waits for its prerequisite or uses an explicitly documented
+stack. Keep unrelated changes in separate PRs.
 
 For every implementation PR: write a failing behavior test, implement the
 smallest passing change, refactor while green, run relevant regression checks,
@@ -44,6 +47,10 @@ tests as live acceptance or a proposed feature as shipped.
 ## 3. Immediate delivery: close the learning loop
 
 ### PR-A — Verify the complete Android article workflow
+
+**Status:** Implemented and verified in [PR #3](https://github.com/bearyjd/open-learning/pull/3),
+which is open and awaiting merge. Its test covers same-process Activity/ViewModel
+relaunch; process-death and reboot recovery remain PR-D work.
 
 **Deliver:** Run import → processing → feed → save → two tutor turns → due review
 through the Android UI against the actual API, worker, database, and local model.
