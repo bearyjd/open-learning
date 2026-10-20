@@ -109,10 +109,12 @@ independent AI-assisted review.
 | [Assessment, primary](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-score.json) | 8/8 | 2/8 | 1 (`tutor_injection`) |
 | [Assessment, holdout](../backend/evaluation/results/qwen2.5-7b-q4-assessment-holdout-2026-10-19-score.json) | 8/8 | 2/8 | 1 (`holdout_insight_precedence`) |
 
-Baselines were 3/8 with 2 critical failures (primary) and 4/8 with 0 (holdout).
-Both runs fail the gate and did not improve on the baselines. Five of six
-follow-up failures re-asked the learner's own question or asked for a quantity
-absent from the source. **The experiment is archived as rejected and the prompt
+Against the baselines, the primary run went from 3/8 to 2/8 passing and from 2
+to 1 critical failures; the holdout run went from 4/8 to 2/8 passing and from 0
+to 1 critical failures. Both runs fail the gate. The reviews score six follow-ups
+below 2 (3 primary, 3 holdout): four re-ask the question the learner just asked
+or answered, and two re-ask a question the source cannot answer (a savings
+figure in the primary corpus, a defect-prevention count in the holdout). **The experiment is archived as rejected and the prompt
 wording was reverted** to the text on `main`. Each score has adjacent
 [`-run.json`](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-run.json)
 and [`-review.json`](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-review.json)
