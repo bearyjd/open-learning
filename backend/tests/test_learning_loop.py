@@ -161,10 +161,10 @@ def test_tutor_chat_returns_model_assessment_to_service_callers(client, factory,
     insight = ingest(client, factory, settings)
 
     class Assessing(FixtureModel):
-        def tutor(self, passage, title, message, history):
+        def tutor(self, passage, title, message, history, **kwargs):
             return (
                 super()
-                .tutor(passage, title, message, history)
+                .tutor(passage, title, message, history, **kwargs)
                 .model_copy(update={"assessment": "partially_correct"})
             )
 

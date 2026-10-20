@@ -32,7 +32,7 @@ class FixtureModel:
             ]
         )
 
-    def tutor(self, passage, title, message, history):
+    def tutor(self, passage, title, message, history, **kwargs):
         return TutorResult(
             answer="Recall the idea before rereading. "
             + ("That matches the source." if message else ""),

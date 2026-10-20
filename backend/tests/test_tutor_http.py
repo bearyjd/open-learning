@@ -136,11 +136,14 @@ def test_tutor_rejects_repeated_previous_question(client, factory, settings, var
     if variant == "case-and-space":
         repeated = "  " + repeated.upper().replace(" ", "\n ") + " "
 
+    calls = []
+
     class Repeating(FixtureModel):
-        def tutor(self, passage, title, message, history):
+        def tutor(self, passage, title, message, history, **kwargs):
+            calls.append(kwargs)
             return (
                 super()
-                .tutor(passage, title, message, history)
+                .tutor(passage, title, message, history, **kwargs)
                 .model_copy(update={"question": repeated})
             )
 
@@ -160,16 +163,48 @@ def test_tutor_rejects_repeated_previous_question(client, factory, settings, var
     assert result.status_code == 503
     assert result.json()["detail"] == "Model repeated the previous question"
     assert snapshot() == before
+    assert len(calls) == 2
+    assert calls[0].get("avoid_repeat", False) is False
+    assert calls[1]["avoid_repeat"] is True
+    assert calls[1]["previous_question"] == first.json()["question"]
+
+
+def test_tutor_repeat_then_different_retries_once(client, factory, settings):
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    repeated = first.json()["question"]
+    calls = []
+
+    class Recovering(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            calls.append(kwargs)
+            question = repeated if len(calls) == 1 else "What does recall replace?"
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"question": question})
+            )
+
+    client.app.state.model = Recovering()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 200
+    assert result.json()["question"] == "What does recall replace?"
+    assert len(calls) == 2
+    assert calls[1]["avoid_repeat"] is True
+    with factory() as db:
+        assert db.scalar(select(ReviewItem.question)) == "What does recall replace?"
 
 
 def test_tutor_assessment_stays_out_of_public_response(client, factory, settings):
     insight = _first_insight(client, factory, settings)
 
     class Assessing(FixtureModel):
-        def tutor(self, passage, title, message, history):
+        def tutor(self, passage, title, message, history, **kwargs):
             return (
                 super()
-                .tutor(passage, title, message, history)
+                .tutor(passage, title, message, history, **kwargs)
                 .model_copy(update={"assessment": "correct"})
             )
 

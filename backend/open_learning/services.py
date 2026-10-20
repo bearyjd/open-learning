@@ -130,19 +130,21 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
             .limit(8)
         )
     )
-    result = model.tutor(
-        chunk.text,
-        insight.title,
-        message,
-        [{"role": entry.role, "message": entry.message} for entry in reversed(history)],
-    )
+    turns = [{"role": entry.role, "message": entry.message} for entry in reversed(history)]
     previous = db.scalar(select(ReviewItem.question).where(ReviewItem.insight_id == insight.id))
-    if (
-        previous is not None
-        and normalized(previous).casefold() == normalized(result.question).casefold()
-    ):
-        raise ModelError("Model repeated the previous question")
+    result = model.tutor(chunk.text, insight.title, message, turns, previous_question=previous)
     review = ensure_review(db, insight)
+    if normalized(review.question).casefold() == normalized(result.question).casefold():
+        result = model.tutor(
+            chunk.text,
+            insight.title,
+            message,
+            turns,
+            previous_question=review.question,
+            avoid_repeat=True,
+        )
+        if normalized(review.question).casefold() == normalized(result.question).casefold():
+            raise ModelError("Model repeated the previous question")
     review.question = result.question
     if message:
         db.add(History(insight_id=insight.id, role="user", message=message))

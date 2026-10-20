@@ -243,3 +243,19 @@ def test_prompts_require_abstention_and_answerable_followups(monkeypatch, settin
     )
     model.insights([PASSAGE])
     assert "span is insufficient" in received[-1]
+
+
+def test_tutor_payload_carries_previous_question_and_retry_instruction(monkeypatch, settings):
+    content = {"answer": "Good.", "question": "What does recall replace?"}
+    model, received = _tutor_model(monkeypatch, settings, content)
+    model.tutor(PASSAGE, "Retrieval", "Recall helps.", [], previous_question="Why recall?")
+    payload = json.loads(received[0]["messages"][1]["content"])
+    assert payload["previous_question"] == "Why recall?"
+    assert "retry_instruction" not in payload
+    model.tutor(
+        PASSAGE, "Retrieval", "Recall helps.", [], previous_question="Why recall?", avoid_repeat=True
+    )
+    payload = json.loads(received[1]["messages"][1]["content"])
+    assert payload["previous_question"] == "Why recall?"
+    assert "different question" in payload["retry_instruction"]
+    assert "previous_question" in received[0]["messages"][0]["content"]

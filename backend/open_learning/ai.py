@@ -248,10 +248,31 @@ class ModelClient:
             )
         return InsightBatch(insights=insights)
 
-    def tutor(self, passage: str, title: str, message: str, history: list[dict]) -> TutorResult:
+    def tutor(
+        self,
+        passage: str,
+        title: str,
+        message: str,
+        history: list[dict],
+        previous_question: str | None = None,
+        avoid_repeat: bool = False,
+    ) -> TutorResult:
         spans = _source_spans([passage])
         if not spans:
             raise ModelError("No source spans are long enough for evidence")
+        payload = {
+            "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
+            "title": title,
+            "user_message": message,
+            "history": history,
+        }
+        if previous_question is not None:
+            payload["previous_question"] = previous_question
+        if avoid_repeat:
+            payload["retry_instruction"] = (
+                "Your last attempt repeated previous_question. Ask a different question "
+                "answerable from the selected span."
+            )
         result = self.complete(
             _TutorDraft,
             "Explain the idea briefly and ask one recall question. If an answer is supplied, evaluate "
@@ -259,17 +280,12 @@ class ModelClient:
             "question. First select one evidence_id, then write content using only that selected "
             "span. Keep your factual claims and the premises of the question supported by it. "
             "The follow-up question must be answerable from the selected span and must not repeat "
-            "the previous question in history. If the span is insufficient to answer or assess, say "
+            "previous_question, the question the learner was last asked. If the span is insufficient to answer or assess, say "
             "so plainly rather than asserting unsupported claims. Set assessment only when the "
             "learner message explains the idea: correct, partially_correct, or incorrect against the "
             "span; otherwise use not_assessed. Return evidence_id first and content with answer, "
             "question and assessment second.",
-            {
-                "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
-                "title": title,
-                "user_message": message,
-                "history": history,
-            },
+            payload,
             evidence_mode="id",
         )
         if result.evidence_id not in spans:
