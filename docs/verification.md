@@ -297,12 +297,40 @@ physical-hinge-only behavior. `cmd device_state` emulates posture; it does not
 prove hinge sensors, inner-display app-continuity quirks, or what a user sees
 when physically opening the device.
 
+### Reboot recovery acceptance (October 19, 2026)
+
+Pixel 10 Pro Fold (API 37), only `org.openlearning.app.acceptance`, host mock as above. The user authorized exactly one `adb reboot` for this task and unlocked the phone by hand; nothing else on the device was changed (no `wm size/density`, `device_state`, or settings; the script never unlocks).
+
+```
+python3 scripts/android_reboot.py --serial SERIAL
+python3 scripts/android_reboot.py --serial SERIAL --resume-after-boot-id OLD --baseline JSON
+```
+
+Baseline: `wm size` 1080x2364, density 390, device state `0 CLOSED`, empty `adb reverse --list`, boot id `9daf442d-42e5-4a4e-9978-fbd2cfe8fc12`. The script built state through the UI (saved Library card, queued import held at "processing", Explore query "spaced"), ran `adb reboot`, and after boot the boot id was `21f7db1d-918a-4419-a010-5329af05e169` (changed). The `adb reverse` list was empty after boot, so the mapping had to be re-added.
+
+What needed the user: on this device `adb` does not come back until the first unlock, so the first run (300 s boot wait) gave up and cleaned up while the phone sat at the boot screen. That run's mock was stopped, so a second `--resume-after-boot-id` run restarted the mock (same port, `saved` set true to match the fixture), waited for adb and the unlock (about 2 minutes), then ran the checks. Unlock was detected via `am get-started-user-state 0` = RUNNING_UNLOCKED plus keyguard not showing.
+
+WorkManager before app launch: after unlock and before the script started the app, the mock logged one `GET /api/v1/jobs/remote-1` and the app process already existed (pid 14759). So WorkManager resumed the import by itself. Caveat: polls made while the first run's mock was down are not recorded, and the window only starts at the second run.
+
+| Check | Expected | Actual |
+|---|---|---|
+| Stored credentials after reboot | no reconnect screen | Discover shown, no reconnect dialog |
+| Queued import | listed, resumes | listed "Processing"; Completed after the mock completed it |
+| Saved Library card | present | present (caveat: mock also reports it saved, so this does not isolate the Room DB) |
+| Explore query "spaced" | lost (cold start) | lost, empty search |
+| Crash/ANR | none | none: no AndroidRuntime or ANR lines; one boot-time `ActivityManager` line, "Unable to find ...acceptance.test/u10" (absent instrumentation package, not a crash); the script now ignores it, the final run reported it as a failure |
+
+Cleanup: mock stopped, mapping removed, package uninstalled, dumps deleted, and size, density, device state, and reverse list equal the baseline.
+
+Not covered: backend restart, a real backend or model, the fold return leg, physical-hinge behavior, and reboot with a mock that never stopped (the first mock ended with the failed run).
+
 ## Acceptance still pending
 
 - General article/model-quality acceptance remains pending beyond the bounded
   live workflows above. Controlled inference tests establish API behavior;
   generation never silently substitutes demo cards.
-- Device-reboot recovery remains unverified. Fold/unfold is partly covered
+- Device-reboot recovery is verified once on hardware (see above); a rerun with the mock
+  running continuously across the reboot remains. Fold/unfold is partly covered
   (rail at 852 dp and state kept on fold -> unfold); the return fold leg,
   recreation evidence, and unsaved-text behavior still need an unlocked-device
   run. Process death is covered above, with the in-memory tutor gap noted. Earlier host emulator attempts failed; the device results
