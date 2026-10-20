@@ -18,7 +18,7 @@ Tutor and source content are displayed as plain text. Original source URLs open 
 Source details show coverage and truncation, and generated text is labeled AI
 interpretation. Model metadata is retained in cached cards.
 
-The current server contract accepts article URLs only. Android accepts shared text containing a URL; raw text/Markdown/PDF uploads are not exposed until a matching backend ingestion endpoint exists. Network operations other than ingestion require a live connection; failed save/review/chat requests are reported rather than pretending to have synced.
+The server also exposes `POST /api/v1/ingest/text` for plain text/Markdown notes, but the Android client does not use it yet (client support is the PR-E2 follow-up). Android accepts shared text containing a URL; raw text/Markdown/PDF uploads from the app are not exposed. Network operations other than ingestion require a live connection; failed save/review/chat requests are reported rather than pretending to have synced.
 
 Dependencies are pinned in the Gradle files; the Gradle wrapper is included. The project uses Room, Retrofit/Gson, WorkManager, coroutines and Flow, and manual dependency injection through `AppContainer`.
 

@@ -160,6 +160,21 @@ curl --fail http://127.0.0.1:8000/api/v1/ingest/url \
   -d '{"url":"https://example.org/an-article-you-can-legally-process"}'
 ```
 
+Plain text or Markdown you wrote or exported can be ingested the same way. The
+text is not rendered; it must be 100 to 60,000 characters (`OL_MAX_DOCUMENT_CHARS`)
+and control characters are rejected (see [security](docs/security.md)):
+
+```sh
+curl --fail http://127.0.0.1:8000/api/v1/ingest/text \
+  -H "Authorization: Bearer $OL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"My study notes","label":"Biology 101","text":"...at least 100 characters..."}'
+```
+
+Cards from notes report `source_kind: "note"`, an empty `source_url`, and
+`source_label`; URL cards report `source_kind: "url"`. This is backend-only for
+now; the Android app has no note import or attribution display yet.
+
 Poll `GET /api/v1/jobs/{id}`. A failed job retains its status; inspect the safe
 error code, correct the source or model configuration, and retry it using
 `POST /api/v1/jobs/{id}/retry`. The worker must be running.
@@ -181,6 +196,13 @@ Python dependencies are locked in `backend/uv.lock`; local setup, Docker, and CI
 use frozen installs. PostgreSQL integration tests use `OL_TEST_DATABASE_URL`,
 which must point to a **disposable test database**: the test fixture creates and
 drops application tables. Never use your personal library database for tests.
+`OL_TEST_MIGRATION_DATABASE_URL` enables the PostgreSQL migration tests; it must be
+a second disposable database (the tests drop the `public` schema) that differs from
+`OL_TEST_DATABASE_URL`.
+
+Before downgrading below migration 0003, stop the API and worker. The downgrade
+discards text and labels held by failed note jobs permanently (retry then returns
+409), and `note:<sha256>` source keys become visible as `source_url` to older code.
 
 ## Roadmap and operation
 

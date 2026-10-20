@@ -23,7 +23,8 @@ endpoint, which can be private. Keep the backend patched and apply egress
 restrictions as an additional deployment defense.
 
 Only extracted plain text is rendered; scripts and HTML are not displayed in a
-WebView. The first milestone has no document upload endpoint. Future upload
+WebView. There is no file upload endpoint; the only endpoint accepting user-supplied
+content is `POST /api/v1/ingest/text`, described below. Future upload
 adapters must enforce compressed and decompressed limits and prevent archive
 path traversal. Source text can contain malicious model instructions; the AI
 prompt treats it as data. Insight output selects a known source-span ID, which
@@ -34,6 +35,54 @@ establish provenance, not factual correctness or logical entailment. ID selectio
 removes fabricated quote copying as a failure signal, so valid references can
 still accompany unsupported prose.
 Tutor feedback remains labeled AI interpretation and can be wrong.
+
+Text note endpoint: `POST /api/v1/ingest/text` (bearer-authenticated) accepts
+`title`, `text` and an optional `label` as plain text; Markdown is stored as text
+and never rendered. Limits: text 100 to `OL_MAX_DOCUMENT_CHARS` characters
+(default 60,000; longer input is rejected, never truncated), title 1 to 500, label
+at most 100 and a single line. Text is normalized (CRLF/CR to LF, Unicode NFC,
+trimmed) and must be valid UTF-8 (lone surrogates are rejected). NUL, C0 controls
+other than tab and newline, DEL and C1 controls are rejected; titles and labels
+allow no control characters at all and additionally reject the Unicode line and
+paragraph separators (U+2028, U+2029). Explicit bidirectional controls
+(U+202A-202E, U+2066-2069) are rejected in all three fields to block "trojan
+source" spoofing; text keeps U+2028/U+2029 because it is body text. Other format
+characters such as the zero-width joiner in emoji sequences are allowed.
+Rejections use fixed messages, and every 422 body-validation response (all routes,
+including behind a `root_path`) omits pydantic's echoed `input` and `ctx` (for
+example the `max_length` limit), so submitted text is never reflected. The status
+code and the `type`, `loc` and `msg` fields are unchanged, and query and path
+validation errors are not altered. The SQLAlchemy engine uses
+`hide_parameters=True`, so database errors and logs cannot carry note text.
+Request bodies are capped by middleware that checks the largest declared
+`Content-Length` and the streamed byte count and itself answers 413 (stopping at the
+first chunk over the cap, so memory stays bounded for chunked or lying clients),
+before authentication. The cap is `12 * OL_MAX_DOCUMENT_CHARS + 64 KiB` (about
+784 KB by default) for `POST /api/v1/ingest/text` only and 64 KiB for every other
+route, which bounds what an unauthenticated client can make the server buffer.
+There is no rate limiting, as elsewhere in this single-user API.
+
+The note text is held in the `jobs` row (`payload_*`) so a worker restart or a
+retry can finish it, and is cleared in the transaction that completes the job.
+**A failed note job keeps its text in the database until a retry succeeds**; the
+future delete endpoint must purge it. Completed note text is stored as a document
+like any imported article, so backups contain it. Notes are deduplicated by the
+SHA-256 of their normalized text. The internal `note:<hash>` source key is never
+returned to clients, which receive `source_kind: "note"`, an empty `source_url`
+and the label. Workers log only the job id and exception type.
+
+Downgrading migration 0003: stop the API and the worker first. The downgrade
+refuses to run while note jobs are queued or running (on PostgreSQL it takes a
+`SHARE ROW EXCLUSIVE` lock on `jobs` before checking, so no job can slip in). It
+permanently discards the text, title and label held by failed note jobs, so a retry
+returns 409 afterwards. Documents and sources of notes remain, and their
+`note:<sha256>` source keys become visible to older code as `source_url`.
+
+Known limitations (notes): each accepted note write stores up to about
+`OL_MAX_DOCUMENT_CHARS` characters in the `jobs` row; there is no queue cap or
+purge of old failed jobs yet. Concurrent identical notes can each call the model
+once before the first import lands; model spend is bounded by the existing
+spending ledger.
 
 Normal API access logs are disabled in deployment because URLs and query strings
 can expose reading interests. Do not enable model prompt logging on shared

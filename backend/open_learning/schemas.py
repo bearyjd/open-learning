@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -11,6 +12,8 @@ class InsightOutput(BaseModel):
     why_it_matters: str
     source_title: str
     source_url: str
+    source_kind: Literal["url", "note"]
+    source_label: str
     document_id: str
     evidence: str
     tags: list[str]
@@ -39,6 +42,8 @@ class ReviewOutput(BaseModel):
 class Citation(BaseModel):
     document_id: str
     source_url: str
+    source_kind: Literal["url", "note"]
+    source_label: str
     passage: str
 
 
