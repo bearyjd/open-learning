@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = Field(default=15, gt=0, le=30)
     max_document_chars: int = Field(default=60_000, ge=1000, le=200_000)
     job_lease_seconds: int = Field(default=300, ge=240)
+    note_max_pending_jobs: int = Field(default=20, ge=1, le=1000)
+    note_max_failed_payloads: int = Field(default=20, ge=0, le=1000)
+    note_failed_payload_hours: int = Field(default=168, ge=1, le=8760)
 
     @field_validator("api_token")
     @classmethod
