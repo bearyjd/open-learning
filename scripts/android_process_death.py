@@ -204,6 +204,28 @@ class Device:
         return before, after
 
 
+def connect(dev: Device, port: int) -> None:
+    """Clear app data and connect it to the mock server until the feed card shows."""
+    dev.shell("pm", "clear", PACKAGE)
+    dev.shell("am", "start", "-n", ACTIVITY)
+    dev.wait_for("Connect your server")
+    dev.tap("Server URL")
+    dev.type("http://127.0.0.1:%d" % port)
+    dev.tap("Access token")
+    dev.type(TOKEN)
+    dev.shell("input", "keyevent", "KEYCODE_BACK")  # close the IME only
+    time.sleep(1)
+    box = dev.find("Allow HTTP")  # the label is not clickable; tap the checkbox to its left
+    if box is None:
+        raise RuntimeError("HTTP consent checkbox not found")
+    x1, y1, _x2, y2 = map(int, re.findall(r"\d+", box["bounds"]))
+    dev.shell("input", "tap", str(x1 - 50), str((y1 + y2) // 2))
+    time.sleep(0.8)
+    dev.tap(r"^Connect\|")
+    if not dev.wait_for("Spaced practice beats cramming"):
+        raise RuntimeError("feed card never appeared; connection failed")
+
+
 def scenario(dev, name, setup, expect_gone, expect_kept):
     setup()
     dev.dump(name + "-before")
@@ -243,24 +265,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         dev.run("reverse", "--no-rebind", remote, remote)
         owns_reverse = True
-        dev.shell("pm", "clear", PACKAGE)
-        dev.shell("am", "start", "-n", ACTIVITY)
-        dev.wait_for("Connect your server")
-        dev.tap("Server URL")
-        dev.type("http://127.0.0.1:%d" % args.port)
-        dev.tap("Access token")
-        dev.type(TOKEN)
-        dev.shell("input", "keyevent", "KEYCODE_BACK")  # close the IME only
-        time.sleep(1)
-        box = dev.find("Allow HTTP")  # the label is not clickable; tap the checkbox to its left
-        if box is None:
-            raise RuntimeError("HTTP consent checkbox not found")
-        x1, y1, _x2, y2 = map(int, re.findall(r"\d+", box["bounds"]))
-        dev.shell("input", "tap", str(x1 - 50), str((y1 + y2) // 2))
-        time.sleep(0.8)
-        dev.tap(r"^Connect\|")
-        if not dev.wait_for("Spaced practice beats cramming"):
-            raise RuntimeError("feed card never appeared; connection failed")
+        connect(dev, args.port)
         dev.tap(r"^Save\|")
         dev.wait_for("Saved")
         dev.tap("Article URL")

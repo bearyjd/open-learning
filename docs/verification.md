@@ -97,10 +97,10 @@ CI compiles both acceptance APKs; connected execution requires a device or emula
 
 These checks validate the client against controlled API responses, separately
 from the real backend/model workflow below. They do not establish model quality,
-process-death or device-reboot recovery, or transitions between folded and
-unfolded layouts. Activity/ViewModel recreation runs within the same app process.
-The app reported a 443 × 970 dp portrait window during testing, covering compact
-bottom navigation; expanded navigation rail behavior remains unverified.
+device-reboot recovery or physical-hinge behavior. Activity/ViewModel recreation
+runs within the same app process. The app reported a 443 × 970 dp portrait window
+during testing, covering compact bottom navigation; the expanded rail was later
+observed under an emulated unfolded posture (see Fold/unfold acceptance).
 The initial API 37 run failed inside older Espresso initialization before app
 assertions; test-only AndroidX Test/Espresso updates resolved it.
 
@@ -246,13 +246,66 @@ the non-acceptance app. Mock responses establish client behavior only.
 Standard `adb` calls were all that were used on the device; settings, size,
 density, and device state were unchanged, and the reverse list matched baseline.
 
+### Fold/unfold acceptance (October 19, 2026) - partial
+
+Pixel 10 Pro Fold (API 37), only `org.openlearning.app.acceptance`, same mock
+server as above. The user authorized `cmd device_state` posture switching for
+this task only; no reboot, `wm size/density`, or setting change. Baseline
+recorded first: `wm size` 1080x2364, `wm density` 390, device state `0 CLOSED`,
+empty `adb reverse --list`. States printed: 0 CLOSED, 1 HALF_OPENED, 2 OPENED,
+3 REAR_DISPLAY_STATE, 4 CONCURRENT_INNER_DEFAULT, 5 REAR_DISPLAY_OUTER_DEFAULT.
+
+```
+adb shell cmd device_state print-states
+python3 scripts/android_fold.py --serial SERIAL   # 0 -> 2 -> 1 -> 2 -> 0, reset in finally
+```
+
+`scripts/android_fold.py` reuses `android_process_death.py` (mock server,
+connect flow, uiautomator helpers), records the baseline, always runs
+`cmd device_state state reset` in `finally` (also on Ctrl-C/SIGTERM), and then
+compares state, size, density, and reverse list with the baseline (equal after
+every run). Evidence is uiautomator XML only; no screenshots were kept.
+
+| Check | Expected | Actual |
+|---|---|---|
+| Folded window (CLOSED, outer) | bar, below 840 dp | 1080x2364 px, w443dp h970dp, bottom bar |
+| Unfolded window (OPENED, inner) | rail, 840 dp or more | 2076x2152 px, w852dp h883dp, NavigationRail |
+| Selected destination (Explore), fold -> unfold | kept | kept |
+| Explore query "spaced", fold -> unfold | kept | kept |
+| Activity recreation | recreated | not established: only a global `configuration_changed` event appeared, no `onCreate`/relaunch line (the first script version also counted the wrong event names) |
+| Unsaved Connection text; tutor draft; unfold -> fold | text lost; draft kept | not verified (see gap) |
+| Crash/ANR scan | none | not completed |
+
+The unfolded width is 852 dp, only 12 dp above the 840 dp breakpoint
+(`MainActivity.kt:73-87`): a small density or font-scale change would flip the
+inner display back to the bottom bar.
+
+Gap found: folding to CLOSED (including the final `reset` to the folded
+baseline) sleeps the display and shows the lockscreen, and the script never
+unlocks. Every leg after the first fold-closed (unfold -> fold, tutor draft,
+crash scan) therefore could not be read, and the run stopped. The script now
+runs all unlocked checks first (unsaved settings text and Explore query on
+fold -> unfold, tutor draft across HALF_OPENED/OPENED) and records that the
+closing fold locks the device; that full run still needs an unlocked device
+and a corrected recreation signal. After the runs the posture was reset, the
+baseline matched, the reverse mapping was removed, the mock server stopped,
+and the package uninstalled.
+
+Not covered: the unfold -> fold return leg on the outer display, device
+reboot, backend restart or outage, a real backend or model, and
+physical-hinge-only behavior. `cmd device_state` emulates posture; it does not
+prove hinge sensors, inner-display app-continuity quirks, or what a user sees
+when physically opening the device.
+
 ## Acceptance still pending
 
 - General article/model-quality acceptance remains pending beyond the bounded
   live workflows above. Controlled inference tests establish API behavior;
   generation never silently substitutes demo cards.
-- Device-reboot recovery and folded/unfolded layout transitions remain
-  unverified; process death is covered above, with the in-memory tutor gap noted. Earlier host emulator attempts failed; the device results
+- Device-reboot recovery remains unverified. Fold/unfold is partly covered
+  (rail at 852 dp and state kept on fold -> unfold); the return fold leg,
+  recreation evidence, and unsaved-text behavior still need an unlocked-device
+  run. Process death is covered above, with the in-memory tutor gap noted. Earlier host emulator attempts failed; the device results
   above use physical hardware.
 - Backend tests emit an upstream Starlette TestClient deprecation warning.
 - Backend service restart/recovery still needs live acceptance checks.
