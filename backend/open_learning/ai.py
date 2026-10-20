@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Annotated, Literal, TypeVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from .config import Settings
 
@@ -51,6 +51,23 @@ class _TutorContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     answer: ShortText
     question: Annotated[str, Field(min_length=5, max_length=500)]
+    assessment: Literal["correct", "partially_correct", "incorrect", "not_assessed"] = (
+        "not_assessed"
+    )
+
+    @field_validator("answer", "question")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @model_serializer(mode="wrap")
+    def omit_unassessed(self, handler):
+        data = handler(self)
+        if data.get("assessment") == "not_assessed":
+            return {key: item for key, item in data.items() if key != "assessment"}
+        return data
 
 
 class TutorResult(_TutorContent):
@@ -213,7 +230,8 @@ class ModelClient:
             "from different spans. The content must include title, idea, explanation, why_it_matters, "
             "tags. Keep the idea narrow enough that the selected span directly supports every claim "
             "in every content field. Keep the explanation to one or two concise sentences. Use at "
-            "most six short tags. Return one item with evidence_id first and content second.",
+            "most six short tags. If the span is insufficient for a useful claim, choose a narrower idea "
+            "it fully supports instead of asserting anything beyond it. Return one item with evidence_id first and content second.",
             {"spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()]},
             evidence_mode="id",
         )
@@ -240,7 +258,12 @@ class ModelClient:
             "its accuracy against the selected span, correct misconceptions, then ask a follow-up "
             "question. First select one evidence_id, then write content using only that selected "
             "span. Keep your factual claims and the premises of the question supported by it. "
-            "Return evidence_id first and content with answer and question second.",
+            "The follow-up question must be answerable from the selected span and must not repeat "
+            "the previous question in history. If the span is insufficient to answer or assess, say "
+            "so plainly rather than asserting unsupported claims. Set assessment only when the "
+            "learner message explains the idea: correct, partially_correct, or incorrect against the "
+            "span; otherwise use not_assessed. Return evidence_id first and content with answer, "
+            "question and assessment second.",
             {
                 "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
                 "title": title,

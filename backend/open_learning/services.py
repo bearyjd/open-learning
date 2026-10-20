@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .ai import ModelClient
+from .ai import ModelClient, ModelError, normalized
 from .config import Settings
 from .fetching import fetch_document
 from .models import (
@@ -136,6 +136,12 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
         message,
         [{"role": entry.role, "message": entry.message} for entry in reversed(history)],
     )
+    previous = db.scalar(select(ReviewItem.question).where(ReviewItem.insight_id == insight.id))
+    if (
+        previous is not None
+        and normalized(previous).casefold() == normalized(result.question).casefold()
+    ):
+        raise ModelError("Model repeated the previous question")
     review = ensure_review(db, insight)
     review.question = result.question
     if message:
@@ -148,6 +154,7 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
     return {
         "answer": result.answer,
         "question": result.question,
+        "assessment": result.assessment,
         "review_id": review.id,
         "citations": [
             {"document_id": document.id, "source_url": source.url, "passage": result.evidence}

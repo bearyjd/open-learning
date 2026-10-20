@@ -119,3 +119,62 @@ def test_tutor_model_http_validates_before_writing(
             else "Model unavailable or returned invalid structured output"
         )
         assert after == before
+
+
+def _first_insight(client, factory, settings):
+    client.post(API + "/ingest/url", json={"url": "https://example.com/article"})
+    assert run_once(factory, settings, article_fetcher, FixtureModel())
+    return client.get(API + "/feed/today").json()[0]
+
+
+@pytest.mark.parametrize("variant", ["same", "case-and-space"])
+def test_tutor_rejects_repeated_previous_question(client, factory, settings, variant):
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    assert first.status_code == 200
+    repeated = first.json()["question"]
+    if variant == "case-and-space":
+        repeated = "  " + repeated.upper().replace(" ", "\n ") + " "
+
+    class Repeating(FixtureModel):
+        def tutor(self, passage, title, message, history):
+            return (
+                super()
+                .tutor(passage, title, message, history)
+                .model_copy(update={"question": repeated})
+            )
+
+    client.app.state.model = Repeating()
+
+    def snapshot():
+        with factory() as db:
+            return [
+                [dict(row) for row in db.execute(select(entity.__table__)).mappings()]
+                for entity in (History, ReviewItem, Interaction)
+            ]
+
+    before = snapshot()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 503
+    assert result.json()["detail"] == "Model repeated the previous question"
+    assert snapshot() == before
+
+
+def test_tutor_assessment_stays_out_of_public_response(client, factory, settings):
+    insight = _first_insight(client, factory, settings)
+
+    class Assessing(FixtureModel):
+        def tutor(self, passage, title, message, history):
+            return (
+                super()
+                .tutor(passage, title, message, history)
+                .model_copy(update={"assessment": "correct"})
+            )
+
+    client.app.state.model = Assessing()
+    body = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    ).json()
+    assert set(body) == {"answer", "question", "review_id", "citations"}
