@@ -175,12 +175,16 @@ Cards from notes report `source_kind: "note"`, an empty `source_url`, and
 `source_label`; URL cards report `source_kind: "url"`. This is backend-only for
 now; the Android app has no note import or attribution display yet.
 
-Notes can be listed with `GET /api/v1/notes` and permanently forgotten with
-`DELETE /api/v1/notes/{document_id}` (backups and the Android cache are not purged;
-see [security](docs/security.md)). `OL_NOTE_MAX_PENDING_JOBS` (default 20) limits
-queued plus running note jobs (429 beyond it), and failed jobs keep note text only
-for `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168) and at most
-`OL_NOTE_FAILED_PAYLOADS` (default 20) jobs.
+Notes can be listed with `GET /api/v1/notes` (`limit` 1 to 500, default 100, and
+`offset`) and permanently forgotten with `DELETE /api/v1/notes/{document_id}`, which
+also cancels queued, running and failed jobs holding the same text. Backups, the
+Android cache and model-provider copies are not purged; see
+[security](docs/security.md). `GET /api/v1/jobs?kind=note` lists note jobs (id,
+status, created_at only) so a failed job can be removed with `DELETE /api/v1/jobs/{id}`.
+`OL_NOTE_MAX_PENDING_JOBS` (default 20) limits queued plus running note jobs (429
+beyond it; SQLite can overshoot slightly), and failed jobs keep note text for at
+least `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168) only while the worker or note
+ingest runs to purge them, and at most `OL_NOTE_FAILED_PAYLOADS` (default 20) jobs.
 
 Poll `GET /api/v1/jobs/{id}`. A failed job retains its status; inspect the safe
 error code, correct the source or model configuration, and retry it using
