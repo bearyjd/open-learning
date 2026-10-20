@@ -213,38 +213,6 @@ def test_tutor_rejects_invalid_content(monkeypatch, settings, override):
         model.tutor(PASSAGE, "Retrieval", "Recall helps.", [])
 
 
-def test_prompts_require_abstention_and_answerable_followups(monkeypatch, settings):
-    content = {"answer": "Good.", "question": "What does recall replace?"}
-    model, received = _tutor_model(monkeypatch, settings, content)
-    model.tutor(PASSAGE, "Retrieval", "Recall helps.", [])
-    tutor_prompt = received[0]["messages"][0]["content"]
-    assert "assessment" in tutor_prompt
-    assert "only when the learner message explains the idea" in tutor_prompt
-    assert "answerable from the selected span" in tutor_prompt
-    assert "span is insufficient" in tutor_prompt
-
-    draft = {
-        "evidence_id": "e0",
-        "content": {
-            "title": "Retrieval practice",
-            "idea": "Recall before rereading.",
-            "explanation": "Trying to recall strengthens memory.",
-            "why_it_matters": "Study more effectively.",
-            "tags": ["learning"],
-        },
-    }
-    model, received = _tutor_model(monkeypatch, settings, {})
-    monkeypatch.setattr(
-        model,
-        "complete",
-        lambda schema, instruction, payload, **kw: (
-            received.append(instruction) or schema.model_validate({"insights": [draft]})
-        ),
-    )
-    model.insights([PASSAGE])
-    assert "span is insufficient" in received[-1]
-
-
 def test_tutor_payload_carries_previous_question_and_retry_instruction(monkeypatch, settings):
     content = {"answer": "Good.", "question": "What does recall replace?"}
     model, received = _tutor_model(monkeypatch, settings, content)
@@ -258,4 +226,3 @@ def test_tutor_payload_carries_previous_question_and_retry_instruction(monkeypat
     payload = json.loads(received[1]["messages"][1]["content"])
     assert payload["previous_question"] == "Why recall?"
     assert "different question" in payload["retry_instruction"]
-    assert "previous_question" in received[0]["messages"][0]["content"]

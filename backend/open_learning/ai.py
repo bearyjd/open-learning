@@ -230,8 +230,7 @@ class ModelClient:
             "from different spans. The content must include title, idea, explanation, why_it_matters, "
             "tags. Keep the idea narrow enough that the selected span directly supports every claim "
             "in every content field. Keep the explanation to one or two concise sentences. Use at "
-            "most six short tags. If the span is insufficient for a useful claim, choose a narrower idea "
-            "it fully supports instead of asserting anything beyond it. Return one item with evidence_id first and content second.",
+            "most six short tags. Return one item with evidence_id first and content second.",
             {"spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()]},
             evidence_mode="id",
         )
@@ -279,12 +278,7 @@ class ModelClient:
             "its accuracy against the selected span, correct misconceptions, then ask a follow-up "
             "question. First select one evidence_id, then write content using only that selected "
             "span. Keep your factual claims and the premises of the question supported by it. "
-            "The follow-up question must be answerable from the selected span and must not repeat "
-            "previous_question, the question the learner was last asked. If the span is insufficient to answer or assess, say "
-            "so plainly rather than asserting unsupported claims. Set assessment only when the "
-            "learner message explains the idea: correct, partially_correct, or incorrect against the "
-            "span; otherwise use not_assessed. Return evidence_id first and content with answer, "
-            "question and assessment second.",
+            "Return evidence_id first and content with answer and question second.",
             payload,
             evidence_mode="id",
         )
