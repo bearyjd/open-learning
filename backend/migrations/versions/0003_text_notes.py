@@ -37,6 +37,9 @@ def upgrade():
 
 def downgrade():
     bind = op.get_bind()
+    if bind.dialect.name == "postgresql":
+        # Block concurrent inserts/updates so no note job can be queued between check and drop.
+        bind.execute(sa.text("LOCK TABLE jobs IN SHARE ROW EXCLUSIVE MODE"))
     pending = bind.execute(sa.text(
         "SELECT COUNT(*) FROM jobs WHERE kind = 'note' AND status IN ('queued', 'running')"
     )).scalar()
