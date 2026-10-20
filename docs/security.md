@@ -23,7 +23,8 @@ endpoint, which can be private. Keep the backend patched and apply egress
 restrictions as an additional deployment defense.
 
 Only extracted plain text is rendered; scripts and HTML are not displayed in a
-WebView. The first milestone has no document upload endpoint. Future upload
+WebView. There is no file upload endpoint; the only endpoint accepting user-supplied
+content is `POST /api/v1/ingest/text`, described below. Future upload
 adapters must enforce compressed and decompressed limits and prevent archive
 path traversal. Source text can contain malicious model instructions; the AI
 prompt treats it as data. Insight output selects a known source-span ID, which
@@ -34,6 +35,29 @@ establish provenance, not factual correctness or logical entailment. ID selectio
 removes fabricated quote copying as a failure signal, so valid references can
 still accompany unsupported prose.
 Tutor feedback remains labeled AI interpretation and can be wrong.
+
+Text note endpoint: `POST /api/v1/ingest/text` (bearer-authenticated) accepts
+`title`, `text` and an optional `label` as plain text; Markdown is stored as text
+and never rendered. Limits: text 100 to `OL_MAX_DOCUMENT_CHARS` characters
+(default 60,000; longer input is rejected, never truncated), title 1 to 500, label
+at most 100 and a single line. Text is normalized (CRLF/CR to LF, Unicode NFC,
+trimmed) and must be valid UTF-8 (lone surrogates are rejected). NUL, C0 controls
+other than tab and newline, DEL and C1 controls are rejected; titles and labels
+allow no control characters at all. Rejections use fixed messages, and the 422
+response for this route omits pydantic's echoed `input`, so submitted text is never
+reflected. Every request body is capped at `12 * OL_MAX_DOCUMENT_CHARS + 64 KiB`
+(about 784 KB by default) by middleware that checks `Content-Length` and the
+streamed byte count and answers 413 before authentication. There is no rate
+limiting, as elsewhere in this single-user API.
+
+The note text is held in the `jobs` row (`payload_*`) so a worker restart or a
+retry can finish it, and is cleared in the transaction that completes the job.
+**A failed note job keeps its text in the database until a retry succeeds**; the
+future delete endpoint must purge it. Completed note text is stored as a document
+like any imported article, so backups contain it. Notes are deduplicated by the
+SHA-256 of their normalized text. The internal `note:<hash>` source key is never
+returned to clients, which receive `source_kind: "note"`, an empty `source_url`
+and the label. Workers log only the job id and exception type.
 
 Normal API access logs are disabled in deployment because URLs and query strings
 can expose reading interests. Do not enable model prompt logging on shared

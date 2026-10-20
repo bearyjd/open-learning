@@ -160,6 +160,21 @@ curl --fail http://127.0.0.1:8000/api/v1/ingest/url \
   -d '{"url":"https://example.org/an-article-you-can-legally-process"}'
 ```
 
+Plain text or Markdown you wrote or exported can be ingested the same way. The
+text is not rendered; it must be 100 to 60,000 characters (`OL_MAX_DOCUMENT_CHARS`)
+and control characters are rejected (see [security](docs/security.md)):
+
+```sh
+curl --fail http://127.0.0.1:8000/api/v1/ingest/text \
+  -H "Authorization: Bearer $OL_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"My study notes","label":"Biology 101","text":"...at least 100 characters..."}'
+```
+
+Cards from notes report `source_kind: "note"`, an empty `source_url`, and
+`source_label`; URL cards report `source_kind: "url"`. This is backend-only for
+now; the Android app has no note import or attribution display yet.
+
 Poll `GET /api/v1/jobs/{id}`. A failed job retains its status; inspect the safe
 error code, correct the source or model configuration, and retry it using
 `POST /api/v1/jobs/{id}/retry`. The worker must be running.

@@ -17,6 +17,15 @@ and legacy quote/index fields fail the entire batch. Tutoring selects a source
 span before its answer and recall question. Both paths check canonical quotations
 against their original source text; invalid tutor responses write no chat or
 review state.
+Jobs have a kind. `url` jobs fetch an article. `note` jobs come from
+`POST /api/v1/ingest/text` and carry their title, text and label in the job row
+until completion; they skip fetching and then follow the same chunk, model and
+publish path. A note is a `Source` of kind `note`, keyed internally by `note:`
+plus the SHA-256 of its normalized text, so identical text is imported once (the
+first title and label win and a repeat makes no model call), while different text
+under the same title becomes a separate source. API responses expose
+`source_kind` and `source_label`, and `source_url` is empty for notes. Notes have
+no edit, version or delete support yet.
 Model errors become retryable failed jobs rather than fabricated fallback cards.
 
 The inference boundary is an OpenAI-compatible `/v1/chat/completions` endpoint.
