@@ -26,12 +26,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     init {
         viewModelScope.launch {
             connection.collect { config ->
-                val restore = restorePending
-                if (config != null) restorePending = false
-                if (!restore) memory.clear()
+                val step = connectionStep(restorePending, config != null)
+                val restore = step.restore
+                restorePending = step.restorePending
+                if (step.clearMemory) memory.clear()
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
-                mutable.value = ScreenState()
+                mutable.value = ScreenState(scope = config?.scope.orEmpty())
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
                     feedFlow = launch { repository.cached.collect { rows ->
@@ -60,10 +61,11 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch {
             val item = resolveInsight(saved.insightId,
                 { id -> container.database.dao().get(saved.scope, id)?.let(repository::decode) }, repository.api::insight)
-            if (repo !== repository || state.value.selected != null || memory.recall(saved.scope) != saved) return@launch
-            if (item == null) { memory.clear(); return@launch }
-            select(item)
-            if (saved.learning) markLearning(item)
+            when (val decision = decideRestore(saved, repository.config.scope, repo === repository, state.value.selected?.id, memory.recall(saved.scope), item)) {
+                is RestoreDecision.Restore -> { select(decision.insight); if (saved.learning) markLearning(decision.insight) }
+                RestoreDecision.Clear -> memory.clear()
+                RestoreDecision.Skip -> Unit
+            }
         }
     }
     private fun markLearning(item: Insight) {
@@ -178,6 +180,6 @@ data class ScreenState(
     val feed: List<Insight> = emptyList(), val library: List<Insight> = emptyList(),
     val results: List<Insight> = emptyList(), val searched: Boolean = false,
     val jobs: List<PendingIngest> = emptyList(), val reviews: List<Review> = emptyList(), val reviewsLoaded: Boolean = false,
-    val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
+    val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
     val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: String? = null,
 )

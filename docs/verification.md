@@ -333,9 +333,11 @@ Not covered: backend restart, a real backend or model, the fold return leg, phys
   running continuously across the reboot remains. Fold/unfold is partly covered
   (rail at 852 dp and state kept on fold -> unfold); the return fold leg,
   recreation evidence, and unsaved-text behavior still need an unlocked-device
-  run. Process death is covered above. The tutor selection (item id only) and
-  unsent draft are now restored after process death by JVM-tested code;
-  on-device confirmation is pending. Earlier host emulator attempts failed; the device results
+  run. Process death is covered above. Restoring the tutor selection (item id
+  only) and unsent draft after process death is implemented; the helper and
+  restore-decision logic are JVM-tested, but end-to-end restore, including
+  Compose draft restoration, is not yet verified on device. Earlier host
+  emulator attempts failed; the device results
   above use physical hardware.
 - Backend tests emit an upstream Starlette TestClient deprecation warning.
 - Backend service restart/recovery still needs live acceptance checks.
