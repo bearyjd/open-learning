@@ -49,8 +49,10 @@ paragraph separators (U+2028, U+2029). Explicit bidirectional controls
 source" spoofing; text keeps U+2028/U+2029 because it is body text. Other format
 characters such as the zero-width joiner in emoji sequences are allowed.
 Rejections use fixed messages, and every 422 body-validation response (all routes,
-including behind a `root_path`) omits pydantic's echoed `input` and `ctx`, so
-submitted text is never reflected. The SQLAlchemy engine uses
+including behind a `root_path`) omits pydantic's echoed `input` and `ctx` (for
+example the `max_length` limit), so submitted text is never reflected. The status
+code and the `type`, `loc` and `msg` fields are unchanged, and query and path
+validation errors are not altered. The SQLAlchemy engine uses
 `hide_parameters=True`, so database errors and logs cannot carry note text.
 Request bodies are capped by middleware that checks the largest declared
 `Content-Length` and the streamed byte count and itself answers 413 (stopping at the
