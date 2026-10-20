@@ -132,7 +132,8 @@ import failures. Extracted partial content must never imply whole-book coverage.
 | Proposed PR | Deliverable | Acceptance | Dependency |
 | --- | --- | --- | --- |
 | PR-E1: Text/Markdown ingest (backend) | `POST /api/v1/ingest/text` for user-provided plain text/Markdown through the source pipeline | Encoding, control characters, size limits, request body cap, duplicate imports, retry, lease safety, and migrations on SQLite and PostgreSQL tested | PR-A/D |
-| PR-E2: Note editing and source management | Edit notes with versioned citations, a delete endpoint (purging text retained by failed jobs), and Android file picker, attribution rendering and Room migration | Edits, source-version citations, deletion, and Android attribution tested | PR-E1 |
+| PR-E1b: Note forgetting and caps | `GET /api/v1/notes`, hard `DELETE` of a note and its derived data, `DELETE` of note jobs, pending-job cap and bounded retention of failed-job text | Full-graph deletion, job cancellation, delete-during-generation, caps, retention purge, and PostgreSQL races tested | PR-E1 |
+| PR-E2: Note editing and source management | Edit notes with versioned citations and Android file picker, attribution rendering and Room migration | Edits, source-version citations, and Android attribution tested | PR-E1 |
 | PR-F: RSS subscriptions | Add subscriptions, bounded polling, deduplication, and article handoff | Fixture feeds cover malformed entries, redirects, repeat polling, failures, and fetch security | PR-E source contract |
 | PR-G: PDF import | Extract text with page attribution and explicit extraction limits | Text PDFs, malformed files, page mapping, size limits, and scanned-document errors tested; OCR separate | PR-E |
 | PR-H: DRM-free EPUB import | Parse chapters with stable attribution | Legal fixtures cover archive traversal, oversized expansion, duplicate imports, and chapter order | PR-E |

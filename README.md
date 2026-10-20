@@ -175,6 +175,13 @@ Cards from notes report `source_kind: "note"`, an empty `source_url`, and
 `source_label`; URL cards report `source_kind: "url"`. This is backend-only for
 now; the Android app has no note import or attribution display yet.
 
+Notes can be listed with `GET /api/v1/notes` and permanently forgotten with
+`DELETE /api/v1/notes/{document_id}` (backups and the Android cache are not purged;
+see [security](docs/security.md)). `OL_NOTE_MAX_PENDING_JOBS` (default 20) limits
+queued plus running note jobs (429 beyond it), and failed jobs keep note text only
+for `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168) and at most
+`OL_NOTE_FAILED_PAYLOADS` (default 20) jobs.
+
 Poll `GET /api/v1/jobs/{id}`. A failed job retains its status; inspect the safe
 error code, correct the source or model configuration, and retry it using
 `POST /api/v1/jobs/{id}/retry`. The worker must be running.

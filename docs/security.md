@@ -64,12 +64,36 @@ There is no rate limiting, as elsewhere in this single-user API.
 
 The note text is held in the `jobs` row (`payload_*`) so a worker restart or a
 retry can finish it, and is cleared in the transaction that completes the job.
-**A failed note job keeps its text in the database until a retry succeeds**; the
-future delete endpoint must purge it. Completed note text is stored as a document
+**A failed note job keeps its text in the database** so it can be retried, but only
+for a bounded time: `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168, measured from job
+creation) and at most the newest `OL_NOTE_FAILED_PAYLOADS` (default 20, `0` keeps
+none) failed jobs retain text. Older text is cleared with the error `Note text
+expired; submit it again`. Queued, running and URL jobs are never touched by this
+purge, which runs when a job fails, when the worker is idle, and on each note
+submission. Completed note text is stored as a document
 like any imported article, so backups contain it. Notes are deduplicated by the
 SHA-256 of their normalized text. The internal `note:<hash>` source key is never
 returned to clients, which receive `source_kind: "note"`, an empty `source_url`
 and the label. Workers log only the job id and exception type.
+
+Queue caps: `OL_NOTE_MAX_PENDING_JOBS` (default 20, 1 to 1000) bounds queued plus
+running note jobs. Beyond it, `POST /api/v1/ingest/text` and note job retries answer
+429 with `Retry-After: 30` and store nothing; on PostgreSQL admission is serialised
+with a transaction advisory lock so concurrent requests cannot overshoot.
+
+Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id, never the
+internal key). `DELETE /api/v1/notes/{document_id}` hard-deletes the note document,
+its chunks, insights, saved items, interactions, tutor history, review items and
+review history, and its source, in one transaction. Queued or failed note jobs still
+holding the same text are cancelled and their text cleared, so a running job cannot
+recreate the note. `DELETE /api/v1/jobs/{job_id}` removes a note job of any status
+(409 for URL jobs). Importing the same text again afterwards creates new rows.
+Limits of forgetting: it deletes live data only. Database backups and snapshots
+still contain the note until they are rotated. PostgreSQL leaves dead tuples until
+vacuum and may keep the text in WAL; SQLite leaves free pages in the file until
+`VACUUM`. The Android app's Room cache may still hold cards from the note until it
+refreshes or the app data is cleared. Today's stored feed may keep stale ids, which
+are filtered out when read.
 
 Downgrading migration 0003: stop the API and the worker first. The downgrade
 refuses to run while note jobs are queued or running (on PostgreSQL it takes a
