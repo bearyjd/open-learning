@@ -34,9 +34,16 @@ class Base(DeclarativeBase):
 
 class Source(Base):
     __tablename__ = "sources"
+    __table_args__ = (
+        CheckConstraint("kind IN ('url', 'note')", name="ck_sources_kind"),
+        CheckConstraint("(kind = 'note') = (url LIKE 'note:%')", name="ck_sources_note_key"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
+    # A note's key is "note:" + content hash; it is internal and never sent to clients.
     url: Mapped[str] = mapped_column(Text, unique=True)
     title: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(16), default="url", server_default="url")
+    label: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -150,8 +157,20 @@ class Preference(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "(kind = 'url' AND url IS NOT NULL AND payload_text IS NULL AND payload_title IS NULL "
+            "AND payload_label IS NULL) OR (kind = 'note' AND url IS NULL)",
+            name="ck_jobs_kind_payload",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
-    url: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16), default="url", server_default="url")
+    url: Mapped[str | None] = mapped_column(Text)
+    # Note text lives here until the job completes; a failed job keeps it so retry works.
+    payload_title: Mapped[str | None] = mapped_column(Text)
+    payload_text: Mapped[str | None] = mapped_column(Text)
+    payload_label: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     error: Mapped[str | None] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

@@ -42,6 +42,11 @@ jobs:
           uv run --no-sync python -m open_learning.evaluation validate-corpus --corpus evaluation/holdout.json
       - run: uv run --no-sync alembic upgrade head
       - run: uv run --no-sync alembic check
+      - name: Round-trip the latest migration
+        run: |
+          uv run --no-sync alembic downgrade 0002
+          uv run --no-sync alembic upgrade head
+          uv run --no-sync alembic check
       - run: uv run --no-sync pytest -q
       - name: Check live Android runner safeguards
         working-directory: .

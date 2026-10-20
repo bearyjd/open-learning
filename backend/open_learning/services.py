@@ -23,6 +23,7 @@ from .models import (
     ident,
     now,
 )
+from .notes import NOTE_KEY_PREFIX
 
 
 def chunk_text(text: str, size: int = 2400) -> list[str]:
@@ -38,6 +39,16 @@ def chunk_text(text: str, size: int = 2400) -> list[str]:
     return chunks
 
 
+def source_fields(source: Source) -> dict:
+    """Client-facing source attribution. A note's internal key is never exposed."""
+    is_note = source.kind == "note"
+    return {
+        "source_url": "" if is_note else source.url,
+        "source_kind": source.kind,
+        "source_label": (source.label or "") if is_note else "",
+    }
+
+
 def serialize_insight(db: Session, insight: Insight) -> dict:
     document = db.get(Document, insight.document_id)
     source = db.get(Source, document.source_id)
@@ -48,7 +59,7 @@ def serialize_insight(db: Session, insight: Insight) -> dict:
         "explanation": insight.explanation,
         "why_it_matters": insight.why_it_matters,
         "source_title": document.title,
-        "source_url": source.url,
+        **source_fields(source),
         "document_id": document.id,
         "evidence": insight.evidence,
         "tags": insight.tags,
@@ -150,7 +161,7 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
         "question": result.question,
         "review_id": review.id,
         "citations": [
-            {"document_id": document.id, "source_url": source.url, "passage": result.evidence}
+            {"document_id": document.id, **source_fields(source), "passage": result.evidence}
         ],
     }
 
@@ -177,7 +188,7 @@ def answer_review(db: Session, review: ReviewItem, rating: str) -> dict:
     return serialize_review(db, review)
 
 
-def claim_job(factory, lease_seconds: int) -> tuple[str, str, str] | None:
+def claim_job(factory, lease_seconds: int) -> tuple[str, str | None, str] | None:
     with factory.begin() as db:
         timestamp = now()
         job = db.scalar(
@@ -201,63 +212,140 @@ def claim_job(factory, lease_seconds: int) -> tuple[str, str, str] | None:
         return job.id, job.url, job.lease_token
 
 
+def _lease_holder(db: Session, job_id: str, token: str) -> Job | None:
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or job.status != "running" or job.lease_token != token:
+        return None  # A reclaimed lease owns completion now.
+    return job
+
+
+def _complete(job: Job) -> None:
+    job.status, job.error, job.lease_until, job.lease_token = "completed", None, None, None
+    job.payload_title = job.payload_text = job.payload_label = None
+
+
+def _upsert_source(db: Session, key: str, **fields) -> Source:
+    source = db.scalar(select(Source).where(Source.url == key).with_for_update())
+    if source is None:
+        try:
+            with db.begin_nested():
+                source = Source(url=key, **fields)
+                db.add(source)
+                db.flush()
+        except IntegrityError:
+            source = db.scalar(select(Source).where(Source.url == key).with_for_update())
+    return source
+
+
+def _publish(
+    db: Session, settings: Settings, source: Source, *, title, text, digest, texts, batch, truncated
+) -> None:
+    existing = db.scalar(
+        select(Document).where(Document.source_id == source.id, Document.content_hash == digest)
+    )
+    if existing is not None:
+        return
+    document = Document(
+        source_id=source.id,
+        title=title,
+        text=text,
+        content_hash=digest,
+        extraction_truncated=truncated,
+        generation_coverage="excerpt",
+    )
+    db.add(document)
+    db.flush()
+    chunks = [Chunk(document_id=document.id, position=i, text=part) for i, part in enumerate(texts)]
+    db.add_all(chunks)
+    db.flush()
+    for item in batch.insights:
+        db.add(
+            Insight(
+                document_id=document.id,
+                chunk_id=chunks[item.chunk_index].id,
+                title=item.title,
+                idea=item.idea,
+                explanation=item.explanation,
+                why_it_matters=item.why_it_matters,
+                evidence=item.evidence,
+                tags=item.tags,
+                model=settings.effective_ai_model,
+                model_endpoint=settings.effective_ai_endpoint,
+            )
+        )
+
+
+def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] | None:
+    with factory() as db:
+        job = db.scalar(select(Job).where(Job.id == job_id))
+        if job is None or job.status != "running" or job.lease_token != token:
+            return None
+        if job.payload_text is None or job.payload_title is None:
+            raise RuntimeError("Note payload is missing")
+        return job.payload_title, job.payload_text, job.payload_label
+
+
+def _note_imported(db: Session, key: str, digest: str) -> bool:
+    return (
+        db.scalar(
+            select(Document.id)
+            .join(Source, Source.id == Document.source_id)
+            .where(Source.url == key, Document.content_hash == digest)
+        )
+        is not None
+    )
+
+
+def _process_note(factory, settings: Settings, claim, model) -> None:
+    job_id, _, token = claim
+    note = _load_note(factory, job_id, token)
+    if note is None:
+        return
+    title, text, label = note
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    key = NOTE_KEY_PREFIX + digest
+    with factory.begin() as db:
+        if _note_imported(db, key, digest):  # Same content: first import wins, no model call.
+            if (job := _lease_holder(db, job_id, token)) is not None:
+                _complete(job)
+            return
+    texts = chunk_text(text)
+    batch = (model or ModelClient(settings, factory)).insights(texts[:8])
+    with factory.begin() as db:
+        job = _lease_holder(db, job_id, token)
+        if job is None:
+            return
+        source = _upsert_source(db, key, kind="note", title=title, label=label)
+        _publish(
+            db, settings, source, title=title, text=text, digest=digest, texts=texts,
+            batch=batch, truncated=False,
+        )
+        _complete(job)
+
+
 def process_job(
-    factory, settings: Settings, claim: tuple[str, str, str], fetcher=fetch_document, model=None
+    factory,
+    settings: Settings,
+    claim: tuple[str, str | None, str],
+    fetcher=fetch_document,
+    model=None,
 ):
     job_id, url, token = claim
+    if url is None:
+        _process_note(factory, settings, claim, model)
+        return
     article = fetcher(url, settings)
     texts = chunk_text(article.text)
     # Extraction stores the full bounded document; generation uses at most eight passages.
     batch = (model or ModelClient(settings, factory)).insights(texts[:8])
     with factory.begin() as db:
-        job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
-        if job is None or job.status != "running" or job.lease_token != token:
-            return  # A reclaimed lease owns completion now.
-        source = db.scalar(select(Source).where(Source.url == article.url).with_for_update())
-        if source is None:
-            try:
-                with db.begin_nested():
-                    source = Source(url=article.url, title=article.title)
-                    db.add(source)
-                    db.flush()
-            except IntegrityError:
-                source = db.scalar(
-                    select(Source).where(Source.url == article.url).with_for_update()
-                )
+        job = _lease_holder(db, job_id, token)
+        if job is None:
+            return
+        source = _upsert_source(db, article.url, title=article.title)
         digest = hashlib.sha256(article.text.encode()).hexdigest()
-        existing = db.scalar(
-            select(Document).where(Document.source_id == source.id, Document.content_hash == digest)
+        _publish(
+            db, settings, source, title=article.title, text=article.text, digest=digest,
+            texts=texts, batch=batch, truncated=article.truncated,
         )
-        if existing is None:
-            document = Document(
-                source_id=source.id,
-                title=article.title,
-                text=article.text,
-                content_hash=digest,
-                extraction_truncated=article.truncated,
-                generation_coverage="excerpt",
-            )
-            db.add(document)
-            db.flush()
-            chunks = [
-                Chunk(document_id=document.id, position=i, text=text)
-                for i, text in enumerate(texts)
-            ]
-            db.add_all(chunks)
-            db.flush()
-            for item in batch.insights:
-                db.add(
-                    Insight(
-                        document_id=document.id,
-                        chunk_id=chunks[item.chunk_index].id,
-                        title=item.title,
-                        idea=item.idea,
-                        explanation=item.explanation,
-                        why_it_matters=item.why_it_matters,
-                        evidence=item.evidence,
-                        tags=item.tags,
-                        model=settings.effective_ai_model,
-                        model_endpoint=settings.effective_ai_endpoint,
-                    )
-                )
-        job.status, job.error, job.lease_until, job.lease_token = "completed", None, None, None
+        _complete(job)

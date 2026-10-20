@@ -178,7 +178,7 @@ def test_body_limit_counts_streamed_bytes():
             sent.append(message)
 
         scope = {"type": "http", "method": "POST", "path": "/", "headers": []}
-        await BodyLimitMiddleware(inner, 100)(scope, receive, send)
+        await BodyLimitMiddleware(inner, lambda scope: 100)(scope, receive, send)
         return sent[0]["status"]
 
     assert asyncio.run(call([b"x" * 60, b"x" * 40])) == 200

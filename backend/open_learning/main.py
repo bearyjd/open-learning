@@ -3,15 +3,20 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select, text
 
 from .ai import ModelClient, ModelError
 from .config import Settings, get_settings
 from .database import session_factory
 from .fetching import FetchError, validate_url
+from .limits import BodyLimitMiddleware
 from .models import History, Insight, Interaction, Job, Preference, ReviewItem, SavedItem, now
+from .notes import validate_note
 from .schemas import InsightOutput, JobOutput, ReviewOutput, TutorOutput
 from .services import (
     answer_review,
@@ -21,6 +26,8 @@ from .services import (
     today_feed,
     tutor_chat,
 )
+
+TEXT_INGEST_PATH = "/api/v1/ingest/text"
 
 
 def create_app(settings: Settings | None = None, factory=None, model=None) -> FastAPI:
@@ -43,6 +50,19 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         redoc_url=None,
         openapi_url=None,
     )
+    # Large enough for a max-length note in worst-case JSON escaping, plus slack.
+    app.add_middleware(
+        BodyLimitMiddleware,
+        limit=lambda scope: 12 * scope["app"].state.settings.max_document_chars + 64 * 1024,
+    )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        if request.url.path == TEXT_INGEST_PATH:  # Never echo submitted note text back.
+            errors = [{k: v for k, v in e.items() if k not in {"input", "ctx"}} for e in errors]
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
     bearer = HTTPBearer(auto_error=False)
 
     def authenticate(
@@ -86,6 +106,22 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         db.commit()
         return job_output(job)
 
+    @api.post("/ingest/text", status_code=202, response_model=JobOutput)
+    def ingest_text(payload: TextInput, request: Request, db=Depends(database)):
+        note = validate_note(
+            payload.title, payload.text, payload.label, request.app.state.settings.max_document_chars
+        )
+        job = Job(
+            kind="note",
+            url=None,
+            payload_title=note.title,
+            payload_text=note.text,
+            payload_label=note.label,
+        )
+        db.add(job)
+        db.commit()
+        return job_output(job)
+
     @api.get("/jobs/{job_id}", response_model=JobOutput)
     def job_status(job_id: str, db=Depends(database)):
         item = db.get(Job, job_id)
@@ -100,6 +136,8 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             raise HTTPException(404, "Job not found")
         if item.status != "failed":
             raise HTTPException(409, "Only failed jobs can be retried")
+        if item.kind == "note" and item.payload_text is None:
+            raise HTTPException(409, "Note text is no longer available; submit it again")
         item.status, item.error = "queued", None
         db.commit()
         return job_output(item)
@@ -209,6 +247,14 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
 class UrlInput(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+
+
+class TextInput(BaseModel):
+    # No length limits here: a pydantic length error would echo the whole text. See notes.py.
+    model_config = ConfigDict(extra="forbid")
+    title: str
+    text: str
+    label: str | None = None
 
 
 class FeedbackInput(BaseModel):
