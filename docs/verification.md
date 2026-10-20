@@ -205,13 +205,54 @@ responses were rejected. The current explicit span-selection contract was then
 verified test-first; it removes copying as a model task rather than repairing
 its generated quotations.
 
+### Android process-death acceptance (October 19, 2026)
+
+Run on the physical Pixel 10 Pro Fold (API 37, folded outer display, 1080x2364
+at 390 dpi) with only `org.openlearning.app.acceptance`. The six fixture tests
+passed again through `connectedAcceptanceAndroidTest` (7 reported, 1 skipped:
+the opt-in live test). Process death was then driven by
+`scripts/android_process_death.py --serial SERIAL`, which starts a throwaway
+loopback mock of the `/api/v1` contract on the host (no database, model, or
+cloud; the on-device fixture lives in the instrumentation process and dies with
+it), adds and removes its own `adb reverse`, configures the app through its
+Connection dialog, queues an import that stays "processing", presses Home, kills
+with `am kill` (never `force-stop`, which cancels WorkManager), and relaunches
+with `am start`. Each kill was confirmed by a changed `pidof`; evidence is
+uiautomator dumps and screenshots under the ignored `.omc/process-death/`.
+
+| State before kill | After kill and relaunch | Expected |
+|---|---|---|
+| Review tab, explanation revealed | Review tab; reveal lost | yes |
+| Explore tab, typed query "spaced" | Explore tab; query kept | yes |
+| Learn tab, tutor open, unsent text | Learn list; tutor and unsent text lost | tutor yes, text no |
+| Saved Library card, queued import (Room) | Both present | yes |
+
+The unsent tutor text was predicted to survive but does not: it is
+`rememberSaveable` inside `Tutor` (`MainActivity.kt:226`), which is composed only
+while the in-memory `ScreenState.selected` is set, so nothing restores it. The
+selected item, chat history, and revealed state (`LearningViewModel.kt:153-160`)
+are in memory only; the user lands on the destination list. This is a product
+gap, not a test failure; no app code was changed.
+
+WorkManager resumption: with the job held at "processing", polls arrived at
+exponential-backoff intervals (10, 20, 40, 80, 160 s) across three kills.
+After a fourth kill with no relaunch, WorkManager restarted the process on its
+own (new pid) about 60 s later and polled the job. Once the mock reported the
+job complete, Recent imports showed Completed.
+
+Not covered: fold/unfold, device reboot, backend restart or outage during
+recovery, expanded layouts, a real backend or model (mock responses only), and
+the non-acceptance app. Mock responses establish client behavior only.
+Standard `adb` calls were all that were used on the device; settings, size,
+density, and device state were unchanged, and the reverse list matched baseline.
+
 ## Acceptance still pending
 
 - General article/model-quality acceptance remains pending beyond the bounded
   live workflows above. Controlled inference tests establish API behavior;
   generation never silently substitutes demo cards.
-- Process-death/device-reboot recovery and folded/unfolded layout transitions
-  remain unverified. Earlier host emulator attempts failed; the device results
+- Device-reboot recovery and folded/unfolded layout transitions remain
+  unverified; process death is covered above, with the in-memory tutor gap noted. Earlier host emulator attempts failed; the device results
   above use physical hardware.
 - Backend tests emit an upstream Starlette TestClient deprecation warning.
 - Backend service restart/recovery still needs live acceptance checks.
