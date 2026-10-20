@@ -14,10 +14,17 @@ from .ai import ModelClient, ModelError
 from .config import Settings, get_settings
 from .database import session_factory
 from .fetching import FetchError, validate_url
+from .forget import (
+    forget_note,
+    forget_note_job,
+    list_notes,
+    note_capacity_check,
+    purge_note_payloads,
+)
 from .limits import BodyLimitMiddleware
 from .models import History, Insight, Interaction, Job, Preference, ReviewItem, SavedItem, now
 from .notes import validate_note
-from .schemas import InsightOutput, JobOutput, ReviewOutput, TutorOutput
+from .schemas import InsightOutput, JobOutput, NoteOutput, ReviewOutput, TutorOutput
 from .services import (
     answer_review,
     ensure_review,
@@ -116,9 +123,11 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/ingest/text", status_code=202, response_model=JobOutput)
     def ingest_text(payload: TextInput, request: Request, db=Depends(database)):
-        note = validate_note(
-            payload.title, payload.text, payload.label, request.app.state.settings.max_document_chars
-        )
+        settings = request.app.state.settings
+        note = validate_note(payload.title, payload.text, payload.label, settings.max_document_chars)
+        purge_note_payloads(db, settings)
+        db.commit()
+        note_capacity_check(db, settings)
         job = Job(
             kind="note",
             url=None,
@@ -138,7 +147,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         return job_output(item)
 
     @api.post("/jobs/{job_id}/retry", response_model=JobOutput)
-    def retry(job_id: str, db=Depends(database)):
+    def retry(job_id: str, request: Request, db=Depends(database)):
         item = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if item is None:
             raise HTTPException(404, "Job not found")
@@ -146,9 +155,23 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             raise HTTPException(409, "Only failed jobs can be retried")
         if item.kind == "note" and item.payload_text is None:
             raise HTTPException(409, "Note text is no longer available; submit it again")
+        if item.kind == "note":
+            note_capacity_check(db, request.app.state.settings)
         item.status, item.error = "queued", None
         db.commit()
         return job_output(item)
+
+    @api.delete("/jobs/{job_id}", status_code=204)
+    def delete_job(job_id: str, db=Depends(database)):
+        forget_note_job(db, job_id)
+
+    @api.get("/notes", response_model=list[NoteOutput])
+    def notes(db=Depends(database)):
+        return list_notes(db)
+
+    @api.delete("/notes/{document_id}", status_code=204)
+    def delete_note(document_id: str, db=Depends(database)):
+        forget_note(db, document_id)
 
     @api.get("/feed/today", response_model=list[InsightOutput])
     def feed(db=Depends(database)):
@@ -177,7 +200,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/insights/{insight_id}/feedback", status_code=204)
     def feedback(insight_id: str, payload: FeedbackInput, db=Depends(database)):
-        item = find_insight(db, insight_id)
+        item = find_insight(db, insight_id, lock=True)
         item.dismissed = True
         db.add(Interaction(insight_id=item.id, action=payload.action))
         db.commit()
@@ -208,6 +231,8 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             )
         except ModelError as error:
             raise HTTPException(503, str(error)) from error
+        except LookupError as error:
+            raise HTTPException(404, "Insight not found") from error
 
     @api.get("/reviews/due", response_model=list[ReviewOutput])
     def due(db=Depends(database)):

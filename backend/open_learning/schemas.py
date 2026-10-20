@@ -30,6 +30,13 @@ class JobOutput(BaseModel):
     error: str | None
 
 
+class NoteOutput(BaseModel):
+    document_id: str
+    title: str
+    label: str | None
+    created_at: datetime
+
+
 class ReviewOutput(BaseModel):
     id: str
     insight_id: str

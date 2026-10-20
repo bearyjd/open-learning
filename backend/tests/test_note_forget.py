@@ -21,8 +21,10 @@ from open_learning.services import claim_job, process_job
 from open_learning.worker import run_once
 
 API = "/api/v1"
-NOTE = PASSAGE * 3
-OTHER = "Spaced repetition schedules reviews just before forgetting happens, which saves time. " * 2
+NOTE = (PASSAGE * 3).strip()
+OTHER = (
+    "Spaced repetition schedules reviews just before forgetting happens, which saves time. " * 2
+).strip()
 MARKER = "zebra-quokka-marker-7731"
 
 
@@ -36,7 +38,9 @@ def count(factory, model, *where):
 
 
 def import_note(client, factory, settings, text=NOTE, title="My note"):
-    response = client.post(API + "/ingest/text", json={"title": title, "text": text, "label": "cls"})
+    response = client.post(
+        API + "/ingest/text", json={"title": title, "text": text, "label": "cls"}
+    )
     assert response.status_code == 202
     assert run_once(factory, settings, model=FixtureModel())
     with factory() as db:
@@ -59,8 +63,17 @@ def url_job(factory, settings):
 
 def failed_note_job(factory, text, job_id, status="failed"):
     with factory.begin() as db:
-        db.add(Job(id=job_id, kind="note", url=None, status=status, payload_title="t",
-                   payload_text=text, payload_label="l"))
+        db.add(
+            Job(
+                id=job_id,
+                kind="note",
+                url=None,
+                status=status,
+                payload_title="t",
+                payload_text=text,
+                payload_label="l",
+            )
+        )
 
 
 def test_list_notes_shape_and_no_internal_key(client, factory, settings):
@@ -92,16 +105,22 @@ def test_all_endpoints_require_auth(client):
     assert client.delete(API + "/jobs/x").status_code == 401
 
 
+def enable_sqlite_foreign_keys(connection, _record):
+    connection.execute("PRAGMA foreign_keys=ON")
+
+
 def test_full_graph_delete_leaves_no_children_and_url_doc_intact(client, factory, settings):
-    event.listen(
-        factory.kw["bind"], "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON")
-    )
-    factory.kw["bind"].dispose()
+    if factory.kw["bind"].dialect.name == "sqlite":  # PostgreSQL always enforces foreign keys.
+        event.listen(factory.kw["bind"], "connect", enable_sqlite_foreign_keys)
+        factory.kw["bind"].dispose()
     doc = import_note(client, factory, settings)
     url_doc = url_job(factory, settings)
     insight = insight_of(factory, doc)
     assert client.post(f"{API}/insights/{insight}/save").status_code == 200
-    assert client.post(f"{API}/tutor/chat", json={"insight_id": insight, "message": "hi"}).status_code == 200
+    assert (
+        client.post(f"{API}/tutor/chat", json={"insight_id": insight, "message": "hi"}).status_code
+        == 200
+    )
     review = client.get(API + "/reviews/due").json()[0]["id"]
     assert client.post(f"{API}/reviews/{review}/answer", json={"rating": "easy"}).status_code == 200
     assert client.get(API + "/feed/today").status_code == 200
@@ -188,7 +207,14 @@ def test_reads_after_delete_do_not_fail(client, factory, settings):
     client.post(f"{API}/tutor/chat", json={"insight_id": insight, "message": "x"})
     assert len(client.get(API + "/feed/today").json()) == 1
     assert client.delete(f"{API}/notes/{doc}").status_code == 204
-    for path in ("/feed/today", "/library", "/search?q=retrieval", "/reviews/due", "/history", "/notes"):
+    for path in (
+        "/feed/today",
+        "/library",
+        "/search?q=retrieval",
+        "/reviews/due",
+        "/history",
+        "/notes",
+    ):
         response = client.get(API + path)
         assert response.status_code == 200, path
         assert response.json() == []
@@ -203,7 +229,10 @@ def test_tutor_save_feedback_and_review_on_deleted_note_are_404(client, factory,
     assert client.delete(f"{API}/notes/{doc}").status_code == 204
     assert client.post(f"{API}/tutor/chat", json={"insight_id": insight}).status_code == 404
     assert client.post(f"{API}/insights/{insight}/save").status_code == 404
-    assert client.post(f"{API}/insights/{insight}/feedback", json={"action": "dismiss"}).status_code == 404
+    assert (
+        client.post(f"{API}/insights/{insight}/feedback", json={"action": "dismiss"}).status_code
+        == 404
+    )
     assert client.post(f"{API}/reviews/{review}/answer", json={"rating": "easy"}).status_code == 404
 
 

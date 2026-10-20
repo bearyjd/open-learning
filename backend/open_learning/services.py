@@ -120,7 +120,9 @@ def today_feed(db: Session) -> list[dict]:
 
 
 def ensure_review(db: Session, insight: Insight) -> ReviewItem:
-    db.execute(select(Insight.id).where(Insight.id == insight.id).with_for_update())
+    locked = db.execute(select(Insight.id).where(Insight.id == insight.id).with_for_update())
+    if locked.first() is None:
+        raise LookupError("Insight not found")  # Deleted while we were working.
     item = db.scalar(select(ReviewItem).where(ReviewItem.insight_id == insight.id))
     if item is None:
         item = ReviewItem(

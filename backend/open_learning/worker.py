@@ -9,6 +9,7 @@ from .ai import ModelError
 from .config import get_settings
 from .database import session_factory
 from .fetching import FetchError
+from .forget import purge_note_payloads
 from .models import Job
 from .services import claim_job, process_job
 
@@ -18,6 +19,8 @@ log = logging.getLogger(__name__)
 def run_once(factory, settings, fetcher=None, model=None) -> bool:
     claim = claim_job(factory, settings.job_lease_seconds)
     if claim is None:
+        with factory.begin() as db:
+            purge_note_payloads(db, settings)
         return False
     try:
         kwargs = {"model": model}
@@ -36,6 +39,8 @@ def run_once(factory, settings, fetcher=None, model=None) -> bool:
                     else "Processing failed"
                 )
                 job.lease_until, job.lease_token = None, None
+                db.flush()
+                purge_note_payloads(db, settings)
     return True
 
 

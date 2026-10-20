@@ -12,19 +12,25 @@ from open_learning.models import Job, now
 from open_learning.worker import run_once
 
 API = "/api/v1"
-NOTE = PASSAGE * 3
+NOTE = (PASSAGE * 3).strip()
 EXPIRED = "Note text expired; submit it again"
 
 
 def add_job(factory, job_id, status="failed", text=NOTE, age_hours=0, kind="note"):
     note = kind == "note"
     with factory.begin() as db:
-        db.add(Job(
-            id=job_id, kind=kind, url=None if note else "https://a.example/" + job_id,
-            status=status, payload_title="t" if note else None,
-            payload_text=text if note else None, payload_label=None,
-            created_at=now() - timedelta(hours=age_hours),
-        ))
+        db.add(
+            Job(
+                id=job_id,
+                kind=kind,
+                url=None if note else "https://a.example/" + job_id,
+                status=status,
+                payload_title="t" if note else None,
+                payload_text=text if note else None,
+                payload_label=None,
+                created_at=now() - timedelta(hours=age_hours),
+            )
+        )
 
 
 def job_count(factory):
@@ -164,14 +170,18 @@ def test_settings_ranges(name, bad, good):
 def test_settings_defaults_and_env(monkeypatch):
     s = Settings(api_token=TOKEN)
     assert (s.note_max_pending_jobs, s.note_max_failed_payloads, s.note_failed_payload_hours) == (
-        20, 20, 168,
+        20,
+        20,
+        168,
     )
     monkeypatch.setenv("OL_NOTE_MAX_PENDING_JOBS", "7")
     monkeypatch.setenv("OL_NOTE_MAX_FAILED_PAYLOADS", "3")
     monkeypatch.setenv("OL_NOTE_FAILED_PAYLOAD_HOURS", "12")
     s = Settings(api_token=TOKEN)
     assert (s.note_max_pending_jobs, s.note_max_failed_payloads, s.note_failed_payload_hours) == (
-        7, 3, 12,
+        7,
+        3,
+        12,
     )
 
 
@@ -224,7 +234,9 @@ def test_tutor_racing_delete_leaves_no_orphans_on_postgresql(client, factory, se
     results = {}
 
     def tutor():
-        results["tutor"] = client.post(f"{API}/tutor/chat", json={"insight_id": insight}).status_code
+        results["tutor"] = client.post(
+            f"{API}/tutor/chat", json={"insight_id": insight}
+        ).status_code
 
     def delete():
         barrier.wait(timeout=5)
