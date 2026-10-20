@@ -333,10 +333,35 @@ Not covered: backend restart, a real backend or model, the fold return leg, phys
   running continuously across the reboot remains. Fold/unfold is partly covered
   (rail at 852 dp and state kept on fold -> unfold); the return fold leg,
   recreation evidence, and unsaved-text behavior still need an unlocked-device
-  run. Process death is covered above, with the in-memory tutor gap noted. Earlier host emulator attempts failed; the device results
-  above use physical hardware.
+  run. Process death of the tutor flow, including restore of the open item and
+  unsent draft, was checked on a physical Pixel 10 Pro Fold (see below) against
+  a mock backend only; the real backend and model were not exercised. Earlier
+  host emulator attempts failed; the device results above use physical hardware.
 - Backend tests emit an upstream Starlette TestClient deprecation warning.
 - Backend service restart/recovery still needs live acceptance checks.
+
+### Process-death check (acceptance build, mock backend)
+
+Run with an adb-driven scratch script against a loopback mock of the `/api/v1`
+contract (no real backend, database or model), using only
+`org.openlearning.app.acceptance` and `am kill` while backgrounded; PIDs
+confirmed to change in every case. The Bitwarden save-password prompt was
+dismissed manually by the user.
+
+| Scenario | Expected | Actual |
+| --- | --- | --- |
+| Tutor item + unsent draft, `am kill` | Item restored, 'Start explanation' shown, draft kept, chat history empty (by design) | As expected |
+| Review reveal, `am kill` | Reveal lost (by design) | As expected |
+| Explore query, `am kill` | Query kept | As expected |
+| Idea-2 returns 404 while app dead | Falls back to list, selection cleared | As expected; stays on list afterwards |
+| Idea-2 returns 503 while app dead | No crash, list this session | As expected |
+| Next session after 503, mock ok | Tutor restored | As expected |
+| Library save / queued import job after 4 kills | Kept | Library card kept; job polled again by WorkManager without relaunch (process restarted) |
+
+Not verified: a 'Completed' badge for the import job after the backend
+finished was not observed in the UI within the script's window (inconclusive).
+Not covered: device reboot, fold/unfold return leg, backend restart, real
+backend/model.
 
 The manual [live smoke script](../scripts/smoke_live.py) uses real API requests
 to check health/authentication, ingestion, feed attribution, saving, two tutor
