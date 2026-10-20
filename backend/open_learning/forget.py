@@ -34,18 +34,31 @@ RETRY_AFTER_SECONDS = "30"
 EXPIRED_MESSAGE = "Note text expired; submit it again"
 
 
-def list_notes(db: Session) -> list[dict]:
+def list_notes(db: Session, limit: int = NOTE_LIMIT, offset: int = 0) -> list[dict]:
     rows = db.execute(
         select(Document.id, Document.title, Source.label, Document.created_at)
         .join(Source, Source.id == Document.source_id)
         .where(Source.kind == "note")
-        .order_by(Document.created_at.desc(), Document.id)
-        .limit(NOTE_LIMIT)
+        .order_by(Document.created_at.desc(), Document.id.desc())
+        .limit(limit)
+        .offset(offset)
     )
     return [
         {"document_id": id_, "title": title, "label": label, "created_at": created_at}
         for id_, title, label, created_at in rows
     ]
+
+
+def list_note_jobs(db: Session, limit: int, offset: int) -> list[dict]:
+    """Identify note jobs without exposing their text, title, label or error."""
+    rows = db.execute(
+        select(Job.id, Job.status, Job.created_at)
+        .where(Job.kind == "note")
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return [{"id": id_, "status": status, "created_at": created} for id_, status, created in rows]
 
 
 def _matching_job_ids(db: Session, content_hash: str) -> list[str]:

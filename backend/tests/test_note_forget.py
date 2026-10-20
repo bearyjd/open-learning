@@ -95,7 +95,7 @@ def test_list_notes_capped_at_500(client, factory):
             db.add(source)
             db.flush()
             db.add(Document(source_id=source.id, title=f"n{i}", text="t", content_hash=f"{i:064d}"))
-    assert len(client.get(API + "/notes").json()) == 500
+    assert len(client.get(API + "/notes", params={"limit": 500}).json()) == 500
 
 
 def test_all_endpoints_require_auth(client):

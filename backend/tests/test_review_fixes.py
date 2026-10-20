@@ -125,6 +125,11 @@ def test_feedback_racing_note_delete_on_postgresql(client, factory, settings):
         assert total(factory, model) == 0, model
 
 
+def require_sqlite(factory):
+    if factory.kw["bind"].dialect.name != "sqlite":
+        pytest.skip("Simulates vanished rows; PostgreSQL foreign keys forbid them")
+
+
 def remove_rows(factory, model, *where):
     with factory.begin() as db:
         for row in db.scalars(select(model).where(*where)).all():
@@ -132,6 +137,7 @@ def remove_rows(factory, model, *where):
 
 
 def test_tutor_with_missing_chunk_is_404(client, factory, settings):
+    require_sqlite(factory)
     doc = import_note(client, factory, settings)
     insight = insight_of(factory, doc)
     remove_rows(factory, Chunk)
@@ -140,6 +146,7 @@ def test_tutor_with_missing_chunk_is_404(client, factory, settings):
 
 
 def test_serialize_helpers_raise_lookup_error_for_missing_rows(client, factory, settings):
+    require_sqlite(factory)
     doc = import_note(client, factory, settings)
     insight_id = insight_of(factory, doc)
     client.post(f"{API}/insights/{insight_id}/save")
@@ -157,6 +164,7 @@ def test_serialize_helpers_raise_lookup_error_for_missing_rows(client, factory, 
 
 
 def test_request_paths_survive_rows_deleted_underneath(client, factory, settings):
+    require_sqlite(factory)
     doc = import_note(client, factory, settings)
     insight = insight_of(factory, doc)
     client.post(f"{API}/insights/{insight}/save")

@@ -51,7 +51,9 @@ def source_fields(source: Source) -> dict:
 
 def serialize_insight(db: Session, insight: Insight) -> dict:
     document = db.get(Document, insight.document_id)
-    source = db.get(Source, document.source_id)
+    source = document and db.get(Source, document.source_id)
+    if document is None or source is None:
+        raise LookupError("Insight not found")  # Deleted while we were working.
     return {
         "id": insight.id,
         "title": insight.title,
@@ -72,13 +74,16 @@ def serialize_insight(db: Session, insight: Insight) -> dict:
 
 
 def serialize_review(db: Session, item: ReviewItem) -> dict:
+    insight = db.get(Insight, item.insight_id)
+    if insight is None:
+        raise LookupError("Review not found")  # Deleted while we were working.
     return {
         "id": item.id,
         "insight_id": item.insight_id,
         "question": item.question,
         "due_at": item.due_at.isoformat(),
         "interval_days": item.interval_days,
-        "insight_title": db.get(Insight, item.insight_id).title,
+        "insight_title": insight.title,
     }
 
 
@@ -112,11 +117,16 @@ def today_feed(db: Session) -> list[dict]:
     ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:10]
     feed.insight_ids = ids
     db.commit()
-    return [
-        serialize_insight(db, item)
-        for key in ids
-        if (item := db.get(Insight, key)) is not None and not item.dismissed
-    ]
+    items = (db.get(Insight, key) for key in ids)
+    result = []
+    for item in items:
+        if item is None or item.dismissed:
+            continue
+        try:
+            result.append(serialize_insight(db, item))
+        except LookupError:
+            continue  # Deleted while we were working.
+    return result
 
 
 def ensure_review(db: Session, insight: Insight) -> ReviewItem:
@@ -135,6 +145,8 @@ def ensure_review(db: Session, insight: Insight) -> ReviewItem:
 
 def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) -> dict:
     chunk = db.get(Chunk, insight.chunk_id)
+    if chunk is None:
+        raise LookupError("Insight not found")  # Deleted while we were working.
     history = list(
         db.scalars(
             select(History)
@@ -156,7 +168,9 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
     db.add(History(insight_id=insight.id, role="assistant", message=result.answer))
     db.add(Interaction(insight_id=insight.id, action="tutor"))
     document = db.get(Document, insight.document_id)
-    source = db.get(Source, document.source_id)
+    source = document and db.get(Source, document.source_id)
+    if source is None:
+        raise LookupError("Insight not found")  # Deleted while we were working.
     db.commit()
     return {
         "answer": result.answer,

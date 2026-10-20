@@ -17,6 +17,7 @@ from .fetching import FetchError, validate_url
 from .forget import (
     forget_note,
     forget_note_job,
+    list_note_jobs,
     list_notes,
     note_capacity_check,
     purge_note_payloads,
@@ -24,7 +25,7 @@ from .forget import (
 from .limits import BodyLimitMiddleware
 from .models import History, Insight, Interaction, Job, Preference, ReviewItem, SavedItem, now
 from .notes import validate_note
-from .schemas import InsightOutput, JobOutput, NoteOutput, ReviewOutput, TutorOutput
+from .schemas import InsightOutput, JobListItem, JobOutput, NoteOutput, ReviewOutput, TutorOutput
 from .services import (
     answer_review,
     ensure_review,
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         redoc_url=None,
         openapi_url=None,
     )
+
     def body_limit(scope) -> int:
         # Large cap only for note ingest (max-length note in worst-case JSON escaping, plus
         # slack); every other route buffers at most DEFAULT_BODY_LIMIT before authentication.
@@ -98,6 +100,22 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         if item is None:
             raise HTTPException(404, "Insight not found")
         return item
+
+    def visible(db, items, serialize):
+        """Serialize rows, skipping any deleted while the request was running."""
+        out = []
+        for item in items:
+            try:
+                out.append(serialize(db, item))
+            except LookupError:
+                continue
+        return out
+
+    def serialized_or_404(db, item):
+        try:
+            return serialize_insight(db, item)
+        except LookupError as error:
+            raise HTTPException(404, "Not found") from error
 
     api = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
 
@@ -165,9 +183,22 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def delete_job(job_id: str, db=Depends(database)):
         forget_note_job(db, job_id)
 
+    @api.get("/jobs", response_model=list[JobListItem])
+    def jobs(
+        kind: Literal["note"],
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        db=Depends(database),
+    ):
+        return list_note_jobs(db, limit, offset)
+
     @api.get("/notes", response_model=list[NoteOutput])
-    def notes(db=Depends(database)):
-        return list_notes(db)
+    def notes(
+        limit: int = Query(default=100, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+        db=Depends(database),
+    ):
+        return list_notes(db, limit, offset)
 
     @api.delete("/notes/{document_id}", status_code=204)
     def delete_note(document_id: str, db=Depends(database)):
@@ -182,11 +213,11 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         items = db.scalars(
             select(Insight).join(SavedItem).order_by(SavedItem.created_at.desc()).limit(500)
         )
-        return [serialize_insight(db, item) for item in items]
+        return visible(db, items, serialize_insight)
 
     @api.get("/insights/{insight_id}", response_model=InsightOutput)
     def detail(insight_id: str, db=Depends(database)):
-        return serialize_insight(db, find_insight(db, insight_id))
+        return serialized_or_404(db, find_insight(db, insight_id))
 
     @api.post("/insights/{insight_id}/save", response_model=InsightOutput)
     def save(insight_id: str, db=Depends(database)):
@@ -194,9 +225,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         if db.get(SavedItem, item.id) is None:
             db.add(SavedItem(insight_id=item.id))
             db.add(Interaction(insight_id=item.id, action="save"))
-        ensure_review(db, item)
+        try:
+            ensure_review(db, item)
+        except LookupError as error:
+            raise HTTPException(404, "Insight not found") from error
         db.commit()
-        return serialize_insight(db, item)
+        return serialized_or_404(db, item)
 
     @api.post("/insights/{insight_id}/feedback", status_code=204)
     def feedback(insight_id: str, payload: FeedbackInput, db=Depends(database)):
@@ -221,7 +255,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             .order_by(Insight.created_at.desc())
             .limit(100)
         )
-        return [serialize_insight(db, item) for item in items]
+        return visible(db, items, serialize_insight)
 
     @api.post("/tutor/chat", response_model=TutorOutput)
     def tutor(payload: TutorInput, request: Request, db=Depends(database)):
@@ -242,14 +276,23 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             .order_by(ReviewItem.due_at)
             .limit(100)
         )
-        return [serialize_review(db, item) for item in items]
+        return visible(db, items, serialize_review)
 
     @api.post("/reviews/{review_id}/answer", response_model=ReviewOutput)
     def review_answer(review_id: str, payload: AnswerInput, db=Depends(database)):
+        # Lock order is insight, then review item (see forget.py); a delete holds them in that order.
+        insight_id = db.scalar(select(ReviewItem.insight_id).where(ReviewItem.id == review_id))
+        if insight_id is None:
+            raise HTTPException(404, "Review not found")
+        if db.scalar(select(Insight.id).where(Insight.id == insight_id).with_for_update()) is None:
+            raise HTTPException(404, "Review not found")
         item = db.scalar(select(ReviewItem).where(ReviewItem.id == review_id).with_for_update())
         if item is None:
             raise HTTPException(404, "Review not found")
-        return answer_review(db, item, payload.rating)
+        try:
+            return answer_review(db, item, payload.rating)
+        except LookupError as error:
+            raise HTTPException(404, "Review not found") from error
 
     @api.get("/preferences")
     def preferences(db=Depends(database)):
