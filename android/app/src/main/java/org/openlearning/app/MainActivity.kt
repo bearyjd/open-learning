@@ -223,7 +223,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     if (item.sourceTruncated) Text("The source was shortened before AI processing. Check the original article for full context.", style = MaterialTheme.typography.bodySmall)
 }
 @Composable private fun Tutor(state: ScreenState, model: LearningViewModel) {
-    var message by rememberSaveable(state.selected?.id) { mutableStateOf("") }
+    var message by rememberSaveable(key = tutorDraftKey(state.selected?.id.orEmpty())) { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
             item { PageTitle("Make it yours.", state.selected?.title.orEmpty()) }

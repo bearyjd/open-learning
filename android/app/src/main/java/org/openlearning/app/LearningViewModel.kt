@@ -2,12 +2,15 @@ package org.openlearning.app
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.UUID
 
-class LearningViewModel(application: Application) : AndroidViewModel(application) {
+class LearningViewModel(application: Application, savedState: SavedStateHandle) : AndroidViewModel(application) {
+    private val memory = TutorMemory(savedState)
+    private var restorePending = true
     private val container = (application as LearningApplication).container
     val connection = container.credentials.connection
     private var repo: LearningRepository? = null
@@ -23,6 +26,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             connection.collect { config ->
+                val restore = restorePending
+                if (config != null) restorePending = false
+                if (!restore) memory.clear()
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState()
@@ -43,10 +49,26 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                             }
                         }
                     }
+                    if (restore) restoreTutor(repository)
                     refresh()
                 }
             }
         }
+    }
+    private fun restoreTutor(repository: LearningRepository) {
+        val saved = memory.recall(repository.config.scope) ?: return
+        viewModelScope.launch {
+            val item = resolveInsight(saved.insightId,
+                { id -> container.database.dao().get(saved.scope, id)?.let(repository::decode) }, repository.api::insight)
+            if (repo !== repository || state.value.selected != null || memory.recall(saved.scope) != saved) return@launch
+            if (item == null) { memory.clear(); return@launch }
+            select(item)
+            if (saved.learning) markLearning(item)
+        }
+    }
+    private fun markLearning(item: Insight) {
+        mutable.update { it.copy(learning = true) }
+        repo?.let { memory.remember(it.config.scope, item.id, true) }
     }
     fun configure(server: String, token: String, http: Boolean): String? = try {
         container.credentials.save(server, token, http); null
@@ -103,6 +125,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         chatGeneration++
         mutable.update { it.copy(selected = item, chat = emptyList(), chatBusy = false, revealed = false, learning = false) }
         val repository = repo ?: return
+        memory.remember(repository.config.scope, item.id, false)
         detailJob = viewModelScope.launch {
             try {
                 val fresh = repository.api.insight(item.id)
@@ -112,8 +135,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             catch (_: Exception) { /* Cached detail remains readable offline. */ }
         }
     }
-    fun closeDetail() { detailJob?.cancel(); chatGeneration++; mutable.update { it.copy(selected = null, chat = emptyList(), chatBusy = false, learning = false) } }
-    fun learn(item: Insight) { select(item); mutable.update { it.copy(learning = true) }; chat("") }
+    fun closeDetail() { memory.clear(); detailJob?.cancel(); chatGeneration++; mutable.update { it.copy(selected = null, chat = emptyList(), chatBusy = false, learning = false) } }
+    fun learn(item: Insight) { select(item); markLearning(item); chat("") }
     fun chat(message: String) {
         val selected = state.value.selected ?: return
         if (state.value.chatBusy) return
