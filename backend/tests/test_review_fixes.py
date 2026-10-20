@@ -8,15 +8,17 @@ from test_note_forget import MARKER, NOTE, failed_note_job, import_note, insight
 from open_learning.models import (
     Chunk,
     Document,
+    History,
     Insight,
     Interaction,
     Job,
     ReviewHistory,
     ReviewItem,
+    SavedItem,
     Source,
     now,
 )
-from open_learning.services import serialize_insight, serialize_review
+from open_learning.services import RowVanished, serialize_insight, serialize_review
 
 API = "/api/v1"
 
@@ -35,6 +37,7 @@ def run_race(factory, hooks, actions):
     """Run named actions concurrently; hooks maps name -> predicate(statement, parameters)."""
     barrier = threading.Barrier(2)
     waited = set()
+    broken = []
     engine = factory.kw["bind"]
 
     def rendezvous(conn, cursor, statement, parameters, *args):
@@ -49,7 +52,7 @@ def run_race(factory, hooks, actions):
             try:
                 barrier.wait(timeout=1.5)
             except threading.BrokenBarrierError:
-                pass
+                broken.append(name)
             return
 
     event.listen(engine, "after_cursor_execute", rendezvous)
@@ -70,6 +73,8 @@ def run_race(factory, hooks, actions):
         [t.join() for t in threads]
     finally:
         event.remove(engine, "after_cursor_execute", rendezvous)
+    assert waited == set(hooks), f"hooks never fired: {set(hooks) - waited}"
+    assert not broken, f"barrier broke waiting for the other side: {broken}"
     return results
 
 
@@ -125,6 +130,48 @@ def test_feedback_racing_note_delete_on_postgresql(client, factory, settings):
         assert total(factory, model) == 0, model
 
 
+def test_save_racing_note_delete_on_postgresql(client, factory, settings):
+    require_postgres(factory)
+    doc = import_note(client, factory, settings)
+    insight = insight_of(factory, doc)
+    results = run_race(
+        factory,
+        {
+            "save": lambda s, p: locks(s, "insights") and insight in p,
+            "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
+        },
+        {
+            "save": lambda: client.post(f"{API}/insights/{insight}/save").status_code,
+            "delete": lambda: client.delete(f"{API}/notes/{doc}").status_code,
+        },
+    )
+    assert results["delete"] == 204 and results["save"] in (200, 404), results
+    for model in (Insight, Interaction, SavedItem, ReviewItem):
+        assert total(factory, model) == 0, model
+
+
+def test_tutor_racing_note_delete_on_postgresql(client, factory, settings):
+    require_postgres(factory)
+    doc = import_note(client, factory, settings)
+    insight = insight_of(factory, doc)
+    results = run_race(
+        factory,
+        {
+            "tutor": lambda s, p: locks(s, "insights") and insight in p,
+            "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
+        },
+        {
+            "tutor": lambda: (
+                client.post(f"{API}/tutor/chat", json={"insight_id": insight}).status_code
+            ),
+            "delete": lambda: client.delete(f"{API}/notes/{doc}").status_code,
+        },
+    )
+    assert results["delete"] == 204 and results["tutor"] in (200, 404), results
+    for model in (Insight, Interaction, History, ReviewItem):
+        assert total(factory, model) == 0, model
+
+
 def require_sqlite(factory):
     if factory.kw["bind"].dialect.name != "sqlite":
         pytest.skip("Simulates vanished rows; PostgreSQL foreign keys forbid them")
@@ -155,11 +202,11 @@ def test_serialize_helpers_raise_lookup_error_for_missing_rows(client, factory, 
         review = db.scalar(select(ReviewItem))
     remove_rows(factory, Document)
     with factory() as db:
-        with pytest.raises(LookupError):
+        with pytest.raises(RowVanished):
             serialize_insight(db, insight)
     remove_rows(factory, Insight)
     with factory() as db:
-        with pytest.raises(LookupError):
+        with pytest.raises(RowVanished):
             serialize_review(db, review)
 
 
@@ -246,3 +293,16 @@ def test_jobs_listing_validation_auth_and_delete_flow(client, factory):
     assert client.get(API + "/jobs", params={"kind": "note"}).json() == []
     client.headers.pop("Authorization")
     assert client.get(API + "/jobs", params={"kind": "note"}).status_code == 401
+
+
+def test_unexpected_lookup_errors_from_the_model_are_not_404(client, factory, settings):
+    doc = import_note(client, factory, settings)
+    insight = insight_of(factory, doc)
+
+    class Broken:
+        def tutor(self, *args):
+            raise KeyError("model bug")
+
+    client.app.state.model = Broken()
+    with pytest.raises(KeyError):
+        client.post(f"{API}/tutor/chat", json={"insight_id": insight})
