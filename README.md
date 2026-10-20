@@ -196,6 +196,13 @@ Python dependencies are locked in `backend/uv.lock`; local setup, Docker, and CI
 use frozen installs. PostgreSQL integration tests use `OL_TEST_DATABASE_URL`,
 which must point to a **disposable test database**: the test fixture creates and
 drops application tables. Never use your personal library database for tests.
+`OL_TEST_MIGRATION_DATABASE_URL` enables the PostgreSQL migration tests; it must be
+a second disposable database (the tests drop the `public` schema) that differs from
+`OL_TEST_DATABASE_URL`.
+
+Before downgrading below migration 0003, stop the API and worker. The downgrade
+discards text and labels held by failed note jobs permanently (retry then returns
+409), and `note:<sha256>` source keys become visible as `source_url` to older code.
 
 ## Roadmap and operation
 

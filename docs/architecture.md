@@ -25,7 +25,9 @@ plus the SHA-256 of its normalized text, so identical text is imported once (the
 first title and label win and a repeat makes no model call), while different text
 under the same title becomes a separate source. API responses expose
 `source_kind` and `source_label`, and `source_url` is empty for notes. Notes have
-no edit, version or delete support yet.
+no edit, version or delete support yet. Downgrading migration 0003 needs the API
+and worker stopped; it discards failed-note text and labels (retry then returns
+409) and leaves `note:<sha256>` keys visible as `source_url` to older code.
 Model errors become retryable failed jobs rather than fabricated fallback cards.
 
 The inference boundary is an OpenAI-compatible `/v1/chat/completions` endpoint.
