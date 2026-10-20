@@ -108,13 +108,15 @@ def today_feed(db: Session) -> list[dict]:
     ]
 
 
+def default_review_question(insight: Insight) -> str:
+    return f"Explain in your own words: {insight.title}"
+
+
 def ensure_review(db: Session, insight: Insight) -> ReviewItem:
     db.execute(select(Insight.id).where(Insight.id == insight.id).with_for_update())
     item = db.scalar(select(ReviewItem).where(ReviewItem.insight_id == insight.id))
     if item is None:
-        item = ReviewItem(
-            insight_id=insight.id, question=f"Explain in your own words: {insight.title}"
-        )
+        item = ReviewItem(insight_id=insight.id, question=default_review_question(insight))
         db.add(item)
         db.flush()
     return item
@@ -133,18 +135,22 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
     turns = [{"role": entry.role, "message": entry.message} for entry in reversed(history)]
     previous = db.scalar(select(ReviewItem.question).where(ReviewItem.insight_id == insight.id))
     result = model.tutor(chunk.text, insight.title, message, turns, previous_question=previous)
-    review = ensure_review(db, insight)
-    if normalized(review.question).casefold() == normalized(result.question).casefold():
+    # No row lock may be held across model calls, so the repeat check uses the question
+    # read above. A concurrent writer between that read and the lock can slip through; the
+    # worst case is one repeated question, which is preferable to a lock across a slow call.
+    baseline = previous if previous is not None else default_review_question(insight)
+    if normalized(baseline).casefold() == normalized(result.question).casefold():
         result = model.tutor(
             chunk.text,
             insight.title,
             message,
             turns,
-            previous_question=review.question,
+            previous_question=baseline,
             avoid_repeat=True,
         )
-        if normalized(review.question).casefold() == normalized(result.question).casefold():
+        if normalized(baseline).casefold() == normalized(result.question).casefold():
             raise ModelError("Model repeated the previous question")
+    review = ensure_review(db, insight)
     review.question = result.question
     if message:
         db.add(History(insight_id=insight.id, role="user", message=message))

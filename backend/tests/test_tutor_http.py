@@ -213,3 +213,36 @@ def test_tutor_assessment_stays_out_of_public_response(client, factory, settings
         API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
     ).json()
     assert set(body) == {"answer", "question", "review_id", "citations"}
+
+
+def test_tutor_takes_review_lock_only_after_model_calls(client, factory, settings, monkeypatch):
+    from open_learning import services
+
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    repeated = first.json()["question"]
+    events = []
+
+    class Recovering(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            events.append("model")
+            question = repeated if events.count("model") == 1 else "What does recall replace?"
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"question": question})
+            )
+
+    real = services.ensure_review
+
+    def spy(db, item):
+        events.append("lock")
+        return real(db, item)
+
+    monkeypatch.setattr(services, "ensure_review", spy)
+    client.app.state.model = Recovering()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 200
+    assert events == ["model", "model", "lock"]
