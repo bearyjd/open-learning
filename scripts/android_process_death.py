@@ -45,7 +45,7 @@ STATE = {"saved": False, "job_done": False, "log": []}
 
 def make_handler():
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_):
+        def log_message(self, format, *args):
             pass
 
         def _send(self, body, code=200):
@@ -253,7 +253,9 @@ def main():
         dev.shell("input", "keyevent", "KEYCODE_BACK")  # close the IME only
         time.sleep(1)
         box = dev.find("Allow HTTP")  # the label is not clickable; tap the checkbox to its left
-        x1, y1, x2, y2 = map(int, re.findall(r"\d+", box["bounds"]))
+        if box is None:
+            raise RuntimeError("HTTP consent checkbox not found")
+        x1, y1, _x2, y2 = map(int, re.findall(r"\d+", box["bounds"]))
         dev.shell("input", "tap", str(x1 - 50), str((y1 + y2) // 2))
         time.sleep(0.8)
         dev.tap(r"^Connect\|")
