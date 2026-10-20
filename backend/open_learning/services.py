@@ -26,6 +26,10 @@ from .models import (
 from .notes import NOTE_KEY_PREFIX
 
 
+class RowVanished(LookupError):
+    """A row this request depended on was deleted (e.g. a note forgotten) while it ran."""
+
+
 def chunk_text(text: str, size: int = 2400) -> list[str]:
     chunks = []
     while text:
@@ -53,7 +57,7 @@ def serialize_insight(db: Session, insight: Insight) -> dict:
     document = db.get(Document, insight.document_id)
     source = document and db.get(Source, document.source_id)
     if document is None or source is None:
-        raise LookupError("Insight not found")  # Deleted while we were working.
+        raise RowVanished("Insight not found")  # Deleted while we were working.
     return {
         "id": insight.id,
         "title": insight.title,
@@ -76,7 +80,7 @@ def serialize_insight(db: Session, insight: Insight) -> dict:
 def serialize_review(db: Session, item: ReviewItem) -> dict:
     insight = db.get(Insight, item.insight_id)
     if insight is None:
-        raise LookupError("Review not found")  # Deleted while we were working.
+        raise RowVanished("Review not found")  # Deleted while we were working.
     return {
         "id": item.id,
         "insight_id": item.insight_id,
@@ -124,7 +128,7 @@ def today_feed(db: Session) -> list[dict]:
             continue
         try:
             result.append(serialize_insight(db, item))
-        except LookupError:
+        except RowVanished:
             continue  # Deleted while we were working.
     return result
 
@@ -132,7 +136,7 @@ def today_feed(db: Session) -> list[dict]:
 def ensure_review(db: Session, insight: Insight) -> ReviewItem:
     locked = db.execute(select(Insight.id).where(Insight.id == insight.id).with_for_update())
     if locked.first() is None:
-        raise LookupError("Insight not found")  # Deleted while we were working.
+        raise RowVanished("Insight not found")  # Deleted while we were working.
     item = db.scalar(select(ReviewItem).where(ReviewItem.insight_id == insight.id))
     if item is None:
         item = ReviewItem(
@@ -146,7 +150,7 @@ def ensure_review(db: Session, insight: Insight) -> ReviewItem:
 def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) -> dict:
     chunk = db.get(Chunk, insight.chunk_id)
     if chunk is None:
-        raise LookupError("Insight not found")  # Deleted while we were working.
+        raise RowVanished("Insight not found")  # Deleted while we were working.
     history = list(
         db.scalars(
             select(History)
@@ -161,7 +165,7 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
         message,
         [{"role": entry.role, "message": entry.message} for entry in reversed(history)],
     )
-    review = ensure_review(db, insight)
+    review = ensure_review(db, insight)  # Locks the insight before any write, after the model call.
     review.question = result.question
     if message:
         db.add(History(insight_id=insight.id, role="user", message=message))
@@ -170,7 +174,7 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
     document = db.get(Document, insight.document_id)
     source = document and db.get(Source, document.source_id)
     if source is None:
-        raise LookupError("Insight not found")  # Deleted while we were working.
+        raise RowVanished("Insight not found")  # Deleted while we were working.
     db.commit()
     return {
         "answer": result.answer,
@@ -200,8 +204,9 @@ def answer_review(db: Session, review: ReviewItem, rating: str) -> dict:
         )
     )
     db.add(Interaction(insight_id=review.insight_id, action="review:" + rating))
+    result = serialize_review(db, review)  # May raise RowVanished; nothing is committed yet.
     db.commit()
-    return serialize_review(db, review)
+    return result
 
 
 def claim_job(factory, lease_seconds: int) -> tuple[str, str | None, str] | None:

@@ -91,8 +91,9 @@ def test_review_answer_racing_note_delete_no_deadlock_on_postgresql(client, fact
     results = run_race(
         factory,
         {
-            "answer": lambda s, p: locks(s, "review_items") and review in p,
-            "delete": lambda s, p: locks(s, "insights") and doc in p and "review_items" not in s,
+            # Both sides meet before taking any insight lock, so the lock order is what is tested.
+            "answer": lambda s, p: "FROM review_items" in s and "FOR UPDATE" not in s and review in p,
+            "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
         },
         {
             "answer": lambda: (
@@ -137,7 +138,8 @@ def test_save_racing_note_delete_on_postgresql(client, factory, settings):
     results = run_race(
         factory,
         {
-            "save": lambda s, p: locks(s, "insights") and insight in p,
+            # Meet right after the first insight read, before the request can take its lock.
+            "save": lambda s, p: "FROM insights" in s and insight in p,
             "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
         },
         {
@@ -157,7 +159,8 @@ def test_tutor_racing_note_delete_on_postgresql(client, factory, settings):
     results = run_race(
         factory,
         {
-            "tutor": lambda s, p: locks(s, "insights") and insight in p,
+            # Meet right after the first insight read, before the request can take its lock.
+            "tutor": lambda s, p: "FROM insights" in s and insight in p,
             "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
         },
         {

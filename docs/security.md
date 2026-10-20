@@ -87,12 +87,14 @@ Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id, ne
 internal key), newest first, with `limit` (1 to 500, default 100) and `offset` (default
 0). `GET /api/v1/jobs?kind=note` (same `limit`/`offset`) lists note jobs as `id`,
 `status` and `created_at` only, never text, title, label or error, so a failed
-near-duplicate job can be found and removed. `DELETE /api/v1/notes/{document_id}` hard-deletes the note document,
-its chunks, insights, saved items, interactions, tutor history, review items and
+near-duplicate job can be found and removed. `DELETE /api/v1/notes/{document_id}`
+hard-deletes the note document, its chunks, insights, saved items, interactions, tutor history,
+review items and
 review history, and its source, in one transaction. Queued, running or failed note
 jobs still holding the same text are cancelled and their text cleared; cancelling a
-running job closes the race in which its worker would recreate the note. `DELETE /api/v1/jobs/{job_id}` removes a note job of any status
-(409 for URL jobs). Importing the same text again afterwards creates new rows.
+running job closes the race in which its worker would recreate the note.
+`DELETE /api/v1/jobs/{job_id}` removes a note job of any status (409 for URL jobs). Importing the
+same text again afterwards creates new rows.
 Limits of forgetting: it deletes live data only. Database backups and snapshots
 still contain the note until they are rotated. PostgreSQL leaves dead tuples until
 vacuum and may keep the text in WAL; SQLite leaves free pages in the file until

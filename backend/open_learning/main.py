@@ -27,6 +27,7 @@ from .models import History, Insight, Interaction, Job, Preference, ReviewItem, 
 from .notes import validate_note
 from .schemas import InsightOutput, JobListItem, JobOutput, NoteOutput, ReviewOutput, TutorOutput
 from .services import (
+    RowVanished,
     answer_review,
     ensure_review,
     serialize_insight,
@@ -107,14 +108,14 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         for item in items:
             try:
                 out.append(serialize(db, item))
-            except LookupError:
+            except RowVanished:
                 continue
         return out
 
     def serialized_or_404(db, item):
         try:
             return serialize_insight(db, item)
-        except LookupError as error:
+        except RowVanished as error:
             raise HTTPException(404, "Not found") from error
 
     api = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
@@ -227,7 +228,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             db.add(Interaction(insight_id=item.id, action="save"))
         try:
             ensure_review(db, item)
-        except LookupError as error:
+        except RowVanished as error:
             raise HTTPException(404, "Insight not found") from error
         db.commit()
         return serialized_or_404(db, item)
@@ -265,7 +266,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             )
         except ModelError as error:
             raise HTTPException(503, str(error)) from error
-        except LookupError as error:
+        except RowVanished as error:
             raise HTTPException(404, "Insight not found") from error
 
     @api.get("/reviews/due", response_model=list[ReviewOutput])
@@ -291,7 +292,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             raise HTTPException(404, "Review not found")
         try:
             return answer_review(db, item, payload.rating)
-        except LookupError as error:
+        except RowVanished as error:
             raise HTTPException(404, "Review not found") from error
 
     @api.get("/preferences")
