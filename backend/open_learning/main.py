@@ -28,6 +28,8 @@ from .services import (
 )
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
+# Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
+DEFAULT_BODY_LIMIT = 64 * 1024
 
 
 def create_app(settings: Settings | None = None, factory=None, model=None) -> FastAPI:
@@ -50,17 +52,23 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         redoc_url=None,
         openapi_url=None,
     )
-    # Large enough for a max-length note in worst-case JSON escaping, plus slack.
-    app.add_middleware(
-        BodyLimitMiddleware,
-        limit=lambda scope: 12 * scope["app"].state.settings.max_document_chars + 64 * 1024,
-    )
+    def body_limit(scope) -> int:
+        # Large cap only for note ingest (max-length note in worst-case JSON escaping, plus
+        # slack); every other route buffers at most DEFAULT_BODY_LIMIT before authentication.
+        route_path = scope["path"].removeprefix(scope.get("root_path", ""))
+        if scope["method"] == "POST" and route_path == TEXT_INGEST_PATH:
+            return 12 * scope["app"].state.settings.max_document_chars + 64 * 1024
+        return DEFAULT_BODY_LIMIT
+
+    app.add_middleware(BodyLimitMiddleware, limit=body_limit)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
-        errors = exc.errors()
-        if request.url.path == TEXT_INGEST_PATH:  # Never echo submitted note text back.
-            errors = [{k: v for k, v in e.items() if k not in {"input", "ctx"}} for e in errors]
+        # Never echo submitted request bodies back (notes carry private text).
+        errors = [
+            {k: v for k, v in e.items() if k not in {"input", "ctx"}} if e["loc"][:1] == ("body",) else e
+            for e in exc.errors()
+        ]
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
     bearer = HTTPBearer(auto_error=False)

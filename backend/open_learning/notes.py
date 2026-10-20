@@ -14,10 +14,16 @@ MAX_TITLE_CHARS = 500
 MAX_LABEL_CHARS = 100
 NOTE_KEY_PREFIX = "note:"
 
+# Explicit bidirectional embedding/override/isolate controls ("trojan source" spoofing).
+# Implicit bidi (Arabic/Hebrew letters) and the LRM/RLM marks are unaffected. Other format
+# characters (zero-width joiner in emoji sequences, etc.) are deliberately allowed.
+_BIDI_CONTROLS = "\u202a-\u202e\u2066-\u2069"
 # C0 controls except tab/newline, DEL, and C1 controls.
-_TEXT_CONTROLS = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-# Single-line fields reject every control character, including tab and newline.
-_LINE_CONTROLS = re.compile("[\x00-\x1f\x7f-\x9f]")
+# Body text also rejects bidi controls but still allows U+2028/U+2029 paragraph separators.
+_TEXT_CONTROLS = re.compile(f"[\x00-\x08\x0b-\x1f\x7f-\x9f{_BIDI_CONTROLS}]")
+# Single-line fields reject every control character, including tab and newline, plus the
+# Unicode line/paragraph separators (categories Zl, Zp) and bidi controls.
+_LINE_CONTROLS = re.compile(f"[\x00-\x1f\x7f-\x9f\u2028\u2029{_BIDI_CONTROLS}]")
 
 
 @dataclass(frozen=True)
