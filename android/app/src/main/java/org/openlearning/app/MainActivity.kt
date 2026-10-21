@@ -48,9 +48,9 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") shared = intent.getStringExtra(Intent.EXTRA_TEXT)
     }
 }
-private val Ink = Color(0xFF173A36)
+internal val Ink = Color(0xFF173A36)
 private val Paper = Color(0xFFFAF8F2)
-private val Clay = Color(0xFFAF613B)
+internal val Clay = Color(0xFFAF613B)
 @Composable private fun LearningTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, onPrimary = Color.White, secondary = Clay,
         background = Paper, surface = Paper, surfaceVariant = Color(0xFFEAEFE8), onSurface = Color(0xFF202C29)), content = content)
@@ -66,9 +66,12 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     var destination by rememberSaveable { mutableStateOf(Destination.Discover) }
     var settings by rememberSaveable { mutableStateOf(false) }
     var importText by rememberSaveable { mutableStateOf("") }
-    LaunchedEffect(shared) { if (shared != null) { importText = sharedUrl(shared) ?: shared; destination = Destination.Discover; model.closeDetail(); consumeShare() } }
+    // Only this flag survives process death; the note text is a Room-backed draft in the view model.
+    var composingNote by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(shared) { if (shared != null) { importText = sharedUrl(shared) ?: shared; destination = Destination.Discover; composingNote = false; model.closeDetail(); consumeShare() } }
     LaunchedEffect(destination, connection?.scope) { if (destination == Destination.Review && connection != null) model.loadReviews() }
     BackHandler(state.selected != null) { model.closeDetail() }
+    BackHandler(composingNote && state.selected == null) { composingNote = false }
     if (settings || connection == null) ConnectionDialog(connection, model, onDismiss = { settings = false })
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val expanded = maxWidth >= 840.dp
@@ -96,7 +99,8 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                     else if (state.selected != null) {
                         if (state.learning) Tutor(state, model) else InsightDetail(state.selected!!, model)
                     } else when (destination) {
-                        Destination.Discover -> Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, model)
+                        Destination.Discover -> if (composingNote) NoteEditor(model, state.busy) { composingNote = false }
+                            else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, model)
                         Destination.Library -> InsightList("Your library", "Keep the ideas you want to return to. Saved ideas stay readable offline.", state.library, "No saved ideas yet", "Save an idea from Discover to keep its explanation and source here.", model)
                         Destination.Learn -> InsightList("A little deeper", "Choose an idea. Your tutor explains it, then asks you to recall it in your own words.", state.library, "Choose something worth learning", "Save an idea first, then start a source-grounded conversation.", model, true)
                         Destination.Review -> ReviewScreen(state, model)
@@ -107,7 +111,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         }
     }
 }
-@Composable private fun PageTitle(title: String, description: String) {
+@Composable internal fun PageTitle(title: String, description: String) {
     Column(Modifier.padding(top = 22.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(title, style = MaterialTheme.typography.headlineLarge, fontFamily = FontFamily.Serif, color = Ink)
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -127,7 +131,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, model: LearningViewModel) {
+@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, writeNote: () -> Unit, model: LearningViewModel) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageTitle("Follow a good idea.", "Turn something you read into something you understand.") }
         item {
@@ -138,24 +142,11 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                     OutlinedTextField(value = input, onValueChange = change, modifier = Modifier.fillMaxWidth(), label = { Text("Article URL") }, placeholder = { Text("https://…") }, maxLines = 3, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
                     Button(onClick = import, enabled = input.isNotBlank() && !state.busy) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add to learning feed") }
                     Text("Or share a link from your browser. Imports continue in the background.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = writeNote) { Icon(Icons.Default.EditNote, null); Spacer(Modifier.width(6.dp)); Text("Write or import a note") }
                 }
             }
         }
-        if (state.jobs.isNotEmpty()) item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Recent imports", style = MaterialTheme.typography.titleSmall)
-                state.jobs.forEach { job ->
-                    Surface(shape = RoundedCornerShape(12.dp), color = Color.White) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                            Text(job.url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                            Text(job.status.replaceFirstChar(Char::uppercase), color = Clay, style = MaterialTheme.typography.labelMedium)
-                            job.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            if (job.status in listOf("failed", "error", "paused", "cancelled")) TextButton(onClick = { model.retryImport(job) }) { Text("Retry import") }
-                        }
-                    }
-                }
-            }
-        }
+        if (state.jobs.isNotEmpty()) item { ImportJobs(state.jobs, model) }
         item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Today's ideas", style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, modifier = Modifier.weight(1f))
             TextButton(onClick = model::refresh, enabled = !state.busy) { Text("Refresh") }
@@ -167,7 +158,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
 @Composable private fun InsightCard(item: Insight, model: LearningViewModel, startLearning: Boolean = false) {
     OutlinedCard(onClick = { if (startLearning) model.learn(item) else model.select(item) }, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.outlinedCardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(item.sourceTitle.ifBlank { "Source article" }, style = MaterialTheme.typography.labelSmall, color = Clay)
+            Text(item.attribution(), style = MaterialTheme.typography.labelSmall, color = Clay)
             Text(item.title, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif)
             Text(item.idea, style = MaterialTheme.typography.bodyMedium, maxLines = 5, overflow = TextOverflow.Ellipsis)
             if (item.tags.isNotEmpty()) Text(item.tags.joinToString("  ·  "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -190,32 +181,33 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         items(items, key = { it.id }) { InsightCard(it, model, learn) }
     }
 }
-@Composable private fun SourceLink(url: String, label: String = "Open original source") {
+@Composable private fun SourceLink(url: String?, label: String = "Open original source") {
     val uri = LocalUriHandler.current
-    if (url.startsWith("https://") || url.startsWith("http://")) TextButton(onClick = { runCatching { uri.openUri(url) } }, contentPadding = PaddingValues(0.dp)) {
+    if (url != null) TextButton(onClick = { runCatching { uri.openUri(url) } }, contentPadding = PaddingValues(0.dp)) {
         Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }
 @Composable private fun InsightDetail(item: Insight, model: LearningViewModel) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
-        item { PageTitle(item.title, item.sourceTitle) }
+        item { PageTitle(item.title, item.attribution()) }
         item { Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(onClick = { model.learn(item) }) { Text("Learn this idea") }
             OutlinedButton(onClick = { model.save(item) }, enabled = !item.saved) { Text(if (item.saved) "Saved" else "Save") }
         } }
+        if (item.isNote()) item { ForgetNote(item, model) }
         item { Text("AI interpretation", style = MaterialTheme.typography.labelMedium, color = Clay) }
         item { SelectionContainer { Text(item.idea, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif) } }
         item { SelectionContainer { Text(item.explanation, style = MaterialTheme.typography.bodyLarge) } }
         if (item.whyItMatters.isNotBlank()) item { Text("Why it matters", style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(8.dp)); Text(item.whyItMatters) }
         if (item.evidence.isNotBlank()) item { Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("FROM THE SOURCE", style = MaterialTheme.typography.labelSmall)
+                Text(if (item.isNote()) "FROM YOUR NOTE" else "FROM THE SOURCE", style = MaterialTheme.typography.labelSmall)
                 SourceCoverage(item)
                 SelectionContainer { Text(item.evidence, fontFamily = FontFamily.Serif, style = MaterialTheme.typography.bodyLarge) }
-                SourceLink(item.sourceUrl)
+                SourceLink(item.linkUrl())
             }
         } }
-        item { SourceLink(item.sourceUrl, item.sourceTitle.ifBlank { "Open source article" }) }
+        item { SourceLink(item.linkUrl(), item.sourceTitle.ifBlank { "Open source article" }) }
     }
 }
 @Composable private fun SourceCoverage(item: Insight) {
@@ -237,8 +229,10 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                         if (line.question.isNotBlank()) Text(line.question, style = MaterialTheme.typography.titleMedium, color = Ink)
                         line.citations.forEach { citation ->
                             HorizontalDivider()
+                            val cachedTitle = (state.feed + state.library).firstOrNull { it.documentId == citation.documentId }?.sourceTitle
+                            Text(citationTitle(citation, state.selected, cachedTitle), style = MaterialTheme.typography.labelSmall, color = Clay)
                             Text(citation.passage, style = MaterialTheme.typography.bodySmall)
-                            SourceLink(citation.sourceUrl, "Check source")
+                            SourceLink(citation.linkUrl(), "Check source")
                         }
                     }
                 }
@@ -267,7 +261,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
             } else {
                 state.reviewSource?.let { source -> item {
                     SelectionContainer { Text(source.explanation, style = MaterialTheme.typography.bodyLarge) }
-                    Spacer(Modifier.height(12.dp)); Text(source.evidence, style = MaterialTheme.typography.bodyMedium); SourceLink(source.sourceUrl)
+                    Spacer(Modifier.height(12.dp)); Text(source.evidence, style = MaterialTheme.typography.bodyMedium); SourceLink(source.linkUrl())
                 } }
                 item { Text("How well did you remember?", style = MaterialTheme.typography.titleMedium) }
                 items(listOf("forgotten" to "Forgotten", "difficult" to "With effort", "remembered" to "Remembered", "easy" to "Easily")) { (rating, label) ->

@@ -98,8 +98,8 @@ same text again afterwards creates new rows.
 Limits of forgetting: it deletes live data only. Database backups and snapshots
 still contain the note until they are rotated. PostgreSQL leaves dead tuples until
 vacuum and may keep the text in WAL; SQLite leaves free pages in the file until
-`VACUUM`. The Android app's Room cache may still hold cards from the note until it
-refreshes or the app data is cleared. Stored daily feeds (all past `daily_feeds`
+`VACUUM`. Another Android install's Room cache may still hold cards from the note until it
+refreshes or the app data is cleared; forgetting from the app itself purges that device's cards (see above), and a refresh drops cards that are neither saved nor in the feed. Stored daily feeds (all past `daily_feeds`
 rows, not only today's) may keep stale insight ids, which are random UUIDs and are
 filtered out when read.
 
@@ -122,6 +122,50 @@ Known limitations (notes): each accepted note write stores up to about
 and the failed-text retention above. Concurrent identical notes can each call the model
 once before the first import lands; model spend is bounded by the existing
 spending ledger.
+
+Android note text (E2a): a note you write or import lives only in the app's Room
+database on the device, in two places: the editor draft (`NoteDraft`) and, once you
+add it, the queued job row (`PendingIngest.text`). The text is never put in
+WorkManager input data, logs, `toString()` output (all types that carry it redact it),
+saved instance state, or uiautomator evidence kept in the repository. The job row's text is
+cleared when the job completes or is cancelled, and the draft is deleted on submit. While the
+editor is on screen the window is `FLAG_SECURE` (blank recents thumbnail, no screenshots), the
+host view is excluded from autofill, and the keyboard is asked not to learn from the fields
+(`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off); a keyboard may ignore that request.
+
+Disk hygiene: Room runs with `PRAGMA secure_delete=ON`, which overwrites freed pages with zeros
+on a best-effort basis. After clearing note text the app runs `wal_checkpoint(TRUNCATE)` and reads
+its result: the call shortens the write-ahead log to zero bytes, it does not overwrite the old
+bytes, and it can report "busy" while another reader is open (the app then logs a fixed message
+and carries on, so a stale WAL can remain until the next checkpoint). This is not flash erase:
+wear levelling and filesystem journals can keep old blocks, and full-device encryption is the real
+protection.
+
+Backups: `allowBackup="false"` is set and `android:dataExtractionRules` excludes the `database` and
+`sharedpref` domains from both cloud backup and device-to-device transfer (Android 12+ ignores
+`allowBackup` for transfers, which is why the rules exist). The attribute is present in the merged
+manifest and a JVM test parses the rules, but no real backup or device transfer has been run.
+
+Local retention: a failed or waiting note keeps its text so you can retry; Remove on the job row
+deletes it (and the server job, unless another local row shares it). Completed notes have no Remove:
+forgetting the note is the way. Forgetting needs a connection to your server; nothing is cleared
+locally unless the server confirms. It then deletes every cached card of that document (scanning
+all rows, not only the feed or library) and, because a job has no document id to match on, every
+completed note entry in Recent imports for that connection. After each refresh, cached cards that
+are neither saved nor in the feed are deleted (offline detail for search or review items is lost;
+they are fetched again online). When a different server or token is connected, the previous
+connection's cached cards and its completed import rows are deleted at once. Unsent note text (queued,
+failed, waiting, paused or running notes) and note drafts are never deleted by that purge, so a
+mistyped token cannot destroy a note: those rows stay on the device, hidden and not sent, and
+reconnecting the original account resumes them. Remove (or forgetting) is the way to clear them. The
+cards are purged immediately, not after a first successful call on the new connection. Forgetting a
+note deletes every completed note row of that connection, not only the forgotten note's (known
+over-deletion: a job row has no document id). An in-flight submission cancelled at the wrong moment can still leave a note on the
+server whose response never arrived; the server deduplicates by hash and Forget removes it.
+Open risks: the 60,000-character limit is
+hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (a 422 keeps the
+text so you can Remove it); and resubmitting the same text under a new title keeps the
+first title because the server deduplicates by content hash.
 
 Normal API access logs are disabled in deployment because URLs and query strings
 can expose reading interests. Do not enable model prompt logging on shared
