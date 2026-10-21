@@ -102,6 +102,8 @@ def test_tutor_model_http_validates_before_writing(
             {
                 "document_id": insight["document_id"],
                 "source_url": insight["source_url"],
+                "source_kind": "url",
+                "source_label": "",
                 "passage": payload["spans"][0]["text"],
             }
         ]

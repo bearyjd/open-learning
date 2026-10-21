@@ -25,6 +25,7 @@ jobs:
     env:
       OL_DATABASE_URL: postgresql+psycopg2://openlearning:test-only-password@localhost:5432/openlearning_test
       OL_TEST_DATABASE_URL: postgresql+psycopg2://openlearning:test-only-password@localhost:5432/openlearning_test
+      OL_TEST_MIGRATION_DATABASE_URL: postgresql+psycopg2://openlearning:test-only-password@localhost:5432/openlearning_migrations
       OL_API_TOKEN: ci-only-token-abcdefghijklmnopqrstuvwxyz-0123456789
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +43,14 @@ jobs:
           uv run --no-sync python -m open_learning.evaluation validate-corpus --corpus evaluation/holdout.json
       - run: uv run --no-sync alembic upgrade head
       - run: uv run --no-sync alembic check
-      - run: uv run --no-sync pytest -q
+      - name: Round-trip the latest migration
+        run: |
+          uv run --no-sync alembic downgrade 0002
+          uv run --no-sync alembic upgrade head
+          uv run --no-sync alembic check
+      - name: Create the separate PostgreSQL database used by migration tests
+        run: PGPASSWORD=test-only-password psql -h localhost -U openlearning -d openlearning_test -v ON_ERROR_STOP=1 -c 'CREATE DATABASE openlearning_migrations'
+      - run: uv run --no-sync pytest -q -rs
       - name: Check live Android runner safeguards
         working-directory: .
         run: python3 -m unittest discover -s scripts/tests -v
