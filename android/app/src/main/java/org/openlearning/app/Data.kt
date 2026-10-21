@@ -67,7 +67,7 @@ interface LearningDao {
     @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND id = :id") suspend fun job(scope: String, id: String): PendingIngest?
     @Query("SELECT * FROM PendingIngest WHERE scope = :scope ORDER BY rowid DESC LIMIT 12") fun jobs(scope: String): Flow<List<PendingIngest>>
 }
-@Database(entities = [CachedInsight::class, PendingIngest::class], version = 1, exportSchema = false)
+@Database(entities = [CachedInsight::class, PendingIngest::class], version = 1, exportSchema = true)
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
 
 class LearningRepository(val config: Connection, private val database: LearningDatabase) {

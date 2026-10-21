@@ -27,8 +27,10 @@ android {
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    sourceSets { getByName("androidTest").assets.srcDir("$projectDir/schemas") }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
+kapt { arguments { arg("room.schemaLocation", "$projectDir/schemas") } }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.02.00"))
     implementation("androidx.activity:activity-compose:1.10.1")
@@ -54,5 +56,6 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     // 3.7 uses the public input service API required by Android 17 devices.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    androidTestImplementation("androidx.room:room-testing:2.7.1")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
