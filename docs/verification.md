@@ -330,22 +330,32 @@ Device acceptance for notes has NOT been run. The app code, JVM tests and the
 instrumented tests below compile in CI, but no note flow has been executed on a phone
 or emulator yet.
 
-Verified in CI (JVM): note validation (code-point bounds, CRLF, NFC, control, bidi, C1 and
-lone-surrogate rejection), file reading (size limit before open, capped read, UTF-8 and
-BOM handling, title from file name), attribution and link rules, fixed error messages that
-never echo a response body, JSON request shape, redacted `toString()`, forget tombstones,
-retry/409 decisions, and removal of a forgotten document from screen state. The
-`scripts/tests/test_android_notes.py` checks cover the acceptance script's helpers and
-confirm its mock logs only body length and SHA-256.
+Verified in CI (93 JVM tests, lint, debug/acceptance/androidTest builds, 21 script tests): note
+validation (code-point bounds, CRLF, NFC, control, bidi, C1 and lone-surrogate rejection), file reading
+(size limit before open, capped read, 60,000 code-point cap, UTF-8 and BOM handling, title from file name
+cut on a code-point boundary), the replace-typed-text confirmation decision, attribution and link rules
+(blank document ids never match), fixed error messages that never echo a response body, JSON request
+shape, redacted `toString()` on every type holding note text, forget tombstones, the worker decision
+function (completed/cancelled clear text, 0 rows never resurrects and deletes only a job the run created,
+404/409 resubmit once from local text, 429 retry, 413/422 failed), Remove hidden on completed notes,
+the bounded wait helper, checkpoint result handling, and removal of a forgotten document from screen
+state. The data-extraction rules are parsed by a JVM test and the attribute is confirmed in the merged
+debug manifest. The `scripts/tests/test_android_notes.py` checks cover the acceptance script's helpers
+(including typing URLs and tokens) and confirm its mock logs only body length and SHA-256.
 
 Written but not run: `NoteAcceptanceTest` (offline queue posts once, worker input keys,
 text cleared after completion, 413/422/429 messages, no link nodes on notes, forget
 cancel/confirm/offline, remove before submit, draft after `recreate()`), the Room
-`MigrationTest` 1 to 2, and `scripts/android_notes.py` (mock backend, uiautomator XML only).
+`MigrationTest` 1 to 2, `DatabaseHygieneTest` (secure_delete reads back 1, the WAL is 0 bytes after
+`wal_checkpoint(TRUNCATE)`, completed-note and stale-card deletion, other-scope purge, shared server
+job count, `@Update` not resurrecting a removed row) and `scripts/android_notes.py` (mock backend,
+uiautomator XML only).
 
 Not verified: any device behavior, the real backend with the app, process death of the
-editor on hardware, Compose text-field performance at 60,000 characters, and backup
-extraction rules. Compose `recreate()` keeps the view model, so it does not prove draft
+editor on hardware, Compose text-field performance at 60,000 characters, an actual backup or
+device transfer (only the configuration is checked), FLAG_SECURE/autofill/keyboard-learning effects
+on a real keyboard, and whether the race between cancelling a submitting worker and the server
+accepting the POST can still leave a server note (it cannot be closed client-side). Compose `recreate()` keeps the view model, so it does not prove draft
 restore after process death; the script's kill check does, once run.
 
 ## Acceptance still pending
