@@ -76,6 +76,10 @@ The text-only Qwen3-VL 4B comparison also failed the fixed semantic gate on
 both primary and holdout samples; see the [bound results](model-evaluation.md#compact-local-model-comparison).
 No model change has been selected. Source-grounded claims, explicit learner
 assessment, and useful follow-up questions remain the next quality work.
+A later assessment-grounding attempt also failed the gate (primary 2/8, holdout 2/8,
+one critical failure each) and its prompt wording was reverted; see the
+[archived experiment](model-evaluation.md#rejected-assessment-grounding-experiment).
+Follow-up grounding remains open.
 
 **Deliver:** A small, versioned corpus of legally reusable passages and questions,
 including misleading premises, partial excerpts, unsupported questions, and

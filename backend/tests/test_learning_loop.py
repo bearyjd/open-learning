@@ -152,3 +152,22 @@ def test_review_ratings_schedule_and_record_history(client, factory, settings, r
         history = db.scalar(select(ReviewHistory))
         assert history.rating == rating
         assert history.interval_days == pytest.approx(days)
+
+
+def test_tutor_chat_returns_model_assessment_to_service_callers(client, factory, settings):
+    from open_learning.models import Insight
+    from open_learning.services import tutor_chat
+
+    insight = ingest(client, factory, settings)
+
+    class Assessing(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"assessment": "partially_correct"})
+            )
+
+    with factory() as db:
+        result = tutor_chat(db, db.get(Insight, insight["id"]), "Recall.", Assessing())
+    assert result["assessment"] == "partially_correct"

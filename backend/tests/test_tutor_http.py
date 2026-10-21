@@ -121,3 +121,130 @@ def test_tutor_model_http_validates_before_writing(
             else "Model unavailable or returned invalid structured output"
         )
         assert after == before
+
+
+def _first_insight(client, factory, settings):
+    client.post(API + "/ingest/url", json={"url": "https://example.com/article"})
+    assert run_once(factory, settings, article_fetcher, FixtureModel())
+    return client.get(API + "/feed/today").json()[0]
+
+
+@pytest.mark.parametrize("variant", ["same", "case-and-space"])
+def test_tutor_rejects_repeated_previous_question(client, factory, settings, variant):
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    assert first.status_code == 200
+    repeated = first.json()["question"]
+    if variant == "case-and-space":
+        repeated = "  " + repeated.upper().replace(" ", "\n ") + " "
+
+    calls = []
+
+    class Repeating(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            calls.append(kwargs)
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"question": repeated})
+            )
+
+    client.app.state.model = Repeating()
+
+    def snapshot():
+        with factory() as db:
+            return [
+                [dict(row) for row in db.execute(select(entity.__table__)).mappings()]
+                for entity in (History, ReviewItem, Interaction)
+            ]
+
+    before = snapshot()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 503
+    assert result.json()["detail"] == "Model repeated the previous question"
+    assert snapshot() == before
+    assert len(calls) == 2
+    assert calls[0].get("avoid_repeat", False) is False
+    assert calls[1]["avoid_repeat"] is True
+    assert calls[1]["previous_question"] == first.json()["question"]
+
+
+def test_tutor_repeat_then_different_retries_once(client, factory, settings):
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    repeated = first.json()["question"]
+    calls = []
+
+    class Recovering(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            calls.append(kwargs)
+            question = repeated if len(calls) == 1 else "What does recall replace?"
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"question": question})
+            )
+
+    client.app.state.model = Recovering()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 200
+    assert result.json()["question"] == "What does recall replace?"
+    assert len(calls) == 2
+    assert calls[1]["avoid_repeat"] is True
+    with factory() as db:
+        assert db.scalar(select(ReviewItem.question)) == "What does recall replace?"
+
+
+def test_tutor_assessment_stays_out_of_public_response(client, factory, settings):
+    insight = _first_insight(client, factory, settings)
+
+    class Assessing(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"assessment": "correct"})
+            )
+
+    client.app.state.model = Assessing()
+    body = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    ).json()
+    assert set(body) == {"answer", "question", "review_id", "citations"}
+
+
+def test_tutor_takes_review_lock_only_after_model_calls(client, factory, settings, monkeypatch):
+    from open_learning import services
+
+    insight = _first_insight(client, factory, settings)
+    first = client.post(API + "/tutor/chat", json={"insight_id": insight["id"], "message": ""})
+    repeated = first.json()["question"]
+    events = []
+
+    class Recovering(FixtureModel):
+        def tutor(self, passage, title, message, history, **kwargs):
+            events.append("model")
+            question = repeated if events.count("model") == 1 else "What does recall replace?"
+            return (
+                super()
+                .tutor(passage, title, message, history, **kwargs)
+                .model_copy(update={"question": question})
+            )
+
+    real = services.ensure_review
+
+    def spy(db, item):
+        events.append("lock")
+        return real(db, item)
+
+    monkeypatch.setattr(services, "ensure_review", spy)
+    client.app.state.model = Recovering()
+    result = client.post(
+        API + "/tutor/chat", json={"insight_id": insight["id"], "message": "Recall first."}
+    )
+    assert result.status_code == 200
+    assert events == ["model", "model", "lock"]

@@ -303,7 +303,7 @@ def test_unexpected_lookup_errors_from_the_model_are_not_404(client, factory, se
     insight = insight_of(factory, doc)
 
     class Broken:
-        def tutor(self, *args):
+        def tutor(self, *args, **kwargs):
             raise KeyError("model bug")
 
     client.app.state.model = Broken()

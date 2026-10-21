@@ -32,11 +32,13 @@ class FixtureModel:
             ]
         )
 
-    def tutor(self, passage, title, message, history):
+    def tutor(self, passage, title, message, history, **kwargs):
         return TutorResult(
             answer="Recall the idea before rereading. "
             + ("That matches the source." if message else ""),
-            question="How does retrieval practice support memory?",
+            question="What does retrieval practice ask learners to do?"
+            if message
+            else "How does retrieval practice support memory?",
             evidence=PASSAGE.strip(),
         )
 

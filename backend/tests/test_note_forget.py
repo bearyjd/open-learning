@@ -241,7 +241,7 @@ def test_tutor_loses_race_with_delete_gets_404(client, factory, settings):
     insight = insight_of(factory, doc)
 
     class Deleting(FixtureModel):
-        def tutor(self, passage, title, message, history):
+        def tutor(self, passage, title, message, history, **kwargs):
             assert client.delete(f"{API}/notes/{doc}").status_code == 204
             return super().tutor(passage, title, message, history)
 

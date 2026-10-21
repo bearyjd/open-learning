@@ -8,7 +8,7 @@ import httpx
 import pytest
 from conftest import PASSAGE
 
-from open_learning.ai import ModelClient, ModelError
+from open_learning.ai import ModelClient, ModelError, TutorResult
 
 
 @pytest.mark.parametrize("overlong", [False, True], ids=["valid", "oversized"])
@@ -155,3 +155,74 @@ def test_tutor_selects_canonical_source_span(monkeypatch, settings, legacy_quote
         "user_message": "",
         "history": [],
     }
+
+
+def _tutor_model(monkeypatch, settings, content):
+    received = []
+
+    def respond(request):
+        received.append(json.loads(request.content))
+        body = {"evidence_id": "e0", "content": content}
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(body)}}]})
+
+    original_client = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    return ModelClient(settings), received
+
+
+@pytest.mark.parametrize(
+    "assessment", ["correct", "partially_correct", "incorrect", "not_assessed"]
+)
+def test_tutor_carries_optional_assessment(monkeypatch, settings, assessment):
+    content = {"answer": "Good.", "question": "What does recall replace?", "assessment": assessment}
+    model, received = _tutor_model(monkeypatch, settings, content)
+    result = model.tutor(PASSAGE, "Retrieval", "Recall helps.", [])
+    assert result.assessment == assessment
+    shape = received[0]["response_format"]["json_schema"]["schema"]["$defs"]["_TutorContent"]
+    assert shape["properties"]["assessment"]["enum"] == [
+        "correct",
+        "partially_correct",
+        "incorrect",
+        "not_assessed",
+    ]
+    assert "assessment" not in shape["required"]
+
+
+def test_tutor_assessment_is_optional_and_hidden_when_unassessed(monkeypatch, settings):
+    content = {"answer": "Good.", "question": "What does recall replace?"}
+    model, _ = _tutor_model(monkeypatch, settings, content)
+    result = model.tutor(PASSAGE, "Retrieval", "", [])
+    assert result.assessment == "not_assessed"
+    assert "assessment" not in result.model_dump()
+    assert TutorResult.model_validate(result.model_dump()) == result
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"assessment": "mostly"}, {"answer": "   "}, {"question": "     "}],
+    ids=["bad-assessment", "blank-answer", "blank-question"],
+)
+def test_tutor_rejects_invalid_content(monkeypatch, settings, override):
+    content = {"answer": "Good.", "question": "What does recall replace?", **override}
+    model, _ = _tutor_model(monkeypatch, settings, content)
+    with pytest.raises(ModelError, match="invalid structured output"):
+        model.tutor(PASSAGE, "Retrieval", "Recall helps.", [])
+
+
+def test_tutor_payload_carries_previous_question_and_retry_instruction(monkeypatch, settings):
+    content = {"answer": "Good.", "question": "What does recall replace?"}
+    model, received = _tutor_model(monkeypatch, settings, content)
+    model.tutor(PASSAGE, "Retrieval", "Recall helps.", [], previous_question="Why recall?")
+    payload = json.loads(received[0]["messages"][1]["content"])
+    assert payload["previous_question"] == "Why recall?"
+    assert "retry_instruction" not in payload
+    model.tutor(
+        PASSAGE, "Retrieval", "Recall helps.", [], previous_question="Why recall?", avoid_repeat=True
+    )
+    payload = json.loads(received[1]["messages"][1]["content"])
+    assert payload["previous_question"] == "Why recall?"
+    assert "different question" in payload["retry_instruction"]

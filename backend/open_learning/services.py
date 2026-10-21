@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .ai import ModelClient
+from .ai import ModelClient, ModelError, normalized
 from .config import Settings
 from .fetching import fetch_document
 from .models import (
@@ -133,15 +133,17 @@ def today_feed(db: Session) -> list[dict]:
     return result
 
 
+def default_review_question(insight: Insight) -> str:
+    return f"Explain in your own words: {insight.title}"
+
+
 def ensure_review(db: Session, insight: Insight) -> ReviewItem:
     locked = db.execute(select(Insight.id).where(Insight.id == insight.id).with_for_update())
     if locked.first() is None:
         raise RowVanished("Insight not found")  # Deleted while we were working.
     item = db.scalar(select(ReviewItem).where(ReviewItem.insight_id == insight.id))
     if item is None:
-        item = ReviewItem(
-            insight_id=insight.id, question=f"Explain in your own words: {insight.title}"
-        )
+        item = ReviewItem(insight_id=insight.id, question=default_review_question(insight))
         db.add(item)
         db.flush()
     return item
@@ -159,13 +161,25 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
             .limit(8)
         )
     )
-    result = model.tutor(
-        chunk.text,
-        insight.title,
-        message,
-        [{"role": entry.role, "message": entry.message} for entry in reversed(history)],
-    )
-    review = ensure_review(db, insight)  # Locks the insight before any write, after the model call.
+    turns = [{"role": entry.role, "message": entry.message} for entry in reversed(history)]
+    previous = db.scalar(select(ReviewItem.question).where(ReviewItem.insight_id == insight.id))
+    result = model.tutor(chunk.text, insight.title, message, turns, previous_question=previous)
+    # No row lock may be held across model calls, so the repeat check uses the question
+    # read above. A concurrent writer between that read and the lock can slip through; the
+    # worst case is one repeated question, which is preferable to a lock across a slow call.
+    baseline = previous if previous is not None else default_review_question(insight)
+    if normalized(baseline).casefold() == normalized(result.question).casefold():
+        result = model.tutor(
+            chunk.text,
+            insight.title,
+            message,
+            turns,
+            previous_question=baseline,
+            avoid_repeat=True,
+        )
+        if normalized(baseline).casefold() == normalized(result.question).casefold():
+            raise ModelError("Model repeated the previous question")
+    review = ensure_review(db, insight)  # Locks the insight before any write, after the model calls.
     review.question = result.question
     if message:
         db.add(History(insight_id=insight.id, role="user", message=message))
@@ -179,6 +193,7 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
     return {
         "answer": result.answer,
         "question": result.question,
+        "assessment": result.assessment,
         "review_id": review.id,
         "citations": [
             {"document_id": document.id, **source_fields(source), "passage": result.evidence}

@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Annotated, Literal, TypeVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from .config import Settings
 
@@ -51,6 +51,23 @@ class _TutorContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     answer: ShortText
     question: Annotated[str, Field(min_length=5, max_length=500)]
+    assessment: Literal["correct", "partially_correct", "incorrect", "not_assessed"] = (
+        "not_assessed"
+    )
+
+    @field_validator("answer", "question")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @model_serializer(mode="wrap")
+    def omit_unassessed(self, handler):
+        data = handler(self)
+        if data.get("assessment") == "not_assessed":
+            return {key: item for key, item in data.items() if key != "assessment"}
+        return data
 
 
 class TutorResult(_TutorContent):
@@ -230,10 +247,31 @@ class ModelClient:
             )
         return InsightBatch(insights=insights)
 
-    def tutor(self, passage: str, title: str, message: str, history: list[dict]) -> TutorResult:
+    def tutor(
+        self,
+        passage: str,
+        title: str,
+        message: str,
+        history: list[dict],
+        previous_question: str | None = None,
+        avoid_repeat: bool = False,
+    ) -> TutorResult:
         spans = _source_spans([passage])
         if not spans:
             raise ModelError("No source spans are long enough for evidence")
+        payload = {
+            "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
+            "title": title,
+            "user_message": message,
+            "history": history,
+        }
+        if previous_question is not None:
+            payload["previous_question"] = previous_question
+        if avoid_repeat:
+            payload["retry_instruction"] = (
+                "Your last attempt repeated previous_question. Ask a different question "
+                "answerable from the selected span."
+            )
         result = self.complete(
             _TutorDraft,
             "Explain the idea briefly and ask one recall question. If an answer is supplied, evaluate "
@@ -241,12 +279,7 @@ class ModelClient:
             "question. First select one evidence_id, then write content using only that selected "
             "span. Keep your factual claims and the premises of the question supported by it. "
             "Return evidence_id first and content with answer and question second.",
-            {
-                "spans": [{"evidence_id": key, "text": span.text} for key, span in spans.items()],
-                "title": title,
-                "user_message": message,
-                "history": history,
-            },
+            payload,
             evidence_mode="id",
         )
         if result.evidence_id not in spans:

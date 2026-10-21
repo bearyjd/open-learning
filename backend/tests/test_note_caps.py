@@ -229,9 +229,9 @@ def test_tutor_racing_delete_leaves_no_orphans_on_postgresql(client, factory, se
     barrier = threading.Barrier(2)
 
     class Gate(FixtureModel):
-        def tutor(self, *args):
+        def tutor(self, *args, **kwargs):
             barrier.wait(timeout=5)
-            return super().tutor(*args)
+            return super().tutor(*args, **kwargs)
 
     client.app.state.model = Gate()
     results = {}

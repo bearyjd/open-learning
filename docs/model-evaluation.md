@@ -95,6 +95,43 @@ Each linked score has adjacent `-run.json` and `-review.json` artifacts with the
 original fictional outputs and bound ratings. This comparison used the same
 predeclared acceptance threshold as the earlier runs.
 
+## Rejected assessment-grounding experiment
+
+A later branch added prompt wording for insight abstention, answerable and
+non-repeating follow-ups, and learner assessment, plus structural changes. It was
+evaluated once per case on both frozen corpora with the same 7B model, rubric,
+and temperature 0.2, at commit `0a37688` (`ai.py` SHA256
+`ada4b585ec67535857e82b267881e948f25ba06a557c2baa34433b750014d553`), with
+independent AI-assisted review.
+
+| Run | Contract-valid | Meets rubric | Critical failures |
+| --- | --- | --- | --- |
+| [Assessment, primary](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-score.json) | 8/8 | 2/8 | 1 (`tutor_injection`) |
+| [Assessment, holdout](../backend/evaluation/results/qwen2.5-7b-q4-assessment-holdout-2026-10-19-score.json) | 8/8 | 2/8 | 1 (`holdout_insight_precedence`) |
+
+Against the baselines, the primary run went from 3/8 to 2/8 passing and from 2
+to 1 critical failures; the holdout run went from 4/8 to 2/8 passing and from 0
+to 1 critical failures. Both runs fail the gate. The reviews score six follow-ups
+below 2 (3 primary, 3 holdout): four re-ask the question the learner just asked
+or answered, and two re-ask a question the source cannot answer (a savings
+figure in the primary corpus, a defect-prevention count in the holdout). **The experiment is archived as rejected and the prompt
+wording was reverted** to the text on `main`. Each score has adjacent
+[`-run.json`](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-run.json)
+and [`-review.json`](../backend/evaluation/results/qwen2.5-7b-q4-assessment-primary-2026-10-19-review.json)
+artifacts (holdout equivalents use the same naming).
+
+The structural changes were kept: an optional `assessment` field omitted when
+`not_assessed`, blank answer/question validators, `previous_question` and retry
+payload plumbing, and a service-level repeat check with a single retry. They were
+**not re-evaluated after the wording revert**, and no quality improvement is
+claimed. With no prompt instruction, `assessment` is only schema-permitted, not
+requested.
+
+Reports must be rescored with `ai.py` at `0a37688`, because scoring validates
+the run's digest against the current `ai.py` bytes. Against the reverted
+`ai.py` they will not validate, by design; their hashes must never be rewritten.
+These are single-sample runs with AI-assisted reviewers, not a statistical estimate.
+
 ## Run locally
 
 With the locked backend dependencies and a local model server running:
