@@ -27,6 +27,17 @@ class HelperTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 notes.adb_text(bad)
 
+    def test_adb_text_accepts_url_and_token_punctuation(self):
+        self.assertEqual("http://127.0.0.1:18766", notes.adb_text("http://127.0.0.1:18766"))
+        self.assertEqual("notes-local-token", notes.adb_text(notes.TOKEN))
+        self.assertEqual("a_b=c@d+e%sf", notes.adb_text("a_b=c@d+e f"))
+        notes.adb_text("http://127.0.0.1:%d" % 18766)
+
+    def test_adb_text_still_rejects_percent_and_shell_metacharacters(self):
+        for bad in ("100%", "a|b", "a`b`", "a\\b", 'a"b', "a#b", "a*b", "a~b", "a<b", "a>b", "a(b", "a!b", "a?b", "a\tb"):
+            with self.assertRaises(ValueError, msg=bad):
+                notes.adb_text(bad)
+
     def test_note_fixture_text_is_typeable(self):
         notes.adb_text(notes.NOTE_TEXT)
         notes.adb_text(notes.NOTE_TITLE)

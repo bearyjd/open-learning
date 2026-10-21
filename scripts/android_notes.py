@@ -2,8 +2,10 @@
 
 Starts a loopback mock of the /api/v1 contract on this host (no database, no model),
 forwards it with its own `adb reverse`, drives the already-installed acceptance app
-through the UI and records uiautomator XML dumps only (no screenshots: note text must
-not be captured as pixels). The mock logs method, path, status, body length and the
+through the UI and records uiautomator XML dumps only: this script saves no screenshots.
+The process-death step presses HOME (`am kill` only kills a backgrounded app), which makes
+Android take its own recents snapshot; the app sets FLAG_SECURE while the editor is shown, so
+that snapshot is blank rather than a picture of the note. The mock logs method, path, status, body length and the
 SHA-256 of the body, never the body itself. Never reboots, resizes, or changes device
 settings; touches only the acceptance package. Install the APK first:
 
@@ -41,7 +43,9 @@ NOTE = {
     "source_kind": "note", "source_label": "",
 }
 LINK_LABELS = ("Open original source", "Check source", "Open source article")
-SAFE_TEXT = re.compile(r"^[A-Za-z0-9 .,]+$")
+# Characters `adb shell input text` types verbatim and the device shell never reinterprets. ':', '/', '-', '_', '=',
+# '@' and '+' cover the loopback URL and token; '%' is excluded because `input text` reads "%s" as a space.
+SAFE_TEXT = re.compile(r"^[A-Za-z0-9 .,:/_=@+-]+$")
 
 
 def body_digest(raw: bytes) -> dict:
@@ -50,7 +54,7 @@ def body_digest(raw: bytes) -> dict:
 
 
 def adb_text(text: str) -> str:
-    """Encode text for `adb shell input text`; refuse anything the shell could reinterpret."""
+    """Encode text for `adb shell input text`; refuse anything the shell (or `input`) could reinterpret."""
     if not SAFE_TEXT.match(text):
         raise ValueError("unsafe characters for adb input text")
     return text.replace(" ", "%s")
