@@ -30,7 +30,9 @@ data class Insight(
 data class IngestJob(val id: String, val status: String, val error: String? = null)
 data class UrlRequest(val url: String)
 // A null label is omitted by Gson; the server rejects explicit nulls.
-data class TextRequest(val title: String, val text: String, val label: String? = null)
+data class TextRequest(val title: String, val text: String, val label: String? = null) {
+    override fun toString() = "TextRequest(text=<redacted>)"
+}
 data class Feedback(val action: String = "dismiss")
 data class ChatRequest(val insightId: String, val message: String)
 data class Citation(val documentId: String = "", val sourceUrl: String = "", val passage: String = "",

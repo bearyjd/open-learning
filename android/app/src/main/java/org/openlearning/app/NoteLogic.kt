@@ -17,7 +17,19 @@ class ForgottenNotes {
 /** The editable note fields. Immutable: every edit is a new value. */
 data class NoteDraftFields(val title: String = "", val label: String = "", val text: String = "") {
     val isEmpty get() = title.isEmpty() && label.isEmpty() && text.isEmpty()
+    override fun toString() = "NoteDraftFields(text=<redacted>)"
 }
+
+sealed interface FilePlan {
+    data object Apply : FilePlan
+    /** The editor already holds typed text: ask before overwriting it. */
+    data object ConfirmReplace : FilePlan
+}
+
+fun filePlan(draft: NoteDraftFields): FilePlan = if (draft.text.isBlank()) FilePlan.Apply else FilePlan.ConfirmReplace
+
+/** Fills the text from the file; a title the person already typed is kept. */
+fun NoteDraftFields.withFile(file: NoteFileResult.Loaded) = copy(title = title.ifBlank { file.title }, text = file.text)
 
 fun noteCounter(text: String): String =
     "${NumberFormat.getIntegerInstance(Locale.US).format(text.codePointCount(0, text.length))} / ${NumberFormat.getIntegerInstance(Locale.US).format(NOTE_MAX_CHARS)}"

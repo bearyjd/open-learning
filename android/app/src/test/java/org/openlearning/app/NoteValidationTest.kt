@@ -42,15 +42,15 @@ class NoteValidationTest {
         invalid(check(body(100), label = body(101)))
     }
     @Test fun bodyAllowsTabNewlineAndParagraphSeparators() {
-        valid(check("a\tb\nc d " + body(100)))
+        valid(check("a\tb\nc\u2028d\u2029" + body(100)))
     }
     @Test fun bodyRejectsControls() {
-        for (c in listOf('\u0000', '\u0001', '\u000b', '\u001f', '\u007f', '\u0085', '\u009f', '‪', '‮', '⁦', '⁩'))
+        for (c in listOf('\u0000', '\u0001', '\u000b', '\u001f', '\u007f', '\u0085', '\u009f', '\u202A', '\u202E', '\u2066', '\u2069'))
             invalid(check("a${c}b" + body(100)))
     }
     @Test fun edgeControlIsRejectedNotTrimmed() = invalid(check(body(100) + "\u0085"))
     @Test fun titleAndLabelRejectAnyControl() {
-        for (c in listOf('\t', '\n', '\r', '\u0000', ' ', ' ', '\u0085', '‭'))
+        for (c in listOf('\t', '\n', '\r', '\u0000', '\u2028', '\u2029', '\u0085', '\u202D'))
             { invalid(check(body(100), title = "a${c}b")); invalid(check(body(100), label = "a${c}b")) }
     }
     @Test fun rejectsLoneSurrogates() {
@@ -68,5 +68,10 @@ class NoteValidationTest {
         val row = PendingIngest("s", "i", "", kind = "note", text = "SECRET-BODY")
         assertFalse(row.toString().contains("SECRET-BODY"))
         assertFalse(NoteDraft("s", "t", "l", "SECRET-BODY").toString().contains("SECRET-BODY"))
+        assertFalse(NoteDraftFields("t", "l", "SECRET-BODY").toString().contains("SECRET-BODY"))
+        assertFalse(TextRequest("t", "SECRET-BODY", "l").toString().contains("SECRET-BODY"))
+        val ok = check("SECRET-BODY" + body(100))
+        assertFalse(ok.toString().contains("SECRET-BODY"))
+        assertFalse(valid(ok).toString().contains("SECRET-BODY"))
     }
 }

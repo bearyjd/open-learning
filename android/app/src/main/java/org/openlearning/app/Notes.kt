@@ -17,14 +17,18 @@ const val NOTE_MAX_LABEL = 100
 const val NOTE_FILE_MAX_BYTES = 256 * 1024
 const val NOTE_EXPIRED = "This note's text expired; add it again."
 
-data class ValidNote(val title: String, val text: String, val label: String?)
+data class ValidNote(val title: String, val text: String, val label: String?) {
+    override fun toString() = "ValidNote(text=<redacted>)"
+}
 
 sealed interface NoteCheck {
-    data class Valid(val note: ValidNote) : NoteCheck
+    data class Valid(val note: ValidNote) : NoteCheck {
+        override fun toString() = "Valid(note=<redacted>)"
+    }
     data class Invalid(val message: String) : NoteCheck
 }
 
-private fun isBidi(c: Char) = c in '‪'..'‮' || c in '⁦'..'⁩'
+private fun isBidi(c: Char) = c in '\u202A'..'\u202E' || c in '\u2066'..'\u2069'
 private fun isC1OrDel(c: Char) = c in '\u007f'..'\u009f'
 private fun hasLoneSurrogate(s: String): Boolean {
     var i = 0
@@ -37,10 +41,13 @@ private fun hasLoneSurrogate(s: String): Boolean {
     return false
 }
 private fun codePoints(s: String) = s.codePointCount(0, s.length)
+/** Like take(), but never splits a surrogate pair. */
+internal fun String.takeCodePoints(count: Int): String =
+    if (codePoints(this) <= count) this else substring(0, offsetByCodePoints(0, count))
 private fun String.strip() = trim { it.isWhitespace() }
 // C0 except tab/newline, DEL, C1, bidi. U+2028/2029 stay allowed in the body.
 private fun badTextChar(c: Char) = (c < ' ' && c != '\t' && c != '\n') || isC1OrDel(c) || isBidi(c)
-private fun badLineChar(c: Char) = c < ' ' || isC1OrDel(c) || c == ' ' || c == ' ' || isBidi(c)
+private fun badLineChar(c: Char) = c < ' ' || isC1OrDel(c) || c == '\u2028' || c == '\u2029' || isBidi(c)
 
 fun validateNote(title: String, text: String, label: String?): NoteCheck {
     if (hasLoneSurrogate(title) || hasLoneSurrogate(text) || (label != null && hasLoneSurrogate(label)))
@@ -63,7 +70,9 @@ fun validateNote(title: String, text: String, label: String?): NoteCheck {
 }
 
 sealed interface NoteFileResult {
-    data class Loaded(val title: String, val text: String) : NoteFileResult
+    data class Loaded(val title: String, val text: String) : NoteFileResult {
+        override fun toString() = "Loaded(text=<redacted>)"
+    }
     data class Rejected(val message: String) : NoteFileResult
 }
 
@@ -91,7 +100,10 @@ fun readNoteFile(name: String?, size: Long?, open: () -> InputStream?): NoteFile
         return NoteFileResult.Rejected("That file is not UTF-8 text.")
     }
     val text = decoded.removePrefix("\uFEFF")
-    val title = fileName.dropLast(extension.length).map { if (badLineChar(it)) ' ' else it }.joinToString("").strip().take(NOTE_MAX_TITLE)
+    // Same measure validateNote applies, so a file that loads here can still be submitted.
+    if (codePoints(text.replace("\r\n", "\n").replace('\r', '\n').strip()) > NOTE_MAX_CHARS)
+        return NoteFileResult.Rejected("That file has more than 60,000 characters.")
+    val title = fileName.dropLast(extension.length).map { if (badLineChar(it)) ' ' else it }.joinToString("").strip().takeCodePoints(NOTE_MAX_TITLE)
     return NoteFileResult.Loaded(title.ifEmpty { "Note" }, text)
 }
 
@@ -138,7 +150,7 @@ fun Insight.linkUrl(): String? = if (isNote()) null else httpOrNull(sourceUrl)
 fun Citation.linkUrl(): String? = if (sourceKind == "note") null else httpOrNull(sourceUrl)
 
 fun citationTitle(citation: Citation, selected: Insight?, cachedTitle: String?): String {
-    if (selected != null && selected.documentId == citation.documentId && selected.sourceTitle.isNotBlank()) return selected.sourceTitle
+    if (selected != null && citation.documentId.isNotBlank() && selected.documentId == citation.documentId && selected.sourceTitle.isNotBlank()) return selected.sourceTitle
     cachedTitle?.takeIf { it.isNotBlank() }?.let { return it }
     return if (citation.sourceKind == "note") "Your note" else "Source article"
 }

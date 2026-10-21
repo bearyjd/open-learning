@@ -61,6 +61,14 @@ class NoteLogicTest {
         assertTrue("not forgotten" in offline && "SECRET" !in offline)
         assertFalse("SECRET" in forgetFailureMessage(IllegalStateException("SECRET-BODY")))
     }
+    @Test fun fileReplacesOnlyAfterConfirmWhenTextIsTyped() {
+        assertEquals(FilePlan.Apply, filePlan(NoteDraftFields(title = "t")))
+        assertEquals(FilePlan.Apply, filePlan(NoteDraftFields(text = "  \n ")))
+        assertEquals(FilePlan.ConfirmReplace, filePlan(NoteDraftFields(text = "typed")))
+        val next = NoteDraftFields("mine", "l", "old").withFile(NoteFileResult.Loaded("file", "new"))
+        assertEquals(NoteDraftFields("mine", "l", "new"), next)
+        assertEquals("file", NoteDraftFields().withFile(NoteFileResult.Loaded("file", "new")).title)
+    }
     @Test fun draftFieldsEmptiness() {
         assertTrue(NoteDraftFields().isEmpty)
         assertFalse(NoteDraftFields(label = "x").isEmpty)

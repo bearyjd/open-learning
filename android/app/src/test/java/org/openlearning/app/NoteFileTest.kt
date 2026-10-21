@@ -24,8 +24,26 @@ class NoteFileTest {
         assertTrue(result is NoteFileResult.Rejected)
         assertEquals(NOTE_FILE_MAX_BYTES + 1, served)
     }
-    @Test fun exactlyAtCapIsAccepted() = loaded(read("a.txt", ByteArray(NOTE_FILE_MAX_BYTES) { 'a'.code.toByte() }))
-        .let { assertEquals(NOTE_FILE_MAX_BYTES, it.text.length) }
+    @Test fun exactlyAtCodePointCapIsAccepted() = assertEquals(NOTE_MAX_CHARS, loaded(read("a.txt", "a".repeat(NOTE_MAX_CHARS).toByteArray())).text.length)
+    @Test fun oneOverCodePointCapIsRejected() =
+        assertTrue(rejected(read("a.txt", "a".repeat(NOTE_MAX_CHARS + 1).toByteArray())).contains("60,000"))
+    @Test fun codePointsNotUtf16UnitsAreCounted() {
+        assertEquals(NOTE_MAX_CHARS * 2, loaded(read("a.txt", "😀".repeat(NOTE_MAX_CHARS).toByteArray())).text.length)
+        assertTrue(read("a.txt", "😀".repeat(NOTE_MAX_CHARS + 1).toByteArray()) is NoteFileResult.Rejected)
+    }
+    @Test fun capUsesTheSameCrlfAndTrimMeasureAsValidation() {
+        val padded = "\r\n".repeat(10) + "a".repeat(NOTE_MAX_CHARS) + "  \r\n\r\n"
+        assertTrue(read("a.txt", padded.toByteArray()) is NoteFileResult.Loaded)
+    }
+    @Test fun longTitleIsCutOnCodePointBoundary() {
+        val title = loaded(read("😀".repeat(NOTE_MAX_TITLE + 5) + ".txt", "x".toByteArray())).title
+        assertEquals(NOTE_MAX_TITLE, title.codePointCount(0, title.length))
+        assertFalse(hasBrokenPair(title))
+        val odd = loaded(read("a" + "😀".repeat(NOTE_MAX_TITLE) + ".txt", "x".toByteArray())).title
+        assertFalse(hasBrokenPair(odd))
+    }
+    @Test fun loadedToStringIsRedacted() = assertFalse(loaded(read("a.txt", "SECRET-BODY".toByteArray())).toString().contains("SECRET"))
+    private fun hasBrokenPair(s: String) = s.isNotEmpty() && (Character.isHighSurrogate(s.last()) || Character.isLowSurrogate(s.first()))
     @Test fun invalidUtf8IsRejected() = assertTrue(rejected(read("a.txt", byteArrayOf(0x61, 0xC3.toByte(), 0x28))).contains("UTF-8"))
     @Test fun nulIsNotPlainText() = assertTrue(rejected(read("a.txt", byteArrayOf(0x61, 0x00, 0x62))).contains("plain text"))
     @Test fun utf16BomIsRejected() {

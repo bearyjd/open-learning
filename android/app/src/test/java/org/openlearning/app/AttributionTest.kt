@@ -28,6 +28,11 @@ class AttributionTest {
         assertEquals("Your note", citationTitle(citation, null, null))
         assertEquals("Your note", citationTitle(citation, null, " "))
     }
+    @Test fun blankDocumentIdsNeverMatch() {
+        val blank = Citation(documentId = "", sourceKind = "note")
+        assertEquals("Your note", citationTitle(blank, note.copy(documentId = ""), null))
+        assertEquals("Source article", citationTitle(Citation(documentId = ""), Insight(documentId = "", sourceTitle = "Wrong"), null))
+    }
     @Test fun v1PayloadDecodesAsUrl() {
         val item = apiGson.fromJson("""{"id":"1","title":"t","source_title":"s","source_url":"https://x.example"}""", Insight::class.java)
         assertEquals("url", item.sourceKind)
