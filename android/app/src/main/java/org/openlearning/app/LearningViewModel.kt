@@ -24,6 +24,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private val container = (application as LearningApplication).container
     val connection = container.credentials.connection
     private var repo: LearningRepository? = null
+    private var purgeJob: Job? = null
     private var feedFlow: Job? = null
     private var jobsFlow: Job? = null
     private val mutable = MutableStateFlow(ScreenState())
@@ -48,13 +49,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 val restore = step.restore
                 restorePending = step.restorePending
                 if (step.clearMemory) memory.clear()
-                feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel()
+                feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
                 draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
-                    launch { purgeInactiveScopes(repository) }
+                    purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
@@ -77,10 +78,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             }
         }
     }
-    /** Another server or token was connected: its cards, drafts and queued imports are no longer reachable, so delete them. */
+    /** Another server or token was connected: delete the old cards and completed imports, never unsent note text or drafts. */
     private suspend fun purgeInactiveScopes(repository: LearningRepository) {
         try {
-            repository.purgeInactiveScopes().forEach { IngestWorker.cancel(getApplication(), it.scope, it.id) }
+            repository.purgeInactiveScopes { shouldRunPurge(repo?.config?.scope, repository.config.scope) }.forEach { IngestWorker.cancel(getApplication(), it.scope, it.id) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not purge data from a previous connection") }
     }

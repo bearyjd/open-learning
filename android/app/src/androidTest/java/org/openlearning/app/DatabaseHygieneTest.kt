@@ -57,15 +57,38 @@ class DatabaseHygieneTest {
         assertNull(dao.get("s", "stale")); assertNotNull(dao.get("s", "feed")); assertNotNull(dao.get("s", "saved")); assertNotNull(dao.get("t", "stale"))
     }
 
-    @Test fun purgeInactiveScopesRemovesCardsDraftsAndJobsOfOtherScopesOnly() = runBlocking {
-        dao.put(listOf(CachedInsight("s", "a", "{}", true, false), CachedInsight("old", "b", "{}", true, false)))
-        dao.putDraft(NoteDraft("s", "t", "l", "keep")); dao.putDraft(NoteDraft("old", "t", "l", "SECRET"))
-        dao.putJob(note("mine", "queued", "body")); dao.putJob(note("theirs", "queued", "SECRET", scope = "old"))
-        assertEquals(listOf("theirs"), dao.jobsOutside("s").map { it.id })
-        dao.deleteCardsOutside("s"); dao.deleteDraftsOutside("s"); dao.deleteJobsOutside("s")
-        assertNotNull(dao.get("s", "a")); assertNull(dao.get("old", "b"))
-        assertNotNull(dao.draft("s")); assertNull(dao.draft("old"))
-        assertNotNull(dao.job("s", "mine")); assertNull(dao.job("old", "theirs"))
+    private fun connection(name: String) = Connection("https://example.invalid/", "token-$name")
+    private fun repositoryFor(name: String) = LearningRepository(connection(name), db)
+    private fun scopeOf(name: String) = connection(name).scope
+
+    @Test fun purgeKeepsTextHoldingRowsAndDraftsOfOtherScopes() = runBlocking {
+        val s = scopeOf("s"); val old = scopeOf("old")
+        dao.put(listOf(CachedInsight(s, "a", "{}", true, false), CachedInsight(old, "b", "{}", true, false)))
+        dao.putDraft(NoteDraft(s, "t", "l", "keep")); dao.putDraft(NoteDraft(old, "t", "l", "UNSENT"))
+        dao.putJob(note("mine", "queued", "body", scope = s))
+        dao.putJob(note("q", "queued", "UNSENT", scope = old)); dao.putJob(note("f", "failed", "UNSENT", scope = old))
+        dao.putJob(note("done", "completed", scope = old)); dao.putJob(PendingIngest(old, "url", "https://a.example", status = "Completed"))
+        assertEquals(setOf("done", "url"), repositoryFor("s").purgeInactiveScopes().map { it.id }.toSet())
+        assertNull(dao.get(old, "b")); assertNotNull(dao.get(s, "a"))
+        assertNotNull(dao.draft(old)); assertNotNull(dao.draft(s))
+        assertNotNull(dao.job(old, "q")); assertNotNull(dao.job(old, "f")); assertNotNull(dao.job(s, "mine"))
+        assertNull(dao.job(old, "done")); assertNull(dao.job(old, "url"))
+    }
+
+    @Test fun mistypedTokenAToBToAKeepsUnsentNoteText() = runBlocking {
+        val a = scopeOf("a")
+        dao.putDraft(NoteDraft(a, "t", "l", "DRAFT")); dao.putJob(note("n", "waiting", "UNSENT", scope = a))
+        repositoryFor("b").purgeInactiveScopes()
+        assertEquals("UNSENT", dao.job(a, "n")?.text); assertEquals("DRAFT", dao.draft(a)?.text)
+        repositoryFor("a").purgeInactiveScopes()
+        assertEquals("UNSENT", dao.job(a, "n")?.text); assertEquals("DRAFT", dao.draft(a)?.text)
+    }
+
+    @Test fun aPurgeThatIsNoLongerCurrentChangesNothing() = runBlocking {
+        val a = scopeOf("a")
+        dao.put(listOf(CachedInsight(a, "x", "{}", true, false)))
+        assertEquals(emptyList<PendingIngest>(), repositoryFor("b").purgeInactiveScopes { false })
+        assertNotNull(dao.get(a, "x"))
     }
 
     @Test fun otherHoldersCountsRowsSharingAServerJob() = runBlocking {

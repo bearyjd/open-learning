@@ -11,6 +11,12 @@ fun isCompletedState(status: String) = status.lowercase() in COMPLETED_STATES
 /** A completed note has nothing left to cancel: forgetting its ideas is the way to remove it. */
 fun PendingIngest.canRemove() = isNoteJob() && !isCompletedState(status)
 
+/** After a scope change only completed rows holding no text go; a row with unsent text is kept for its own account. */
+fun PendingIngest.purgeableAfterScopeChange() = text == null && isCompletedState(status)
+
+/** A purge belongs to the connection that started it; a later switch (A to B to A) makes it stale. */
+fun shouldRunPurge(activeScope: String?, purgeScope: String) = activeScope == purgeScope
+
 /** 404 and 409 on an existing server job both mean the server no longer has it. */
 fun isJobGone(code: Int?) = code == 404 || code == 409
 

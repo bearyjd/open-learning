@@ -85,8 +85,10 @@ service is replaced with controlled responses. Its six cases cover:
   duplicate URL submission.
 - A late feed response from the previous account stays in that account's cache
   and never appears in the new account's UI.
-- Work for a different account pauses; reconnecting the original account and
-  retrying polls the existing job without resubmitting the URL.
+- Work for a different account is hidden and does not run; reconnecting the original
+  account resumes it, and an existing server job is polled without resubmitting the
+  URL. Switching accounts deletes the old cards and completed rows only; unsent note
+  text and drafts are kept.
 - Tutor messages and source citations render, recall answers stay hidden until
   revealed, and a remembered rating is sent before the due queue updates.
 
@@ -347,9 +349,16 @@ Written but not run: `NoteAcceptanceTest` (offline queue posts once, worker inpu
 text cleared after completion, 413/422/429 messages, no link nodes on notes, forget
 cancel/confirm/offline, remove before submit, draft after `recreate()`), the Room
 `MigrationTest` 1 to 2, `DatabaseHygieneTest` (secure_delete reads back 1, the WAL is 0 bytes after
-`wal_checkpoint(TRUNCATE)`, completed-note and stale-card deletion, other-scope purge, shared server
+`wal_checkpoint(TRUNCATE)`, completed-note and stale-card deletion, other-scope purge keeping unsent text and drafts, the mistyped-token A to B to A case, a stale purge doing nothing, shared server
 job count, `@Update` not resurrecting a removed row) and `scripts/android_notes.py` (mock backend,
 uiautomator XML only).
+
+CI (`.github/workflows/ci.yml`) runs `assembleDebug testDebugUnitTest lintDebug` and only assembles the
+androidTest APK, so every instrumented test (including `DatabaseHygieneTest`) is compile-only until run
+on a device. JVM-tested: the purge predicate, the stale-purge decision, redacted `toString`, retry and
+conflict plans. Instrumented only, not yet run: Room purge SQL and transactions, the WAL checkpoint,
+`ViewModel` wiring (purge job cancel on reconnect, `removeNoteJob`, `forgetNote`). Forgetting a note
+still deletes all completed note rows of that connection (accepted over-deletion).
 
 Not verified: any device behavior, the real backend with the app, process death of the
 editor on hardware, Compose text-field performance at 60,000 characters, an actual backup or

@@ -154,8 +154,13 @@ all rows, not only the feed or library) and, because a job has no document id to
 completed note entry in Recent imports for that connection. After each refresh, cached cards that
 are neither saved nor in the feed are deleted (offline detail for search or review items is lost;
 they are fetched again online). When a different server or token is connected, the previous
-connection's cached cards, draft and queued imports (including unsent note text) are deleted from
-the device. An in-flight submission cancelled at the wrong moment can still leave a note on the
+connection's cached cards and its completed import rows are deleted at once. Unsent note text (queued,
+failed, waiting, paused or running notes) and note drafts are never deleted by that purge, so a
+mistyped token cannot destroy a note: those rows stay on the device, hidden and not sent, and
+reconnecting the original account resumes them. Remove (or forgetting) is the way to clear them. The
+cards are purged immediately, not after a first successful call on the new connection. Forgetting a
+note deletes every completed note row of that connection, not only the forgotten note's (known
+over-deletion: a job row has no document id). An in-flight submission cancelled at the wrong moment can still leave a note on the
 server whose response never arrived; the server deduplicates by hash and Forget removes it.
 Open risks: the 60,000-character limit is
 hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (a 422 keeps the

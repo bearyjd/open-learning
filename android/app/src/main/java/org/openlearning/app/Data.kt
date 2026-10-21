@@ -6,8 +6,10 @@ import androidx.room.*
 import com.google.gson.Gson
 import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
 import retrofit2.Response
@@ -103,9 +105,7 @@ interface LearningDao {
     suspend fun deleteCompletedNotes(scope: String, states: List<String>): Int
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND saved = 0 AND inFeed = 0") suspend fun pruneCards(scope: String): Int
     @Query("DELETE FROM CachedInsight WHERE scope != :scope") suspend fun deleteCardsOutside(scope: String): Int
-    @Query("DELETE FROM NoteDraft WHERE scope != :scope") suspend fun deleteDraftsOutside(scope: String): Int
     @Query("SELECT * FROM PendingIngest WHERE scope != :scope") suspend fun jobsOutside(scope: String): List<PendingIngest>
-    @Query("DELETE FROM PendingIngest WHERE scope != :scope") suspend fun deleteJobsOutside(scope: String): Int
     @Query("SELECT * FROM NoteDraft WHERE scope = :scope") suspend fun draft(scope: String): NoteDraft?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDraft(draft: NoteDraft)
     @Query("DELETE FROM NoteDraft WHERE scope = :scope") suspend fun deleteDraft(scope: String)
@@ -125,16 +125,16 @@ const val CHECKPOINT_FAILED = "WAL checkpoint did not complete"
 fun checkpointSucceeded(busy: Int?) = busy == 0
 /**
  * Truncates the WAL (shortens the file, it does not overwrite it). Throws a fixed message when a reader keeps
- * the checkpoint busy. Never run it inside a transaction.
+ * the checkpoint busy. Never run it inside a transaction. Runs on the IO dispatcher: it blocks on disk and locks.
  */
-fun LearningDatabase.checkpoint() {
+suspend fun LearningDatabase.checkpoint() = withContext(Dispatchers.IO) {
     openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use {
         check(checkpointSucceeded(if (it.moveToFirst()) it.getInt(0) else null)) { CHECKPOINT_FAILED }
     }
 }
 /** For callers whose real work already succeeded: log a fixed string (never row text) and carry on. */
-fun LearningDatabase.checkpointBestEffort() {
-    try { checkpoint() } catch (error: Exception) { android.util.Log.w("OpenLearning", CHECKPOINT_FAILED) }
+suspend fun LearningDatabase.checkpointBestEffort() {
+    try { checkpoint() } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (error: Exception) { android.util.Log.w("OpenLearning", CHECKPOINT_FAILED) }
 }
 
 val apiGson: Gson = GsonBuilder().setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()
@@ -195,12 +195,19 @@ class LearningRepository(val config: Connection, private val database: LearningD
         database.checkpointBestEffort()
         return ids
     }
-    /** Drops cards, drafts and queued imports left by a previous server or token. Returns the removed jobs so their work can be cancelled. */
-    suspend fun purgeInactiveScopes(): List<PendingIngest> {
+    /**
+     * Drops the cards and the completed, text-free import rows of other scopes. Unsent note text (queued, failed,
+     * waiting or paused rows) and note drafts of other scopes are never deleted: they stay hidden until that account
+     * is connected again. Does nothing when [isCurrent] says this connection is no longer the active one (A to B to A).
+     * Returns the removed rows so their work can be cancelled.
+     */
+    suspend fun purgeInactiveScopes(isCurrent: () -> Boolean = { true }): List<PendingIngest> {
         val stale = database.withTransaction {
-            val jobs = dao.jobsOutside(config.scope)
-            dao.deleteCardsOutside(config.scope); dao.deleteDraftsOutside(config.scope); dao.deleteJobsOutside(config.scope)
-            jobs
+            if (!isCurrent()) return@withTransaction emptyList()
+            val rows = dao.jobsOutside(config.scope).filter { it.purgeableAfterScopeChange() }
+            dao.deleteCardsOutside(config.scope)
+            rows.forEach { dao.deleteJob(it.scope, it.id) }
+            rows
         }
         database.checkpointBestEffort()
         return stale

@@ -73,4 +73,26 @@ class NoteLogicTest {
         assertTrue(NoteDraftFields().isEmpty)
         assertFalse(NoteDraftFields(label = "x").isEmpty)
     }
+    @Test fun scopeChangePurgesOnlyCompletedRowsWithoutText() {
+        assertTrue(note.copy(text = null, status = "completed").purgeableAfterScopeChange())
+        assertTrue(note.copy(text = null, status = "Done").purgeableAfterScopeChange())
+        assertTrue(PendingIngest("s", "u", "https://a.example", status = "completed").purgeableAfterScopeChange())
+        for (status in listOf("queued", "running", "waiting", "paused", "failed", "error", "cancelled")) {
+            assertFalse(status, note.copy(status = status).purgeableAfterScopeChange())
+        }
+        // Text always wins, even on a row that claims to be completed.
+        assertFalse(note.copy(status = "completed").purgeableAfterScopeChange())
+    }
+    @Test fun aStalePurgeNeverRunsAfterReconnectingAnotherScope() {
+        assertTrue(shouldRunPurge("b", "b"))
+        assertFalse("A to B to A: the purge started for B must not run while A is active", shouldRunPurge("a", "b"))
+        assertFalse(shouldRunPurge(null, "b"))
+    }
+    @Test fun noteBodiesStayOutOfToString() {
+        val secret = "SECRET-BODY"
+        assertFalse(secret in NoteDraftFields("t", "l", secret).toString())
+        assertFalse(secret in PendingIngest("s", "i", "", kind = "note", text = secret).toString())
+        assertFalse(secret in NoteDraft("s", "t", "l", secret).toString())
+        assertFalse(secret in NoteDraftFields("t", "l", secret).copy(title = "x").toString())
+    }
 }
