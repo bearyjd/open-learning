@@ -79,6 +79,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private suspend fun submitOrPoll(repository: LearningRepository, row: PendingIngest): IngestJob =
         if (row.jobId == null) repository.api.ingestText(TextRequest(row.title.orEmpty(), row.text.orEmpty(), row.label)) else repository.api.job(row.jobId)
     companion object {
+        fun cancel(context: Context, scope: String, id: String) { WorkManager.getInstance(context).cancelUniqueWork("ingest-$scope-$id") }
         private val COMPLETED = listOf("completed", "complete", "succeeded", "success", "done")
         fun schedule(context: Context, scope: String, id: String, replace: Boolean = false) {
             val request = OneTimeWorkRequestBuilder<IngestWorker>()

@@ -110,7 +110,7 @@ fun LearningDatabase.checkpoint() { openHelper.writableDatabase.query("PRAGMA wa
 
 val apiGson: Gson = GsonBuilder().setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()
 
-class LearningRepository(val config: Connection, private val database: LearningDatabase) {
+class LearningRepository(val config: Connection, private val database: LearningDatabase, private val forgotten: ForgottenNotes = ForgottenNotes()) {
     private val gson: Gson = apiGson
     private val dao = database.dao()
     val api: LearningApi = Retrofit.Builder().baseUrl(config.server)
@@ -122,6 +122,7 @@ class LearningRepository(val config: Connection, private val database: LearningD
     val jobs = dao.jobs(config.scope)
     fun decode(row: CachedInsight): Insight = gson.fromJson(row.payload, Insight::class.java).copy(saved = row.saved)
     suspend fun remember(insight: Insight, inFeed: Boolean? = null) {
+        if (forgotten.blocks(config.scope, insight)) return
         val previous = dao.get(config.scope, insight.id)
         dao.put(listOf(CachedInsight(config.scope, insight.id, gson.toJson(insight), insight.saved, inFeed ?: previous?.inFeed ?: false)))
     }
@@ -146,11 +147,11 @@ class LearningRepository(val config: Connection, private val database: LearningD
         return row
     }
     /** Deletes every cached row of this scope that belongs to the document, scanning all rows (not the feed/library filter). */
-    suspend fun purgeDocument(documentId: String): Int {
+    suspend fun purgeDocument(documentId: String): List<String> {
         val ids = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
         database.withTransaction { if (ids.isNotEmpty()) dao.deleteInsights(config.scope, ids) }
         database.checkpoint()
-        return ids.size
+        return ids
     }
     suspend fun save(item: Insight) { remember(api.save(item.id)) }
     suspend fun dismiss(item: Insight) { api.dismiss(item.id); dao.dismiss(config.scope, item.id) }
@@ -159,7 +160,9 @@ class AppContainer(context: Context) {
     val credentials = Credentials(context)
     val database = Room.databaseBuilder(context, LearningDatabase::class.java, "learning.db")
         .addMigrations(MIGRATION_1_2).addCallback(SecureDeleteCallback).build()
-    fun repository(connection: Connection) = LearningRepository(connection, database)
+    /** Notes being forgotten: in-flight refreshes must not write their cards back. */
+    val forgotten = ForgottenNotes()
+    fun repository(connection: Connection) = LearningRepository(connection, database, forgotten)
 }
 class LearningApplication : Application() {
     val container by lazy { AppContainer(this) }
