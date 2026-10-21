@@ -79,11 +79,13 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private suspend fun submitOrPoll(repository: LearningRepository, row: PendingIngest): IngestJob =
         if (row.jobId == null) repository.api.ingestText(TextRequest(row.title.orEmpty(), row.text.orEmpty(), row.label)) else repository.api.job(row.jobId)
     companion object {
+        /** Identifiers only: note text must never enter WorkManager's unencrypted, size-limited store. */
+        fun input(scope: String, id: String): Data = workDataOf("scope" to scope, "id" to id)
         fun cancel(context: Context, scope: String, id: String) { WorkManager.getInstance(context).cancelUniqueWork("ingest-$scope-$id") }
         private val COMPLETED = listOf("completed", "complete", "succeeded", "success", "done")
         fun schedule(context: Context, scope: String, id: String, replace: Boolean = false) {
             val request = OneTimeWorkRequestBuilder<IngestWorker>()
-                .setInputData(workDataOf("scope" to scope, "id" to id))
+                .setInputData(input(scope, id))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .addTag("ingest").build()
