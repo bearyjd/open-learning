@@ -98,8 +98,8 @@ same text again afterwards creates new rows.
 Limits of forgetting: it deletes live data only. Database backups and snapshots
 still contain the note until they are rotated. PostgreSQL leaves dead tuples until
 vacuum and may keep the text in WAL; SQLite leaves free pages in the file until
-`VACUUM`. The Android app's Room cache may still hold cards from the note until it
-refreshes or the app data is cleared. Stored daily feeds (all past `daily_feeds`
+`VACUUM`. Another Android install's Room cache may still hold cards from the note until it
+refreshes or the app data is cleared; forgetting from the app itself purges that device's cards. Stored daily feeds (all past `daily_feeds`
 rows, not only today's) may keep stale insight ids, which are random UUIDs and are
 filtered out when read.
 
@@ -122,6 +122,24 @@ Known limitations (notes): each accepted note write stores up to about
 and the failed-text retention above. Concurrent identical notes can each call the model
 once before the first import lands; model spend is bounded by the existing
 spending ledger.
+
+Android note text (E2a): a note you write or import lives only in the app's Room
+database on the device, in two places: the editor draft (`NoteDraft`) and, once you
+add it, the queued job row (`PendingIngest.text`). The text is never put in
+WorkManager input data, logs, `toString()` output, saved instance state, or uiautomator
+evidence kept in the repository. The job row's text is cleared when the job completes or
+is cancelled, and the draft is deleted on submit. Room runs with `PRAGMA secure_delete=ON`
+and the app checkpoints (`wal_checkpoint(TRUNCATE)`) after clearing note text so freed
+pages and the write-ahead log are overwritten. This is not flash erase: wear levelling
+and filesystem journals can keep old blocks, and full-device encryption is the real
+protection. A failed or waiting note keeps its text so you can retry; use Remove on the
+job row to delete it (this also deletes the server job). Forgetting a note needs a
+connection to your server; nothing is cleared locally unless the server confirms.
+Open risks: `allowBackup` and Android 12+ `dataExtractionRules` are unchecked, so
+device backups or transfers may include the Room file; the 60,000-character limit is
+hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (a 422 keeps the
+text so you can Remove it); and resubmitting the same text under a new title keeps the
+first title because the server deduplicates by content hash.
 
 Normal API access logs are disabled in deployment because URLs and query strings
 can expose reading interests. Do not enable model prompt logging on shared
