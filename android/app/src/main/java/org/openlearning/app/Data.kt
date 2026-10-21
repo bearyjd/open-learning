@@ -95,6 +95,17 @@ interface LearningDao {
     // Returns the rows changed: 0 means the user removed the job, so it must not be resurrected.
     @Update suspend fun updateJob(job: PendingIngest): Int
     @Query("DELETE FROM PendingIngest WHERE scope = :scope AND id = :id") suspend fun deleteJob(scope: String, id: String)
+    // How many other rows reference this server job (the server dedups by hash, so ids can be shared).
+    @Query("SELECT COUNT(*) FROM PendingIngest WHERE jobId = :jobId AND NOT (scope = :scope AND id = :id)")
+    suspend fun otherHolders(jobId: String, scope: String, id: String): Int
+    // Completed notes hold no text but still show a title; forgetting must not leave them behind.
+    @Query("DELETE FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND text IS NULL AND lower(status) IN (:states)")
+    suspend fun deleteCompletedNotes(scope: String, states: List<String>): Int
+    @Query("DELETE FROM CachedInsight WHERE scope = :scope AND saved = 0 AND inFeed = 0") suspend fun pruneCards(scope: String): Int
+    @Query("DELETE FROM CachedInsight WHERE scope != :scope") suspend fun deleteCardsOutside(scope: String): Int
+    @Query("DELETE FROM NoteDraft WHERE scope != :scope") suspend fun deleteDraftsOutside(scope: String): Int
+    @Query("SELECT * FROM PendingIngest WHERE scope != :scope") suspend fun jobsOutside(scope: String): List<PendingIngest>
+    @Query("DELETE FROM PendingIngest WHERE scope != :scope") suspend fun deleteJobsOutside(scope: String): Int
     @Query("SELECT * FROM NoteDraft WHERE scope = :scope") suspend fun draft(scope: String): NoteDraft?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDraft(draft: NoteDraft)
     @Query("DELETE FROM NoteDraft WHERE scope = :scope") suspend fun deleteDraft(scope: String)
@@ -105,10 +116,26 @@ interface LearningDao {
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
 
 // Overwrite deleted pages and flush the WAL so cleared note text does not linger on disk.
+// Cursors are lazy: the statement only runs once the cursor is stepped, so step it before closing.
 val SecureDeleteCallback = object : RoomDatabase.Callback() {
-    override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.query("PRAGMA secure_delete=ON").close() }
+    override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.query("PRAGMA secure_delete=ON").use { it.moveToFirst() } }
 }
-fun LearningDatabase.checkpoint() { openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").close() }
+const val CHECKPOINT_FAILED = "WAL checkpoint did not complete"
+/** wal_checkpoint returns (busy, log, checkpointed); busy 0 means the whole WAL was folded in and truncated. */
+fun checkpointSucceeded(busy: Int?) = busy == 0
+/**
+ * Truncates the WAL (shortens the file, it does not overwrite it). Throws a fixed message when a reader keeps
+ * the checkpoint busy. Never run it inside a transaction.
+ */
+fun LearningDatabase.checkpoint() {
+    openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use {
+        check(checkpointSucceeded(if (it.moveToFirst()) it.getInt(0) else null)) { CHECKPOINT_FAILED }
+    }
+}
+/** For callers whose real work already succeeded: log a fixed string (never row text) and carry on. */
+fun LearningDatabase.checkpointBestEffort() {
+    try { checkpoint() } catch (error: Exception) { android.util.Log.w("OpenLearning", CHECKPOINT_FAILED) }
+}
 
 val apiGson: Gson = GsonBuilder().setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()
 
@@ -130,30 +157,53 @@ class LearningRepository(val config: Connection, private val database: LearningD
     }
     suspend fun refreshFeed() {
         val items = api.feed()
-        database.withTransaction {
+        val dropped = database.withTransaction {
             dao.clearFeed(config.scope)
             for (item in items) remember(item, true)
+            dao.pruneCards(config.scope)
         }
+        if (dropped > 0) database.checkpointBestEffort()
     }
     suspend fun refreshLibrary() {
         val items = api.library()
-        database.withTransaction {
+        val dropped = database.withTransaction {
             dao.clearSaved(config.scope)
             for (item in items) remember(item.copy(saved = true))
+            dao.pruneCards(config.scope)
         }
+        if (dropped > 0) database.checkpointBestEffort()
     }
     /** One transaction: queue the note and drop the draft, so a crash never loses or duplicates it. */
     suspend fun queueNote(note: ValidNote): PendingIngest {
         val row = PendingIngest(config.scope, java.util.UUID.randomUUID().toString(), "", kind = "note", title = note.title, label = note.label, text = note.text)
         database.withTransaction { dao.putJob(row); dao.deleteDraft(config.scope) }
+        database.checkpointBestEffort()
         return row
     }
-    /** Deletes every cached row of this scope that belongs to the document, scanning all rows (not the feed/library filter). */
+    /**
+     * Deletes every cached row of this scope that belongs to the document, scanning all rows (not the feed/library
+     * filter). The job response has no document id, so completed note rows cannot be linked to one document:
+     * all completed note rows of this scope go too, so no title outlives the forgotten note.
+     */
     suspend fun purgeDocument(documentId: String): List<String> {
-        val ids = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
-        database.withTransaction { if (ids.isNotEmpty()) dao.deleteInsights(config.scope, ids) }
-        database.checkpoint()
+        val ids = database.withTransaction {
+            val found = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
+            if (found.isNotEmpty()) dao.deleteInsights(config.scope, found)
+            dao.deleteCompletedNotes(config.scope, COMPLETED_STATES)
+            found
+        }
+        database.checkpointBestEffort()
         return ids
+    }
+    /** Drops cards, drafts and queued imports left by a previous server or token. Returns the removed jobs so their work can be cancelled. */
+    suspend fun purgeInactiveScopes(): List<PendingIngest> {
+        val stale = database.withTransaction {
+            val jobs = dao.jobsOutside(config.scope)
+            dao.deleteCardsOutside(config.scope); dao.deleteDraftsOutside(config.scope); dao.deleteJobsOutside(config.scope)
+            jobs
+        }
+        database.checkpointBestEffort()
+        return stale
     }
     suspend fun save(item: Insight) { remember(api.save(item.id)) }
     suspend fun dismiss(item: Insight) { api.dismiss(item.id); dao.dismiss(config.scope, item.id) }

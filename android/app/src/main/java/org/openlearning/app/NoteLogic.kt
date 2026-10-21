@@ -57,7 +57,7 @@ fun noteRetryPlan(job: PendingIngest): NoteRetry = when {
     else -> NoteRetry.Requeue
 }
 
-/** The server refused the retry (409): resubmit from local text as a fresh job, if the text still exists. */
+/** The server no longer has the job (404/409): resubmit from local text as a fresh job, if the text still exists. */
 fun noteConflictPlan(job: PendingIngest): PendingIngest? =
     if (job.text == null) null else job.copy(jobId = null, status = "queued", error = null)
 

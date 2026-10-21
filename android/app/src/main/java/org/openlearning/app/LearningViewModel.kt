@@ -36,6 +36,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
+    // A picked file waiting for the person to confirm replacing the text they typed. Held in memory only.
+    var pendingFile by mutableStateOf<NoteFileResult.Loaded?>(null); private set
     private var draftReady = false
     private val draftLock = Mutex()
     init {
@@ -49,9 +51,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
-                draftReady = false; draft = NoteDraftFields(); noteMessage = null
+                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
+                    launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
@@ -73,6 +76,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 }
             }
         }
+    }
+    /** Another server or token was connected: its cards, drafts and queued imports are no longer reachable, so delete them. */
+    private suspend fun purgeInactiveScopes(repository: LearningRepository) {
+        try {
+            repository.purgeInactiveScopes().forEach { IngestWorker.cancel(getApplication(), it.scope, it.id) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not purge data from a previous connection") }
     }
     private fun restoreTutor(repository: LearningRepository) {
         val saved = memory.recall(repository.config.scope) ?: return
@@ -147,7 +157,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 val retry = repository.api.retryJob(plan.jobId)
                 current.copy(jobId = retry.id, status = retry.status, error = null)
             } catch (conflict: HttpException) {
-                if (conflict.code() != 409) throw conflict
+                if (!isJobGone(conflict.code())) throw conflict
                 noteConflictPlan(current) ?: expired
             }
         }
@@ -170,7 +180,11 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             if (fields.isEmpty) dao.deleteDraft(scope) else dao.putDraft(NoteDraft(scope, fields.title, fields.label, fields.text))
         }
     }
+    /** Persists the draft now (the editor calls this on stop) instead of waiting for the debounce. */
+    fun flushDraft() { viewModelScope.launch { saveDraft(draft) } }
     fun editDraft(next: NoteDraftFields) { draft = next; noteMessage = null }
+    fun applyPendingFile() { pendingFile?.let { draft = draft.withFile(it); noteMessage = null }; pendingFile = null }
+    fun discardPendingFile() { pendingFile = null }
     fun clearNoteMessage() { noteMessage = null }
     /** Returns true when the note was accepted for queueing, so the editor can close. */
     fun submitNote(): Boolean {
@@ -211,7 +225,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 catch (error: Exception) { NoteFileResult.Rejected("Could not open that file.") }
             }
             when (result) {
-                is NoteFileResult.Loaded -> { draft = draft.copy(title = draft.title.ifBlank { result.title }, text = result.text); noteMessage = null }
+                is NoteFileResult.Loaded -> when (filePlan(draft)) {
+                    FilePlan.Apply -> { draft = draft.withFile(result); noteMessage = null }
+                    FilePlan.ConfirmReplace -> { pendingFile = result; noteMessage = null }
+                }
                 is NoteFileResult.Rejected -> noteMessage = result.message
             }
         }
@@ -238,21 +255,27 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             }
         }
     }
-    /** Cancels the worker, re-reads the row (it may have just submitted), drops the server job, then the row. */
+    /**
+     * Cancels the worker and waits (bounded) for it to stop, re-reads the row (it may have just submitted), drops the
+     * server job unless another row shares it, then the row. Completed notes are removed by forgetting instead.
+     */
     fun removeNoteJob(job: PendingIngest) {
         val repository = repo ?: return
-        if (job.scope != repository.config.scope || !job.isNoteJob()) return
+        if (job.scope != repository.config.scope || !job.canRemove()) return
         viewModelScope.launch {
             IngestWorker.cancel(getApplication(), job.scope, job.id)
+            IngestWorker.awaitStopped(getApplication(), job.scope, job.id)
             val dao = container.database.dao()
             val current = dao.job(job.scope, job.id) ?: return@launch
             try {
                 current.jobId?.let { id ->
-                    val response = repository.api.deleteJob(id)
-                    if (!response.isGone()) throw HttpException(response)
+                    if (mayDeleteServerJob(id, dao.otherHolders(id, job.scope, job.id))) {
+                        val response = repository.api.deleteJob(id)
+                        if (!response.isGone()) throw HttpException(response)
+                    }
                 }
                 dao.deleteJob(job.scope, job.id)
-                container.database.checkpoint()
+                container.database.checkpointBestEffort()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 val message = forgetFailureMessage(error, "the job was not removed")

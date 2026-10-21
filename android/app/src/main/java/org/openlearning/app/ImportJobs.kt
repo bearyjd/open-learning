@@ -21,7 +21,7 @@ internal fun ImportJobs(jobs: List<PendingIngest>, model: LearningViewModel) {
                     job.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Row {
                         if (job.canRetry()) TextButton(onClick = { model.retryImport(job) }) { Text("Retry import") }
-                        if (job.isNoteJob()) TextButton(onClick = { model.removeNoteJob(job) }) { Text("Remove note") }
+                        if (job.canRemove()) TextButton(onClick = { model.removeNoteJob(job) }) { Text("Remove note") }
                     }
                 }
             }
@@ -36,7 +36,7 @@ internal fun ForgetNote(item: Insight, model: LearningViewModel) {
     if (confirming) AlertDialog(
         onDismissRequest = { confirming = false },
         title = { Text("Forget this note?") },
-        text = { Text("This deletes the note and the ideas made from it from your server and this device. It needs a connection and can't be undone.") },
+        text = { Text("This deletes the note and the ideas made from it from your server and this device. It also clears every completed note entry from Recent imports, because those entries can't be matched to one note. It needs a connection and can't be undone.") },
         confirmButton = { TextButton(onClick = { confirming = false; model.forgetNote(item) }) { Text("Forget") } },
         dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
     )
