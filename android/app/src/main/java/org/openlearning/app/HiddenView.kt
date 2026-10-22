@@ -8,7 +8,7 @@ package org.openlearning.app
 fun ScreenState.withoutHidden(hidden: Set<String>): ScreenState {
     if (hidden.isEmpty()) return this
     fun gone(item: Insight) = item.isHiddenBy(hidden)
-    fun goneId(documentId: String?) = !documentId.isNullOrBlank() && documentId in hidden
+    fun goneId(documentId: String?) = !documentId.isNullOrBlank() && hidden.hides(documentId)
     val selectedGone = selected?.let(::gone) == true
     val sourceGone = reviewSource?.let(::gone) == true
     val dropReview = { review: Review -> goneId(review.docId()) || goneId(reviewDocs[review.insightId]) || (sourceGone && review.insightId == reviewSource?.id) }

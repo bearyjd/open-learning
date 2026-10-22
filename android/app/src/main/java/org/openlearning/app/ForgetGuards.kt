@@ -27,6 +27,9 @@ fun validForgetDocumentId(id: String) = id.length in 1..FORGET_ID_MAX_LENGTH && 
 /** A blank id is as invalid as a malformed one: the caller must see a failure, never an empty "success". */
 fun requireForgetDocumentId(id: String) { if (!validForgetDocumentId(id)) throw InvalidForgetIdException() }
 
+/** Validates, then lowercases: ids are stored and compared in lower case, so "ABC" and "abc" are one note. */
+fun normalizedForgetDocumentId(id: String): String { requireForgetDocumentId(id); return id.lowercase() }
+
 class InvalidForgetIdException : IllegalArgumentException("Invalid document id")
 
 const val FORGET_INVALID_ID_MESSAGE =
@@ -65,16 +68,16 @@ suspend fun runBestEffort(vararg steps: suspend () -> Unit): Int {
 }
 
 /** The confirmation cleanup repeats only what is certain: rows linked to the document. The title fallback runs once, at forget time. */
-fun linkedRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String) = completedNoteRows.filter { it.documentId == documentId }
+fun linkedRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String) = completedNoteRows.filter { it.documentId.equals(documentId, ignoreCase = true) }
 
 /** A malformed cached payload cannot be matched to a document; null instead of an exception that would roll the forget back. */
 fun documentIdOfPayload(payload: String): String? =
-    try { apiGson.fromJson(payload, Insight::class.java)?.documentId } catch (error: JsonParseException) { null }
+    try { apiGson.fromJson(payload, Insight::class.java)?.documentId?.lowercase() } catch (error: JsonParseException) { null }
 
-fun Insight.isHiddenBy(hidden: Set<String>) = documentId.isNotBlank() && documentId in hidden
+fun Insight.isHiddenBy(hidden: Set<String>) = documentId.isNotBlank() && hidden.hides(documentId)
 
 /** A completed import row names the document it created; a row of a forgotten document is never shown or kept. */
-fun PendingIngest.isHiddenBy(hidden: Set<String>) = !documentId.isNullOrBlank() && documentId in hidden
+fun PendingIngest.isHiddenBy(hidden: Set<String>) = !documentId.isNullOrBlank() && hidden.hides(documentId)
 
 /**
  * Saves a worker's update of an import row unless its document is hidden, in ONE transaction: the hidden set is read and the
@@ -126,7 +129,7 @@ suspend fun resolveReviews(
             catch (error: Exception) { networkDown = true; null }
         } else null
         if (documentId != null) documents[review.insightId] = documentId
-        documentId != null && documentId !in hidden
+        documentId != null && !hidden.hides(documentId)
     }
     return ReviewView(shown, documents.filterKeys { key -> shown.any { it.insightId == key } })
 }

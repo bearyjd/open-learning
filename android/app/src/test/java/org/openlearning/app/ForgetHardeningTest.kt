@@ -144,4 +144,14 @@ class ForgetHardeningTest {
         assertThrows(InvalidForgetIdException::class.java) { requireForgetDocumentId("  ") }
         requireForgetDocumentId("123e4567-e89b-12d3-a456-426614174000")
     }
+    @Test fun idsAreLowercasedAtValidationAndMatchedCaseInsensitively() {
+        assertEquals("abc-123", normalizedForgetDocumentId("ABC-123"))
+        assertThrows(InvalidForgetIdException::class.java) { normalizedForgetDocumentId("") }
+        assertEquals(setOf("abc"), hiddenIds(listOf(PendingForget("s", "ABC", 1, FORGET_PENDING)), "s"))
+        val hidden = setOf("abc")
+        assertEquals(listOf("b"), listOf("ABC" to "a", "x" to "b").hideForgotten(hidden) { it.first }.map { it.second })
+        assertTrue(Insight(id = "i", documentId = "AbC").isHiddenBy(hidden))
+        assertTrue(PendingIngest("s", "j", "note", documentId = "ABC").isHiddenBy(hidden))
+        assertEquals("abc", documentIdOfPayload("""{"id":"i","document_id":"ABC"}"""))
+    }
 }

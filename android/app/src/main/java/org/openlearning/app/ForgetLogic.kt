@@ -62,15 +62,18 @@ fun forgetVerify404(serverIds: Set<String>?, complete: Boolean, documentId: Stri
 fun forgetCleanupFailed(attempt: Int): ForgetReplay = forgetReplay(null, attempt)
 
 /** Every row of the scope hides its note: pending, failed or confirmed. */
-fun hiddenIds(rows: List<PendingForget>, scope: String): Set<String> = rows.filter { it.scope == scope }.mapTo(HashSet()) { it.documentId }
+fun hiddenIds(rows: List<PendingForget>, scope: String): Set<String> = rows.filter { it.scope == scope }.mapTo(HashSet()) { it.documentId.lowercase() }
+
+/** [hidden] holds lower-case ids (see [hiddenIds]); the candidate is lowered before the lookup. */
+fun Set<String>.hides(documentId: String) = documentId.lowercase() in this
 
 /** The read-time filter shared by feed, library, search, review and the notes list. Blank ids are never hidden. */
 fun <T> List<T>.hideForgotten(hidden: Set<String>, documentId: (T) -> String?): List<T> =
-    if (hidden.isEmpty()) this else filterNot { documentId(it)?.let { id -> id.isNotBlank() && id in hidden } == true }
+    if (hidden.isEmpty()) this else filterNot { documentId(it)?.let { id -> id.isNotBlank() && hidden.hides(id) } == true }
 
 /** Queued, running or failed note imports already linked to the document: forgetting must stop and drop them. */
 fun activeRowsToCancel(linkedNoteRows: List<PendingIngest>, documentId: String): List<PendingIngest> =
-    linkedNoteRows.filter { it.documentId == documentId && it.isNoteJob() && !isCompletedState(it.status) }
+    linkedNoteRows.filter { it.documentId.equals(documentId, ignoreCase = true) && it.isNoteJob() && !isCompletedState(it.status) }
 
 enum class ForgetStart { RUN, LEAVE_PENDING }
 

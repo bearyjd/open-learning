@@ -11,7 +11,7 @@ fun ScreenState.withChatCleared(): ScreenState = copy(chat = emptyList(), chatBu
 
 /** Appends [reply]; a reply citing a hidden document is dropped entirely, with the question line it answers. */
 fun ScreenState.withReply(reply: ChatLine, hidden: Set<String>): ScreenState =
-    if (reply.citations.any { it.documentId.isNotBlank() && it.documentId in hidden }) copy(chat = if (chat.lastOrNull()?.role == "You") chat.dropLast(1) else chat)
+    if (reply.citations.any { it.documentId.isNotBlank() && hidden.hides(it.documentId) }) copy(chat = if (chat.lastOrNull()?.role == "You") chat.dropLast(1) else chat)
     else copy(chat = chat + reply)
 
 /** A chat request for a selected note that is hidden is never sent. */

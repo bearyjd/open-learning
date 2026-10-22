@@ -38,8 +38,8 @@ class ForgetQueue(
      * afterwards, because [resumePending] recovers an unscheduled row. Returns the purged card ids. An unsent draft or an
      * unlinked queued note has no document id, so it cannot be matched and is left alone.
      */
-    suspend fun forgetNoteOffline(scope: String, documentId: String, title: String? = null): List<String> {
-        requireForgetDocumentId(documentId)
+    suspend fun forgetNoteOffline(scope: String, rawDocumentId: String, title: String? = null): List<String> {
+        val documentId = normalizedForgetDocumentId(rawDocumentId)
         val active = mutableListOf<PendingIngest>()
         val purged = database.withTransaction {
             dao.putForget(PendingForget(scope, documentId, clock(), FORGET_PENDING))

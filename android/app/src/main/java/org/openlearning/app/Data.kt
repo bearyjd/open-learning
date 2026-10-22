@@ -137,7 +137,7 @@ interface LearningDao {
     @Query("SELECT * FROM PendingForget WHERE scope = :scope") suspend fun forgets(scope: String): List<PendingForget>
     @Query("SELECT * FROM PendingForget WHERE scope != :scope AND status != 'confirmed'") suspend fun forgetsOutside(scope: String): List<PendingForget>
     @Query("SELECT * FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun forget(scope: String, documentId: String): PendingForget?
-    @Query("SELECT documentId FROM PendingForget WHERE scope = :scope") suspend fun hiddenIds(scope: String): List<String>
+    @Query("SELECT lower(documentId) FROM PendingForget WHERE scope = :scope") suspend fun hiddenIds(scope: String): List<String>
     @Query("SELECT COUNT(*) FROM PendingForget WHERE scope = :scope AND status = 'pending'") fun pendingForgetCount(scope: String): Flow<Int>
     @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'failed' ORDER BY createdAt") fun failedForgets(scope: String): Flow<List<PendingForget>>
     @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'pending'") suspend fun pendingForgets(scope: String): List<PendingForget>
@@ -149,7 +149,7 @@ interface LearningDao {
     suspend fun deleteForgetIfFailed(scope: String, documentId: String): Int
     @Query("UPDATE PendingForget SET status = 'failed', error = :error WHERE scope = :scope AND documentId = :documentId AND status = 'pending'")
     suspend fun failForgetIfPending(scope: String, documentId: String, error: String): Int
-    @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND documentId = :documentId")
+    @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND lower(documentId) = lower(:documentId)")
     suspend fun linkedNoteRows(scope: String, documentId: String): List<PendingIngest>
 }
 @Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 3, exportSchema = true)

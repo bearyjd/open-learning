@@ -25,7 +25,7 @@ fun PendingIngest.purgeableAfterScopeChange() = text == null && isCompletedState
  * title residue can stay on the device. Those rows are only completed history; the server keeps the notes.
  */
 fun noteRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String, title: String? = null): List<PendingIngest> {
-    val linked = completedNoteRows.filter { it.documentId == documentId }
+    val linked = completedNoteRows.filter { it.documentId.equals(documentId, ignoreCase = true) }
     val unlinked = completedNoteRows.filter { it.documentId == null }
     val wanted = title?.let(::normalizedNoteTitle)
     val titled = if (wanted == null) emptyList() else unlinked.filter { normalizedNoteTitle(it.title) == wanted }
