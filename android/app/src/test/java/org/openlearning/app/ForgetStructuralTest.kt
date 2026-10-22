@@ -96,16 +96,19 @@ class ForgetStructuralTest {
     @Test fun fixedErrorStringsAreFour() { assertEquals(4, FORGET_FIXED_ERRORS.size) }
 
     // Source scans: the single-writer rule and the wiring that cannot run on the JVM.
+    /** Comments are removed first, so a mention in a KDoc or a line comment can never satisfy or trip a scan. */
+    private fun stripComments(text: String) = text.replace(Regex("(?s)/\\*.*?\\*/"), "").replace(Regex("(?m)//.*$"), "")
+    private fun code(file: File) = stripComments(file.readText())
     private fun source(name: String): String {
         val dirs = listOf("src/main/java/org/openlearning/app", "app/src/main/java/org/openlearning/app")
-        return File(dirs.first { File(it).isDirectory }, name).readText()
+        return code(File(dirs.first { File(it).isDirectory }, name))
     }
     private fun mainSources(): List<File> {
         val dir = File(listOf("src/main/java", "app/src/main/java").first { File(it).isDirectory })
         return dir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
     }
     @Test fun noInMemoryMarkerRemains() {
-        val offenders = mainSources().filter { Regex("""ForgottenNotes|markedUntilCommit|takePreviousServer""").containsMatchIn(it.readText()) }
+        val offenders = mainSources().filter { Regex("""ForgottenNotes|markedUntilCommit|takePreviousServer""").containsMatchIn(code(it)) }
         assertEquals(emptyList<File>(), offenders)
     }
     @Test fun confirmationWritesADurableRowInsteadOfDeleting() {
@@ -120,12 +123,19 @@ class ForgetStructuralTest {
         assertTrue(text.contains("serverPage("))
     }
 
+    // A text scan, NOT a runtime guarantee: the view model hands both queue hooks to the screen publisher.
+    @Test fun theViewModelWiresTheQueueHooksToThePublisher() {
+        val text = source("LearningViewModel.kt")
+        assertTrue("onHidden is not wired", Regex("""onHidden\s*=\s*publisher::purgeNow""").containsMatchIn(text))
+        assertTrue("onReleased is not wired", Regex("""onReleased\s*=\s*publisher::release""").containsMatchIn(text))
+    }
+
     // A text scan, NOT a runtime guarantee: every PendingForget row delete in the queue is followed by the release hook.
     @Test fun everyPendingForgetDeleteIsFollowedByTheReleaseHook() {
         val main = listOf("src/main/java/org/openlearning/app", "app/src/main/java/org/openlearning/app").first { File(it).isDirectory }
-        val callers = File(main).walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "Data.kt" && Regex("""\.deleteForgets?\(""").containsMatchIn(it.readText()) }.toList()
+        val callers = File(main).walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "Data.kt" && Regex("""\.deleteForgets?\(""").containsMatchIn(code(it)) }.toList()
         assertEquals(listOf("ForgetQueue.kt"), callers.map { it.name })
-        val text = callers.single().readText()
+        val text = code(callers.single())
         val calls = Regex("""\.deleteForgets?\(""").findAll(text).toList()
         assertEquals(2, calls.size)
         calls.forEach { call ->
