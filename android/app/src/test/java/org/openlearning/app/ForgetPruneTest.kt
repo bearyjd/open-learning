@@ -103,10 +103,32 @@ class ForgetPruneTest {
         assertEquals((0 until 12).mapTo(HashSet()) { "id-$it" }, result.ids)
     }
     @Test fun aScanOfAnEmptyListIsComplete() = runBlocking { assertTrue(scan(emptyList()).complete) }
-    @Test fun aScanThatEndsExactlyOnAFullPageIsNotComplete() = runBlocking { assertFalse(scan(notes(20)).complete) }
+    @Test fun aListThatEndsOnTheLastRowOfAPageIsStillCompleteWhenBudgetRemains() = runBlocking { assertTrue(scan(notes(17), maxPages = 6).complete) }
+    @Test fun aScanThatEndsExactlyOnAFullPageAtTheBudgetIsNotComplete() = runBlocking { assertFalse(scan(notes(17)).complete) }
     @Test fun aScanOverThePageBudgetIsNotCompleteAndKeepsWhatItRead() = runBlocking {
         val result = scan(notes(30))
         assertFalse(result.complete)
-        assertEquals(20, result.ids.size)
+        assertEquals(17, result.ids.size)
+    }
+    @Test fun aNoteDeletedFromAnEarlierPageMidScanMakesTheScanInconclusive() = runBlocking {
+        val all = notes(12).toMutableList()
+        var calls = 0
+        val result = scanNotes(5, 4) { l, o -> all.drop(o).take(l).also { if (++calls == 1) all.removeAt(1) } }
+        assertFalse(result.complete)
+    }
+    @Test fun aNoteAddedAtTheFrontMidScanMakesTheScanInconclusive() = runBlocking {
+        val all = notes(12).toMutableList()
+        var calls = 0
+        val result = scanNotes(5, 4) { l, o -> all.drop(o).take(l).also { if (++calls == 1) all.add(0, NoteListItem(documentId = "new")) } }
+        assertFalse(result.complete)
+    }
+    @Test fun aShrinkingListThatLeavesAnEmptyPageIsInconclusive() = runBlocking {
+        var calls = 0
+        val result = scanNotes(5, 4) { _, _ -> if (++calls == 1) notes(5) else emptyList() }
+        assertFalse(result.complete)
+    }
+    @Test fun aBoundaryRowWithoutAnIdIsInconclusive() = runBlocking {
+        val all = notes(5).dropLast(1) + NoteListItem(documentId = null)
+        assertFalse(scanNotes(5, 4) { l, o -> all.drop(o).take(l) }.complete)
     }
 }

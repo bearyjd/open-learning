@@ -45,23 +45,16 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         }
     }
 
-    /** Reads the notes list (up to [VERIFY_MAX_PAGES] pages) to check that a 404 means the note is really gone. */
+    /** Reads the whole notes list ([scanNotes]: pages of 500, snapshot checked) to confirm that a 404 means the note is really gone. */
     private suspend fun verify404(container: AppContainer, config: Connection, documentId: String): ForgetReplay {
-        val ids = HashSet<String>()
-        var complete = false
-        try {
+        val scan = try {
             val api = container.repository(config).api
-            for (page in 0 until VERIFY_MAX_PAGES) {
-                val items = api.notes(NOTES_PAGE_LIMIT, page * NOTES_PAGE_LIMIT)
-                ids += serverPage(items).ids
-                if (items.size < NOTES_PAGE_LIMIT) { complete = true; break }
-            }
+            scanNotes { limit, offset -> api.notes(limit, offset) }
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (error: Exception) { return forgetVerify404(null, false, documentId, runAttemptCount) }
-        return forgetVerify404(ids, complete, documentId, runAttemptCount)
+        return forgetVerify404(scan.ids, scan.complete, documentId, runAttemptCount)
     }
     companion object {
-        private const val VERIFY_MAX_PAGES = 5
         fun input(scope: String, documentId: String): Data = workDataOf("scope" to scope, "documentId" to documentId)
         /**
          * Enqueues the unique work and waits for WorkManager to accept it. Throws when the request cannot be built (an

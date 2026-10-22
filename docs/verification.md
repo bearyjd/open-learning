@@ -746,5 +746,14 @@ end to end on a device: the fixture ids are now uuid-shaped (`TestIds`) but the 
 scenario of `android_notes.py` now also writes `dropped-offline-attempts.json` (method and path of requests the mock dropped while
 offline) and `offline_dropped_attempts` in the results; the request log itself stays free of them.
 
+Known limitation of the offline forget (404 verification and the sweep). A 404 on the DELETE is accepted as "already gone" only after
+the whole notes list was read (pages of 500, up to 10 pages) and the note was not on it. While paging, each page after the first starts
+one row early and must open with the row the previous page ended on; if it does not (another device deleted or added a note mid-scan),
+the scan is inconclusive and the worker retries. With roughly 5000 or more notes the list cannot be read inside that budget, so a note
+the server really deleted (404) can never be confirmed: the worker fails closed, retries up to the attempt cap and the row ends as
+"gave up" (still hidden, with Retry and Stop trying). The same budget keeps confirmed tombstones from expiring for such accounts.
+Closing this needs a server endpoint that answers "does note X exist" (for example GET /notes/{id} with a distinct 404 body), not a
+bigger scan. Covered by `ForgetPruneTest` (`scanNotes`); never run against a real server.
+
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
