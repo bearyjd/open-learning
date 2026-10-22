@@ -21,7 +21,7 @@ class NoteLimitsTest {
     @Test fun fileCapIsFourBytesPerCharCappedAtOneMiB() {
         assertEquals(240_000, noteFileMaxBytes(DEFAULT_LIMITS))
         assertEquals(4_000, noteFileMaxBytes(effectiveLimits(Limits(maxDocumentChars = 1000, minTextChars = 10))))
-        assertEquals(1024 * 1024, noteFileMaxBytes(effectiveLimits(Limits(maxDocumentChars = 500_000))))
+        assertEquals(800_000, noteFileMaxBytes(effectiveLimits(Limits(maxDocumentChars = 500_000))))
         assertEquals(1024 * 1024, noteFileMaxBytes(EffectiveLimits(maxChars = Int.MAX_VALUE)))
     }
     @Test fun validationUsesServerLimits() {
@@ -41,10 +41,20 @@ class NoteLimitsTest {
         assertEquals("That file is larger than 4 KB.", (tooBig as NoteFileResult.Rejected).message)
         val tooLong = readNoteFile("a.txt", null, limits) { ByteArrayInputStream("a".repeat(1001).toByteArray()) }
         assertTrue((tooLong as NoteFileResult.Rejected).message.contains("1,000"))
-        assertEquals("That file is larger than 1 MB.", (readNoteFile("a.txt", 2_000_000, effectiveLimits(Limits(maxDocumentChars = 900_000))) { null } as NoteFileResult.Rejected).message)
+        assertEquals("That file is larger than 1 MB.", (readNoteFile("a.txt", 2_000_000, EffectiveLimits(maxChars = 900_000)) { null } as NoteFileResult.Rejected).message)
     }
     @Test fun counterShowsTheEffectiveLimit() {
         assertEquals("3 / 1,000", noteCounter("abc", 1000))
         assertEquals("3 / 60,000", noteCounter("abc"))
+    }
+    @Test fun hugeServerValuesAreClamped() {
+        val limits = effectiveLimits(Limits(Int.MAX_VALUE, Int.MAX_VALUE, Int.MAX_VALUE, 5_000_000))
+        assertEquals(LIMIT_CEILING_CHARS, limits.maxChars)
+        assertEquals(LIMIT_CEILING_CHARS, limits.minChars)
+        assertEquals(LIMIT_CEILING_FIELD, limits.maxTitle)
+        assertEquals(LIMIT_CEILING_FIELD, limits.maxLabel)
+        assertTrue(shareCap(limits) <= SHARE_HARD_CAP_CHARS)
+        assertEquals(LIMIT_CEILING_CHARS, effectiveLimits(Limits(maxDocumentChars = 200_001)).maxChars)
+        assertEquals(1, effectiveLimits(Limits(maxLabelChars = 1)).maxLabel)
     }
 }

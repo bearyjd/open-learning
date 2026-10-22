@@ -11,13 +11,17 @@ data class EffectiveLimits(
 
 val DEFAULT_LIMITS = EffectiveLimits()
 
-/** A missing, non-positive or contradictory (min above max) server value falls back to the default. */
+/** Hard ceilings: a hostile or broken server cannot make the app accept, read or share unbounded text. */
+const val LIMIT_CEILING_CHARS = 200_000
+const val LIMIT_CEILING_FIELD = 2_000
+
+/** A missing, non-positive or contradictory (min above max) server value falls back to the default; a huge one is clamped to its ceiling. */
 fun effectiveLimits(server: Limits?): EffectiveLimits {
-    fun pick(value: Int?, default: Int) = value?.takeIf { it > 0 } ?: default
-    val max = pick(server?.maxDocumentChars, NOTE_MAX_CHARS)
-    val min = pick(server?.minTextChars, NOTE_MIN_CHARS)
+    fun pick(value: Int?, default: Int, ceiling: Int) = (value?.takeIf { it > 0 } ?: default).coerceAtMost(ceiling)
+    val max = pick(server?.maxDocumentChars, NOTE_MAX_CHARS, LIMIT_CEILING_CHARS)
+    val min = pick(server?.minTextChars, NOTE_MIN_CHARS, LIMIT_CEILING_CHARS)
     val (maxChars, minChars) = if (min > max) NOTE_MAX_CHARS to NOTE_MIN_CHARS else max to min
-    return EffectiveLimits(maxChars, minChars, pick(server?.maxTitleChars, NOTE_MAX_TITLE), pick(server?.maxLabelChars, NOTE_MAX_LABEL))
+    return EffectiveLimits(maxChars, minChars, pick(server?.maxTitleChars, NOTE_MAX_TITLE, LIMIT_CEILING_FIELD), pick(server?.maxLabelChars, NOTE_MAX_LABEL, LIMIT_CEILING_FIELD))
 }
 
 const val NOTE_FILE_HARD_CAP_BYTES = 1024 * 1024

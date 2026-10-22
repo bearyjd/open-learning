@@ -1,6 +1,5 @@
 package org.openlearning.app
 
-import android.view.WindowManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,25 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-
-/**
- * FLAG_SECURE while composed (recents thumbnail and screenshots), restored to what it was on dispose.
- * The list has no inputs, so no autofill handling is needed.
- */
-@Composable
-internal fun SecureWindow() {
-    val view = LocalView.current
-    DisposableEffect(view) {
-        val window = view.context.activity()?.window
-        val had = window != null && window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0
-        window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        onDispose { if (!had) window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
-    }
-}
 
 /** "Your notes": titles and labels come from the server on each open and live in memory only, never in Room. */
 @Composable
