@@ -21,7 +21,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
@@ -281,21 +283,22 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         items(state.results, key = { it.id }) { InsightCard(it, model) }
     }
 }
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable private fun ConnectionDialog(connection: Connection?, model: LearningViewModel, onDismiss: () -> Unit) {
     var server by remember(connection?.scope) { mutableStateOf(connection?.server.orEmpty()) }
     var token by remember(connection?.scope) { mutableStateOf(connection?.token.orEmpty()) }
     var http by remember(connection?.scope) { mutableStateOf(connection?.server?.startsWith("http://") == true) }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = { if (connection != null) onDismiss() }, title = { Text("Connect your server", fontFamily = FontFamily.Serif) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        text = { ExcludeDialogFromAutofill(); InterceptPlatformTextInput(NoPersonalizedLearning) { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Use your self-hosted Open Learning server and its access token. Your saved library stays on this device.")
-            OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("Server URL") }, placeholder = { Text("https://learning.example.com") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Access token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+            OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("Server URL") }, placeholder = { Text("https://learning.example.com") }, singleLine = true, keyboardOptions = TextInputPrivacy.credentialKeyboard(KeyboardType.Uri))
+            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Access token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = TextInputPrivacy.credentialKeyboard(KeyboardType.Password))
             Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(http, { http = it }); Text("Allow HTTP for a trusted local server", style = MaterialTheme.typography.bodySmall) }
             if (http) Text("HTTP sends your token and learning content without encryption. Use only on a network you trust.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             Text("Tokens are encrypted with Android Keystore. Changing server or account switches to a separate cache.", style = MaterialTheme.typography.bodySmall)
-        } },
+        } } },
         confirmButton = { TextButton(onClick = { error = model.configure(server, token, http); if (error == null) onDismiss() }, enabled = server.isNotBlank() && token.isNotBlank()) { Text("Connect") } },
         dismissButton = { if (connection != null) TextButton(onClick = onDismiss) { Text("Cancel") } })
 }

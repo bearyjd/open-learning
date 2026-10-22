@@ -3,9 +3,7 @@ package org.openlearning.app
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.view.View
 import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -15,33 +13,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.*
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.PlatformTextInputInterceptor
-import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 
 private val NOTE_MIME_TYPES = arrayOf("text/plain", "text/markdown", "text/x-markdown", "application/octet-stream")
-
-private val NoLearningKeyboard = KeyboardOptions(autoCorrectEnabled = false)
-
-/** Asks the keyboard not to learn from what is typed here (EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING). */
-@OptIn(ExperimentalComposeUiApi::class)
-private val NoPersonalizedLearning = PlatformTextInputInterceptor { request, nextHandler ->
-    nextHandler.startInputMethod(object : PlatformTextInputMethodRequest {
-        override fun createInputConnection(outAttrs: EditorInfo) = request.createInputConnection(outAttrs).also {
-            outAttrs.imeOptions = outAttrs.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
-        }
-    })
-}
 
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
@@ -55,14 +38,12 @@ private tailrec fun Context.activity(): Activity? = when (this) {
  */
 @Composable
 private fun ProtectWhileEditing() {
+    ExcludeFromAutofill()
     val view = LocalView.current
     DisposableEffect(view) {
         val window = view.context.activity()?.window
-        val previous = view.importantForAutofill
-        view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         onDispose {
-            view.importantForAutofill = previous
             window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
@@ -98,9 +79,9 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PageTitle("Write a note.", "Paste or write something you want to learn from. Your server turns it into ideas. It is never linked to a web page.")
-        OutlinedTextField(draft.title, { model.editDraft(draft.copy(title = it)) }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, keyboardOptions = NoLearningKeyboard)
-        OutlinedTextField(draft.label, { model.editDraft(draft.copy(label = it)) }, Modifier.fillMaxWidth(), label = { Text("Label (optional)") }, singleLine = true, keyboardOptions = NoLearningKeyboard)
-        OutlinedTextField(draft.text, { model.editDraft(draft.copy(text = it)) }, Modifier.fillMaxWidth(), label = { Text("Note text") }, minLines = 8, maxLines = 16, keyboardOptions = NoLearningKeyboard,
+        OutlinedTextField(draft.title, { model.editDraft(draft.copy(title = it)) }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
+        OutlinedTextField(draft.label, { model.editDraft(draft.copy(label = it)) }, Modifier.fillMaxWidth(), label = { Text("Label (optional)") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
+        OutlinedTextField(draft.text, { model.editDraft(draft.copy(text = it)) }, Modifier.fillMaxWidth(), label = { Text("Note text") }, minLines = 8, maxLines = 16, keyboardOptions = TextInputPrivacy.noLearningKeyboard,
             isError = overCap, supportingText = { Text(noteCounter(draft.text)) })
         message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         OutlinedButton(onClick = { picker.launch(NOTE_MIME_TYPES) }) {

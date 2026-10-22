@@ -92,13 +92,25 @@ class DeviceAcceptanceTest {
         scenario!!.recreate()
         waitText(LearningFixture.TITLE)
 
+        // Unsent text of alpha must outlive the scope-change purge (cards and completed imports do not).
+        val alphaScope = connection().scope
+        io { container.database.dao().putDraft(NoteDraft(alphaScope, "Fixture title", "", "fixture unsent text")) }
+
         // Drive the real connection dialog so account changes exercise the UI and Keystore.
         switchAccount("beta")
         navigate("Library")
         waitText("No saved ideas yet")
         compose.onNodeWithText(LearningFixture.TITLE).assertDoesNotExist()
-        switchAccount("alpha")
+        // Current policy: connecting another account purges alpha's cached cards, saved ones included.
+        waitUntil { io { container.database.dao().allInsights(alphaScope).isEmpty() } }
+        assertEquals("fixture unsent text", io { container.database.dao().draft(alphaScope)?.text })
+
+        // Return trip: alpha's saved state lives on the server, so reconnect alpha to a fresh fixture.
+        fixture = LearningFixture().also { it.saved.set(true); it.start() }
+        configure("alpha")
+        navigate("Library")
         waitText(LearningFixture.TITLE)
+        assertEquals("fixture unsent text", io { container.database.dao().draft(alphaScope)?.text })
     }
 
     @Test fun persistedQueuedImportResumesThroughRealWorkManagerWithoutDuplicateSubmission() {

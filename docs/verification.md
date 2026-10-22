@@ -439,3 +439,75 @@ explanations; ID selection removes fabricated quote copying as a rejection signa
 General live model quality, misconception detection, and opposing-viewpoint
 generation have not been independently validated. This milestone does not
 complete the entire requested platform or an Android-to-live-model acceptance run.
+
+Device attempt (Pixel 10 Pro Fold, acceptance build, mock backend, one supervised run): on the Connect screen the
+server URL and access token were typed once and no Bitwarden or other autofill/save-password sheet appeared (the
+script's uiautomator dump after the token step listed only the app's own window and no autofill text). The script then
+reached the note editor and the 145-character draft survived `am kill` (counter 145 / 60,000), but the run stopped at
+the next step: "Add note to learning feed" was not in the uiautomator tree (the button is below the visible editor, so
+the script would need to scroll). Submit, no-link, forget cancel/confirm and 413 scenarios are therefore INCONCLUSIVE,
+and the instrumented suites (including `ConnectAutofillTest`) were not run. One observation of a quiet token step is
+evidence, not proof, for the autofill opt-out; the earlier aborted attempts (a save sheet appeared) were on builds without
+the fix. The note-editor field itself was not exercised by autofill beyond the draft typing in this run.
+
+Second supervised device attempt (same device and build, script fix 96ae34b scrolls within the app window, at most 3
+swipes, and taps only fully on-screen nodes): again no Bitwarden or other autofill/save-password sheet appeared at the
+token step or at any dump before the stop. The draft survived process death, and "Add note to learning feed" was now
+reached and tapped once. The app showed "Note queued. It is sent to your server as soon as it is reachable." and a
+"Note: Acceptance note / Completed" row under Recent imports, but the run stopped at the next step because no
+"Your note: Acceptance note" card was in the uiautomator tree (the feed had not shown it within the script's wait). The
+script crashed before printing results or saving the mock request log, so the POST count and hash, no-link, forget
+cancel/confirm and 413 scenarios remain INCONCLUSIVE, and the instrumented suites were not run. Whether the missing card
+is a script gap (a Refresh or tab change may be needed) or an app defect is undetermined. No reruns were made.
+
+Third supervised device attempt (same device, script commits 4852649 and c4f8ef9): no Bitwarden or other
+autofill/save-password sheet appeared at any dump (token step quiet again, so three consecutive builds with the fix
+were quiet). PASS: connect; draft survived process death (counter 145); submit posted exactly once to
+`/api/v1/ingest/text`; the "Your note: Acceptance note" card appeared with no Refresh tap (the earlier miss was a
+script gap: the card was in the lazy feed below the visible window, so it was absent from the dump; the app does
+refresh the feed after a completed note in `IngestWorker.runNote`, as it does after a completed URL import); no
+source-link nodes on the list or the detail; forget Cancel sent 0 DELETEs and Confirm sent 1. The run then crashed
+at "Write or import a note" (the feed list was still scrolled past it after the detail view; the script now scrolls
+back, bounded), so the 413 scenario is INCONCLUSIVE, 429 is not scripted, and the instrumented suites were not run
+because not every scenario completed. No reruns were made after the crash (device stopped per the zero-retry rule).
+
+Fourth supervised device run (same device, APKs rebuilt up to date, script commits 7ff0e62 and 4eb875e): autofill
+prompt YES/NO: NO. No Bitwarden, autofill or save-password sheet appeared at any dump; four consecutive builds with the
+fix were quiet at the token step. The script ran every scenario to completion with no retries: connect PASS; draft
+survived process death (counter 145) PASS; submit posted exactly once PASS; the logged body length (182) and SHA-256
+matched the exact JSON the app should send, `{"text":...,"title":...}` compact with no label (Gson emits `text`
+before `title`; key order is not contractual, so the script accepts either order and an empty-label variant, and the
+first comparison, which assumed title-first, reported a mismatch of the same length until the order was corrected);
+note card appeared with no Refresh tap PASS; no source-link nodes on list or detail PASS; forget Cancel 0 DELETEs and
+Confirm 1 DELETE PASS; 413 shows the fixed "larger than your server accepts" message and the SENTINEL response body is
+not in the UI PASS. Instrumented suites (acceptance package, one run each, no retries): `DatabaseHygieneTest` 9/9,
+`MigrationTest` 1/1, `ConnectAutofillTest` 1/1 (connect dialog window excluded from autofill) PASS.
+`DeviceAcceptanceTest` 5/6 (FAIL: `onlineSaveSurvivesOfflineRelaunchAndAccountSwitch`, Compose wait timed out after
+15 s). `NoteAcceptanceTest` 2/8: PASS `draftSurvivesActivityRecreate` and `noteEditorAncestorIsExcludedFromAutofill`;
+FAIL (Compose or DB wait timed out after 20 s) `removingAQueuedNoteBeforeSubmitSendsNothing`,
+`serverErrorsMapToFixedMessagesWithoutEchoingTheBody` (NoteAcceptanceTest.kt:101 area, awaiting the job row),
+`textIsClearedFromRoomAfterCompletion`, `offlineForgetKeepsEverything`,
+`completedNoteShowsNoSourceLinksAndForgetCancelDoesNotDelete`. The failures were not diagnosed or retried and no app
+code was changed; the same behaviours passed in the adb script against the same build, so a test-harness or timing
+cause (instrumentation device state, WorkManager scheduling under test) is suspected but unconfirmed.
+`LiveLearningLoopTest` was not run (needs a real backend and model).
+
+Follow-up (static diagnosis, NOT re-run on a device): the 6 failures above are test bugs, not app bugs. In
+`onlineSaveSurvivesOfflineRelaunchAndAccountSwitch` the tail asserted that alpha's saved card returns after a switch to
+beta, but the scope-change purge deliberately deletes other scopes' cards (saved ones included) and the fixture was
+already closed; it now asserts the purge (alpha cards gone, unsent draft kept) and reconnects alpha to a fresh fixture.
+In `NoteAcceptanceTest` Compose `performClick` does not scroll, so the submit button (below the fold, IME open) and
+other off-screen targets were never clicked; clicks now scroll first, submit waits for the button to be enabled, and
+timeouts log the text-submit count and the semantics tree. These fixes are compile-only (assembleAcceptanceAndroidTest);
+they have not been run on a device.
+
+Still unverified on device: the 429 retry message, the SAF file picker through DocumentsUI, the remove-job race,
+offline forget, fold/unfold and activity recreate with a note open, and whether Bitwarden's save sheet is suppressed
+(it was not observed in four quiet runs, which is evidence rather than proof).
+
+Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
+earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
+which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and
+fail-loudly logic against fakes (not real views); the instrumented `ConnectAutofillTest` and
+`NoteAcceptanceTest.noteEditorAncestorIsExcludedFromAutofill` are compile-checked only. Whether Bitwarden's save
+sheet is suppressed on a real device has not been observed.
