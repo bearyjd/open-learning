@@ -39,8 +39,7 @@ class ForgetQueue(
      * unlinked queued note has no document id, so it cannot be matched and is left alone.
      */
     suspend fun forgetNoteOffline(scope: String, documentId: String, title: String? = null): List<String> {
-        if (documentId.isBlank()) return emptyList()
-        if (!validForgetDocumentId(documentId)) throw InvalidForgetIdException()
+        requireForgetDocumentId(documentId)
         val active = mutableListOf<PendingIngest>()
         val purged = database.withTransaction {
             dao.putForget(PendingForget(scope, documentId, clock(), FORGET_PENDING))

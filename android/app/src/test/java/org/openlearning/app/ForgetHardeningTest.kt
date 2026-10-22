@@ -139,4 +139,9 @@ class ForgetHardeningTest {
     @Test fun dialogWarnsAboutNotesStillBeingImported() {
         assertTrue(FORGET_NOTE_MESSAGE.contains("A note that is still being imported may reappear."))
     }
+    @Test fun blankAndWhitespaceIdsAreRejectedNotSilentlySkipped() {
+        assertThrows(InvalidForgetIdException::class.java) { requireForgetDocumentId("") }
+        assertThrows(InvalidForgetIdException::class.java) { requireForgetDocumentId("  ") }
+        requireForgetDocumentId("123e4567-e89b-12d3-a456-426614174000")
+    }
 }

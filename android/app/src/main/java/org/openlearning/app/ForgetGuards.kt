@@ -24,6 +24,9 @@ private val FORGET_ID_CHARSET = Regex("[0-9a-fA-F-]+")
 /** The server issues uuid4 strings (36 chars, hex and dashes). Anything else is never queued: it goes into WorkManager input. */
 fun validForgetDocumentId(id: String) = id.length in 1..FORGET_ID_MAX_LENGTH && FORGET_ID_CHARSET.matches(id)
 
+/** A blank id is as invalid as a malformed one: the caller must see a failure, never an empty "success". */
+fun requireForgetDocumentId(id: String) { if (!validForgetDocumentId(id)) throw InvalidForgetIdException() }
+
 class InvalidForgetIdException : IllegalArgumentException("Invalid document id")
 
 const val FORGET_INVALID_ID_MESSAGE =
