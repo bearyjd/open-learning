@@ -1,6 +1,8 @@
 package org.openlearning.app
 
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -101,5 +103,62 @@ class ScreenPublisherTest {
         val state = ScreenState(scope = "A", selected = ins("a", "d2"), chat = listOf(question), chatBusy = true, learning = true)
         val next = state.withChatCleared()
         assertTrue(next.chat.isEmpty()); assertFalse(next.chatBusy); assertTrue(next.learning); assertEquals("a", next.selected?.id)
+    }
+
+    // ---- Two-sided hidden protocol: every ordering of {read, forget commit, store} ends with the note removed. ----
+    private class FakeDao { var committed = emptySet<String>() }
+    private val both = { it: ScreenState -> it.copy(feed = listOf(ins("a", "d1"), ins("b", "d2"))) }
+    private fun forgetCommit(dao: FakeDao) { dao.committed = dao.committed + "d1" }
+    private fun forgetPurge(p: ScreenPublisher) { p.purgeNow("A", setOf("d1")) }
+    private fun feedIds(p: ScreenPublisher) = p.value.feed.map { it.id }
+
+    @Test fun readThenCommitThenStore() = runBlocking {
+        val dao = FakeDao(); var reads = 0; var runs = 0
+        lateinit var p: ScreenPublisher
+        p = publisher { val seen = dao.committed; if (++reads == 1) { forgetCommit(dao); forgetPurge(p) }; seen }
+        p.publishFresh("A") { runs++; both(it) }
+        assertEquals(listOf("b"), feedIds(p)); assertEquals(1, runs)
+    }
+    @Test fun commitBetweenStoreAndTheRereadIsCaughtByTheReread() = runBlocking {
+        val dao = FakeDao(); var reads = 0; var runs = 0
+        lateinit var p: ScreenPublisher
+        p = publisher { val seen = dao.committed; if (++reads == 1) { val first = seen; forgetCommit(dao); first } else seen }
+        // The first read is stale; the commit lands before the second read, whose purge removes the stored note.
+        p.publishFresh("A") { runs++; both(it) }
+        assertEquals(listOf("b"), feedIds(p)); assertEquals(1, runs)
+        forgetPurge(p); assertEquals(listOf("b"), feedIds(p))
+    }
+    @Test fun storeThenCommitIsCaughtByTheForgetsOwnPurge() = runBlocking {
+        val dao = FakeDao(); val p = publisher { dao.committed }
+        p.publishFresh("A", both)
+        assertEquals(listOf("a", "b"), feedIds(p))
+        forgetCommit(dao); forgetPurge(p)
+        assertEquals(listOf("b"), feedIds(p))
+    }
+    @Test fun commitThenReadThenStore() = runBlocking {
+        val dao = FakeDao(); val p = publisher { dao.committed }
+        forgetCommit(dao); forgetPurge(p)
+        p.publishFresh("A", both)
+        assertEquals(listOf("b"), feedIds(p))
+    }
+    @Test fun aPublicationAfterAPurgeNeverStoresTheIdEvenWithAStaleSnapshotAndStaleRead() = runBlocking {
+        val p = publisher { emptySet() }
+        p.hiddenArrived("A" to emptySet())
+        forgetPurge(p)
+        p.publishFresh("A", both); assertEquals(listOf("b"), feedIds(p))
+        p.publishLocal(both); assertEquals(listOf("b"), feedIds(p))
+    }
+    @Test fun purgeNowIsIdempotentAndScopeChecked() {
+        val p = publisher()
+        p.publishLocal { it.copy(feed = listOf(ins("a", "d1"), ins("b", "d2"))) }
+        p.purgeNow("OTHER", setOf("d2")); assertEquals(listOf("a", "b"), feedIds(p))
+        forgetPurge(p); val once = p.value; forgetPurge(p)
+        assertEquals(once, p.value); assertEquals(listOf("b"), feedIds(p))
+    }
+    @Test fun theDerivedViewScrubsWithThePurgeIdsBeforeTheRoomFlowCatchesUp() = runBlocking {
+        val p = ScreenPublisher({ emptySet() }, { flowOf(emptySet()) }).also { it.reset("A") }
+        assertEquals("A" to emptySet<String>(), p.hiddenForView.first())
+        forgetPurge(p)
+        assertEquals("A" to setOf("d1"), p.hiddenForView.first())
     }
 }

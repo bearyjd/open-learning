@@ -28,20 +28,21 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var feedFlow: Job? = null
     private var jobsFlow: Job? = null
     private var forgetFlow: Job? = null
-    private val publisher = ScreenPublisher(container.forgetQueue::hidden, container.forgetQueue::hiddenIds) { memory.clear(); chatGeneration++ }
+    private val publisher: ScreenPublisher = ScreenPublisher(container.forgetQueue::hidden, container.forgetQueue::hiddenIds) { memory.clear(); chatSession.reset() }
+    private val chatSession = ChatSession(publisher)
+    init { container.forgetQueue.onHidden = publisher::purgeNow }
     private var elsewhereNoticeShown = false
     /**
      * What the screen sees: the retained state with every document of the durable forget set scrubbed out, on every emission
      * (defense in depth: the publisher already purges each publication). Internal logic reads [publisher], never this.
      */
-    val state: StateFlow<ScreenState> = combine(publisher.flow, publisher.hiddenByScope) { screen, (scope, ids) -> screen.viewFor(scope, ids) }
+    val state: StateFlow<ScreenState> = combine(publisher.flow, publisher.hiddenForView) { screen, (scope, ids) -> screen.viewFor(scope, ids) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ScreenState())
     private var cached: List<CachedInsight> = emptyList()
     private var activeOperations = 0
     private var requestGeneration = 0
-    private var chatGeneration = 0
     private var detailJob: Job? = null
-    private val notesActions = NotesActions(viewModelScope, container.forgetQueue, { repo }, publisher, { memory.clear(); detailJob?.cancel(); chatGeneration++ }, ::resumeForgets)
+    private val notesActions = NotesActions(viewModelScope, container.forgetQueue, { repo }, publisher, { memory.clear(); detailJob?.cancel(); chatSession.reset() }, ::resumeForgets)
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
@@ -66,7 +67,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 restorePending = step.restorePending
                 if (step.clearMemory) memory.clear()
                 feedFlow?.cancel(); jobsFlow?.cancel(); forgetFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
-                requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
+                requestGeneration++; chatSession.reset(); activeOperations = 0; cached = emptyList()
                 publisher.reset(config?.scope.orEmpty())
                 draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
                 repo = config?.let(container::repository)
@@ -311,7 +312,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     /** The detail is published with a Room-fresh hidden read (never the collector's snapshot); [afterShown] runs only if it stuck. */
     private fun showDetail(item: Insight, afterShown: () -> Unit = {}) {
         detailJob?.cancel()
-        chatGeneration++
+        chatSession.reset()
         val repository = repo ?: return
         val scope = repository.config.scope
         detailJob = viewModelScope.launch {
@@ -327,27 +328,25 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             catch (_: Exception) { /* Cached detail remains readable offline. */ }
         }
     }
-    fun closeDetail() { memory.clear(); detailJob?.cancel(); chatGeneration++; publisher.publishLocal { it.copy(selected = null, chat = emptyList(), chatBusy = false, learning = false) } }
+    fun closeDetail() { memory.clear(); detailJob?.cancel(); chatSession.reset(); publisher.publishLocal { it.copy(selected = null, chat = emptyList(), chatBusy = false, learning = false) } }
     fun learn(item: Insight) = showDetail(item) { markLearning(item); chat("") }
     fun chat(message: String) {
         val selected = publisher.value.selected ?: return
-        if (publisher.value.chatBusy) return
         val repository = repo ?: return
-        val generation = chatGeneration
+        val generation = chatSession.begin(message) ?: return
         val scope = repository.config.scope
-        publisher.publishLocal { it.copy(chatBusy = true, error = null, chat = if (message.isBlank()) it.chat else it.chat + ChatLine("You", message)) }
         viewModelScope.launch {
             try {
                 // The retained selection is checked against Room first: a note forgotten a moment ago is never sent.
                 if (!chatMayProceed(selected, container.forgetQueue.hidden(scope))) { publisher.publishFresh(scope) { it }; return@launch }
                 val answer = repository.api.chat(ChatRequest(selected.id, message))
-                // The reply is judged on a Room read and the generation at commit time: a clear that landed meanwhile drops it.
+                // The reply is judged on a Room read and the generation at commit time: a reset that landed meanwhile drops it.
                 if (repo === repository) publisher.publishFreshWith(scope) { state, hidden ->
-                    if (generation == chatGeneration) state.withReply(ChatLine("Tutor", answer.answer, answer.question, answer.citations), hidden) else state
+                    if (chatSession.isCurrent(generation)) state.withReply(ChatLine("Tutor", answer.answer, answer.question, answer.citations), hidden) else state
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo === repository && generation == chatGeneration) publisher.publishLocal { it.copy(error = error.userMessage()) } }
-            finally { if (repo === repository && generation == chatGeneration) publisher.publishLocal { it.copy(chatBusy = false) } }
+            catch (error: Exception) { if (repo === repository && chatSession.isCurrent(generation)) publisher.publishLocal { it.copy(error = error.userMessage()) } }
+            finally { if (repo === repository) chatSession.end(generation) }
         }
     }
     fun loadReviews() = request { repository ->

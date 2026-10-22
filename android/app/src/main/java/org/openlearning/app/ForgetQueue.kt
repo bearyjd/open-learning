@@ -19,6 +19,12 @@ class ForgetQueue(
     private val dao = database.dao()
 
     /**
+     * Called right after a commit that hides ids, before the function returns: the screen drops them at once
+     * ([ScreenPublisher.purgeNow]) instead of waiting for the Room flow. Set by the view model.
+     */
+    @Volatile var onHidden: (scope: String, ids: Set<String>) -> Unit = { _, _ -> }
+
+    /**
      * Validates the id first (a bad one is never queued). One transaction: queue the forget (idempotent), purge cached cards
      * of the document, the completed import rows linked to it ([noteRowsToPurge]) and the queued, running or failed import
      * rows linked to it. The commit is the success point, and from then on [LearningRepository.writeCards] keeps any late
@@ -36,6 +42,7 @@ class ForgetQueue(
             active.forEach { dao.deleteJob(it.scope, it.id) }
             purgeLocal(scope, documentId, title)
         }
+        onHidden(scope, setOf(documentId))
         val cancels = active.map { suspend { cancelIngest(it.scope, it.id) } }
         runBestEffort(*cancels.toTypedArray(), { schedule(scope, documentId, forgetEnqueuePolicy(ForgetTrigger.NEW_FORGET)) })
         database.checkpointBestEffort()
@@ -63,6 +70,7 @@ class ForgetQueue(
             if (ids.isNotEmpty()) dao.deleteInsights(scope, ids)
             linkedRowsToPurge(dao.completedNoteRows(scope, COMPLETED_STATES), documentId).forEach { dao.deleteJob(it.scope, it.id) }
         }
+        onHidden(scope, setOf(documentId))
         database.checkpointBestEffort()
     }
 

@@ -684,3 +684,15 @@ beats a lagging snapshot, other-scope snapshot read from Room, chat cleared on a
 its question, hidden selection never chats), `SingleWriterScanTest` (TEXT scans: any `MutableStateFlow<ScreenState>` name, no `publish(`,
 no content fields in `publishLocal`, guarded manual retry). Compile-only: `ForgetGuardRoomTest` holds the update transaction open with a
 hook while a forget starts (it cannot prove Room's lock order). Untested: the view model wiring (`showDetail`, `chat`), Room flows.
+
+E2b-3 sixth-pass fixes (best-effort; found by 6 adversarial passes; still NOT device-verified). Two-sided protocol: the forget commit
+is followed at once by `ScreenPublisher.purgeNow` (via `ForgetQueue.onHidden`), and every `publishFresh*` store is followed by a DAO
+re-read and an idempotent purge (never a transform re-run); the ordering argument is in `docs/security.md` and the
+`ScreenPublisher.purgeNow` comment. New JVM tests (written first, run RED against stubs: 13 of 31 failed): `ScreenPublisherTest`
+(read, commit, store; commit between store and re-read; store then commit; commit, read, store; stale snapshot and read; purge
+idempotent and scope-checked; derived view includes the purge ids), `PurgeFloorTest`, `ChatSessionTest` (collector bump, new chat,
+forget-completion bump: not stuck busy; a late final never clears a newer chat's busy flag), and `SingleWriterScanTest` (TEXT scans:
+`ForgetQueue` calls `onHidden` after its transaction; the view model wires it to `purgeNow`; no `chatGeneration` outside `ChatSession`).
+Compile-only (androidTest, not run): `ForgetQueueRoomTest.forgetCommitCallsTheHiddenHookAfterTheCommit`.
+NOT tested: `ScreenPublisher` under real concurrency, the view model and `NotesActions` wiring at runtime, Room flows and their
+delivery order, and the floor's two-arrival aging against real Room emissions.

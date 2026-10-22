@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -34,6 +35,26 @@ class ScreenPublisher(
     val hiddenByScope: Flow<Pair<String, Set<String>>> = mutable.map { it.scope }.distinctUntilChanged()
         .flatMapLatest { scope -> (if (scope.isEmpty()) flowOf(emptySet()) else hiddenFlow(scope)).map { scope to it } }
 
+    /** Ids purged by a forget commit before the Room flow reported them (see [purgeNow]). */
+    private val floor = MutableStateFlow(PurgeFloor())
+
+    /** What the derived view scrubs with: the Room set together with the latest purge ids, so it never lags a forget commit. */
+    val hiddenForView: Flow<Pair<String, Set<String>>> = combine(hiddenByScope, floor) { (scope, ids), known -> scope to (ids + known.idsFor(scope)) }
+
+    /**
+     * The forget side of the two-sided protocol. [ForgetQueue] calls this right after its transaction committed and before it
+     * returns, so the retained state drops [ids] without waiting for the Room-flow collector. Idempotent and atomic.
+     * Ordering argument, with C the forget commit, P this purge (after C), S the atomic store of a publication and R the
+     * publication's DAO re-read after S: a store S that precedes P is removed by P; a store that follows P is removed by the
+     * floor purge inside the store itself; and if C falls before R the re-read sees the id and purges it. Whatever the order of
+     * {the publication's first read, C, S}, the id is gone once P and R have both run. The re-read and P never re-run the transform.
+     */
+    fun purgeNow(scope: String, ids: Set<String>) {
+        if (ids.isEmpty()) return
+        floor.update { it.added(scope, ids) }
+        mutable.update { it.purgedFor(scope, ids) }
+    }
+
     /**
      * The Room flow delivered a new hidden set: remember it, purge what is retained now and, when it gained an id, clear the
      * tutor chat (the callback first, so an in-flight reply is dropped by its generation before the clear lands).
@@ -41,6 +62,7 @@ class ScreenPublisher(
     fun hiddenArrived(hidden: Pair<String, Set<String>>) {
         val gained = hiddenGained(hiddenSnapshot.value, hidden)
         hiddenSnapshot.value = hidden
+        floor.update { it.arrived(hidden.first, hidden.second) }
         if (gained) onHiddenGained()
         mutable.update { current ->
             val purged = current.purgedFor(hidden.first, hidden.second)
@@ -64,11 +86,14 @@ class ScreenPublisher(
     /** As [publishFresh], with the hidden set that was read, for a transform that must decide on it. */
     suspend fun publishFreshWith(scope: String, transform: (ScreenState, Set<String>) -> ScreenState): Boolean {
         val hidden = hiddenNow(scope)
-        return apply(scope, listOf(scope to hidden)) { transform(it, hidden) }
+        val applied = apply(scope, listOf(scope to hidden)) { transform(it, hidden) }
+        // The read side of the protocol: a forget that committed after the read above is seen now; purge only, never the transform.
+        if (applied) hiddenNow(scope).let { after -> if (after.isNotEmpty()) mutable.update { it.purgedFor(scope, after) } }
+        return applied
     }
 
     /** A new, empty state for [scope] (a connection change). */
-    fun reset(scope: String) { mutable.update { ScreenState(scope = scope) } }
+    fun reset(scope: String) { floor.value = PurgeFloor(); mutable.update { ScreenState(scope = scope) } }
 
     /**
      * Applies [transform] once, atomically, and only if the state still belongs to [scope] (null: any). A snapshot that changes
@@ -79,7 +104,7 @@ class ScreenPublisher(
         var used = hiddenSnapshot.value
         mutable.update { current ->
             applied = scope == null || current.scope == scope
-            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used) + extra, transform) }
+            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used, floor.value.scope to floor.value.idsFor(floor.value.scope)) + extra, transform) }
         }
         val latest = hiddenSnapshot.value
         if (applied && latest !== used) mutable.update { it.purgedFor(latest.first, latest.second) }

@@ -35,6 +35,13 @@ class ForgetQueueRoomTest {
     private fun cached(scope: String, id: String, documentId: String, inFeed: Boolean = true, saved: Boolean = false) =
         CachedInsight(scope, id, apiGson.toJson(Insight(id = id, documentId = documentId)), saved, inFeed)
 
+    /** Compile-only in CI: the hook runs after the commit, so a reader of the row already sees the forget. */
+    @Test fun forgetCommitCallsTheHiddenHookAfterTheCommit() = runBlocking {
+        var seenInHook: Set<String>? = null
+        queue.onHidden = { scope, _ -> seenInHook = runBlocking { queue.hidden(scope) } }
+        queue.forgetNoteOffline("s", "d1")
+        assertEquals(setOf("d1"), seenInHook)
+    }
     @Test fun insertIsIdempotentOnThePrimaryKeyAndKeepsTheFirstRow() = runBlocking {
         dao.putForget(PendingForget("s", "d1", 1, FORGET_PENDING))
         dao.setForgetStatus("s", "d1", FORGET_FAILED, FORGET_REJECTED_ERROR)

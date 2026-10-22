@@ -101,6 +101,21 @@ class SingleWriterScanTest {
         val retry = vm.substringAfter("private suspend fun retryNote").substringBefore("private suspend fun loadDraft")
         assertTrue("updateJobUnlessHidden" in retry); assertFalse(Regex("""dao\.updateJob\(""").containsMatchIn(retry))
     }
+    /** Text scans, NOT runtime proofs: the forget commit is followed by the hook, the hook is the publisher's purge, and only ChatSession bumps. */
+    @Test fun forgetCommitIsFollowedByTheImmediatePurgeHook() {
+        val queue = File(dir(), "ForgetQueue.kt").readText()
+        val forget = queue.substringAfter("suspend fun forgetNoteOffline").substringBefore("suspend fun purgeLocal")
+        assertTrue(forget.indexOf("onHidden(") > forget.indexOf("withTransaction"))
+        assertTrue(forget.indexOf("onHidden(") < forget.indexOf("return purged"))
+        val confirmed = queue.substringAfter("suspend fun confirmed").substringBefore("suspend fun reconcile")
+        assertTrue(confirmed.indexOf("onHidden(") > confirmed.indexOf("withTransaction"))
+        assertTrue("onHidden = publisher::purgeNow" in File(dir(), "LearningViewModel.kt").readText())
+    }
+    @Test fun onlyChatSessionOwnsTheChatGeneration() {
+        val offenders = mainSources().filter { it.name != "ChatSession.kt" && "chatGeneration" in it.readText() }
+        assertEquals(emptyList<File>(), offenders)
+        assertTrue("generation++" in File(dir(), "ChatSession.kt").readText())
+    }
     @Test fun screenFlowWritesAreFound() {
         assertTrue(writesScreenFlow("mutable.update { it }")); assertTrue(writesScreenFlow("state . update {"))
         assertTrue(writesScreenFlow("mutable.value = ScreenState()")); assertTrue(writesScreenFlow("mutable\n  .value=x"))
