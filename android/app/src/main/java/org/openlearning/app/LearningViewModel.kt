@@ -53,6 +53,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch { snapshotFlow { draft }.debounce(400).collect { saveDraft(it) } }
         viewModelScope.launch {
             connection.collect { config ->
+                val previousServer = if (config != null) container.credentials.takePreviousServer() else null
                 val step = connectionStep(restorePending, config != null)
                 val restore = step.restore
                 restorePending = step.restorePending
@@ -66,6 +67,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
                     launch { container.forgetQueue.resumePending(repository.config.scope) }
+                    launch {
+                        val rows = try { container.forgetQueue.otherScopeRows(repository.config.scope) } catch (error: Exception) { if (error is CancellationException) throw error; emptyList() }
+                        tokenRotationNotice(previousServer, repository.config.server, rows)?.let { text -> if (repo === repository) mutable.update { it.copy(notice = Notice(text)) } }
+                    }
                     forgetFlow = launch {
                         val queue = container.forgetQueue
                         combine(queue.pendingForgetCount(repository.config.scope), queue.failedForgets(repository.config.scope)) { waiting, failed -> waiting to failed }
@@ -107,7 +112,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch {
             val item = resolveInsight(saved.insightId,
                 { id -> container.database.dao().get(saved.scope, id)?.let(repository::decode) }, repository.api::insight)
-            when (val decision = decideRestore(saved, repository.config.scope, repo === repository, state.value.selected?.id, memory.recall(saved.scope), item)) {
+            val hidden = container.forgetQueue.hidden(repository.config.scope)
+            when (val decision = decideRestore(saved, repository.config.scope, repo === repository, state.value.selected?.id, memory.recall(saved.scope), item, hidden)) {
                 is RestoreDecision.Restore -> { select(decision.insight); if (saved.learning) markLearning(decision.insight) }
                 RestoreDecision.Clear -> memory.clear()
                 RestoreDecision.Skip -> Unit
@@ -319,14 +325,19 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         }
     }
     fun loadReviews() = request { repository ->
-        val reviews = container.forgetQueue.visibleReviews(repository, repository.api.reviews())
-        if (repo === repository) mutable.update { it.copy(reviews = reviews, reviewsLoaded = true, revealed = false, reviewSource = null) }
+        val view = container.forgetQueue.visibleReviews(repository, repository.api.reviews())
+        if (repo === repository) mutable.update { it.copy(reviews = view.reviews, reviewDocs = view.documents, reviewsLoaded = true, revealed = false, reviewSource = null) }
     }
     fun revealReview(review: Review) {
         request { repository ->
+            val hidden = container.forgetQueue.hidden(repository.config.scope)
             val cached = container.database.dao().get(repository.config.scope, review.insightId)?.let(repository::decode)
             val item = cached ?: repository.api.insight(review.insightId)
-            if (repo === repository && state.value.reviews.firstOrNull()?.id == review.id) mutable.update { it.copy(revealed = true, reviewSource = item) }
+            // Checked after the fetch and again from Room: a forget queued meanwhile hides it like a missing insight.
+            val nowHidden = hidden + container.forgetQueue.hidden(repository.config.scope)
+            if (repo !== repository || state.value.reviews.firstOrNull()?.id != review.id) return@request
+            if (item.isHiddenBy(nowHidden)) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null) }
+            else mutable.update { it.copy(revealed = true, reviewSource = item, reviewDocs = it.reviewDocs + (review.insightId to item.documentId)) }
         }
     }
     fun rate(review: Review, rating: String) = request { repository ->
@@ -341,6 +352,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun closeNotes() = notesActions.close()
     fun forgetListedNote(note: NoteSummary) = notesActions.forget(note)
     fun retryForget(documentId: String) = notesActions.retryForget(documentId)
+    fun stopTryingForget(documentId: String) = notesActions.stopTrying(documentId)
     fun noteMessageShown() = notesActions.messageShown()
     /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
     fun receiveSharedNote(note: ShareRoute.Note) {

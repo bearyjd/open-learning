@@ -25,4 +25,4 @@ const val FORGET_NOTE_MESSAGE =
         "connection is available. Your server keeps its copy until then. There is no undo. A deletion the server " +
         "rejects can be retried from Your notes. It also removes this note's entry from Recent imports. Entries from " +
         "before this update can't be matched to a note: if none is linked to this one, completed note entries " +
-        "without a link are removed too."
+        "without a link are removed too. A note that is still being imported may reappear."

@@ -32,7 +32,11 @@ internal class NotesActions(
         val generation = state.value.notes.generation
         scope.launch {
             try {
-                val fetched = queue.visibleNotes(repository.config.scope, repository.api.notes().toSummaries())
+                val answer = repository.api.notes().toSummaries()
+                // A fresh server answer: markers of notes it no longer holds can go; the idempotent resume re-checks the queue.
+                forgotten.settle(repository.config.scope, answer.mapTo(HashSet()) { it.documentId })
+                launch { try { queue.resumePending(repository.config.scope) } catch (error: Exception) { if (error is CancellationException) throw error } }
+                val fetched = queue.visibleNotes(repository.config.scope, answer)
                 if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
@@ -46,7 +50,7 @@ internal class NotesActions(
     private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult =
         try { ForgetResult.Done(queue.forgetNoteOffline(repository.config.scope, documentId, title)) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { forgotten.remove(repository.config.scope, documentId); ForgetResult.Failed(error) }
+        catch (error: Exception) { ForgetResult.Failed(error) }
 
     /** The outcome plus the queue state (waiting and failed counts, ids only) read from Room. */
     private suspend fun banner(repository: LearningRepository, result: ForgetResult): String {
@@ -94,6 +98,17 @@ internal class NotesActions(
     fun retryForget(documentId: String) {
         val repository = repo() ?: return
         scope.launch { queue.retryForget(repository.config.scope, documentId) }
+    }
+
+    /** Failed rows only: the row is deleted, the note is shown again on the next refresh, and the server keeps it. */
+    fun stopTrying(documentId: String) {
+        val repository = repo() ?: return
+        scope.launch {
+            if (queue.stopTrying(repository.config.scope, documentId) && repo() === repository) {
+                state.update { it.copy(notes = it.notes.stoppedTrying(documentId)) }
+                load()
+            }
+        }
     }
 
     /** The list is memory-only and only kept while its screen is open. */

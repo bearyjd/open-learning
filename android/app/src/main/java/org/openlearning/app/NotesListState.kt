@@ -40,6 +40,9 @@ fun NotesListState.forgetStarted(documentId: String) = copy(forgetting = forgett
 fun NotesListState.forgetSucceeded(documentId: String, message: String = FORGET_QUEUED_MESSAGE) =
     copy(items = items.filterNot { it.documentId == documentId }, forgetting = forgetting - documentId, gone = gone + documentId, message = message)
 
+/** The person stopped trying to delete a rejected note: it may be listed again. */
+fun NotesListState.stoppedTrying(documentId: String) = copy(gone = gone - documentId)
+
 /** Nothing was cleared: the row stays so the person can try again. */
 fun NotesListState.forgetFailed(documentId: String, message: String) = copy(forgetting = forgetting - documentId, message = message)
 

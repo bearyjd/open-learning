@@ -125,6 +125,7 @@ interface LearningDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun putForget(row: PendingForget): Long
     @Query("SELECT * FROM PendingForget WHERE scope = :scope") fun observeForgets(scope: String): Flow<List<PendingForget>>
     @Query("SELECT * FROM PendingForget WHERE scope = :scope") suspend fun forgets(scope: String): List<PendingForget>
+    @Query("SELECT * FROM PendingForget WHERE scope != :scope") suspend fun forgetsOutside(scope: String): List<PendingForget>
     @Query("SELECT * FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun forget(scope: String, documentId: String): PendingForget?
     @Query("SELECT documentId FROM PendingForget WHERE scope = :scope") suspend fun hiddenIds(scope: String): List<String>
     @Query("SELECT COUNT(*) FROM PendingForget WHERE scope = :scope AND status = 'pending'") fun pendingForgetCount(scope: String): Flow<Int>
@@ -177,8 +178,9 @@ class LearningRepository(val config: Connection, private val database: LearningD
     }
     val jobs = dao.jobs(config.scope)
     fun decode(row: CachedInsight): Insight = gson.fromJson(row.payload, Insight::class.java).copy(saved = row.saved)
-    suspend fun remember(insight: Insight, inFeed: Boolean? = null) {
-        if (forgotten.blocks(config.scope, insight) || insight.documentId in dao.hiddenIds(config.scope)) return
+    /** [hidden] is read once per refresh transaction by the callers, not once per item. */
+    suspend fun remember(insight: Insight, inFeed: Boolean? = null, hidden: Set<String>? = null) {
+        if (forgotten.blocks(config.scope, insight) || insight.documentId in (hidden ?: dao.hiddenIds(config.scope).toSet())) return
         val previous = dao.get(config.scope, insight.id)
         dao.put(listOf(CachedInsight(config.scope, insight.id, gson.toJson(insight), insight.saved, inFeed ?: previous?.inFeed ?: false)))
     }
@@ -186,7 +188,8 @@ class LearningRepository(val config: Connection, private val database: LearningD
         val items = api.feed()
         val dropped = database.withTransaction {
             dao.clearFeed(config.scope)
-            for (item in items) remember(item, true)
+            val hidden = dao.hiddenIds(config.scope).toSet()
+            for (item in items) remember(item, true, hidden)
             dao.pruneCards(config.scope)
         }
         if (dropped > 0) database.checkpointBestEffort()
@@ -195,7 +198,8 @@ class LearningRepository(val config: Connection, private val database: LearningD
         val items = api.library()
         val dropped = database.withTransaction {
             dao.clearSaved(config.scope)
-            for (item in items) remember(item.copy(saved = true))
+            val hidden = dao.hiddenIds(config.scope).toSet()
+            for (item in items) remember(item.copy(saved = true), hidden = hidden)
             dao.pruneCards(config.scope)
         }
         if (dropped > 0) database.checkpointBestEffort()
@@ -233,7 +237,7 @@ class AppContainer(private val context: Context) {
         .addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(SecureDeleteCallback).build()
     /** Notes being forgotten: in-flight refreshes must not write their cards back. */
     val forgotten = ForgottenNotes()
-    val forgetQueue = ForgetQueue(database, forgotten, { scope, id -> ForgetWorker.schedule(context, scope, id) }, { scope, id -> IngestWorker.cancel(context, scope, id) })
+    val forgetQueue = ForgetQueue(database, forgotten, { scope, id, enqueue -> ForgetWorker.schedule(context, scope, id, enqueue) }, { scope, id -> IngestWorker.cancel(context, scope, id) })
     fun repository(connection: Connection) = LearningRepository(connection, database, forgotten)
 }
 class LearningApplication : Application() {

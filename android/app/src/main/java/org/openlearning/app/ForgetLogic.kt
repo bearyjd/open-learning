@@ -3,6 +3,12 @@ package org.openlearning.app
 /** Fixed strings only: a server response body never reaches Room or the screen. */
 const val FORGET_REJECTED_ERROR = "Could not delete (the server rejected the request)"
 const val FORGET_REFUSED_ERROR = "Could not delete (server refused the request)"
+const val FORGET_GAVE_UP_ERROR = "Could not delete (gave up after repeated attempts)"
+const val FORGET_SCHEDULE_ERROR = "Could not delete (this device could not schedule it)"
+/** The only strings a failed row may show, whatever is stored. */
+val FORGET_FIXED_ERRORS = setOf(FORGET_REJECTED_ERROR, FORGET_REFUSED_ERROR, FORGET_GAVE_UP_ERROR, FORGET_SCHEDULE_ERROR)
+/** Retries stop here (runAttemptCount counts from 0): the row is marked failed, still hidden, with Retry and Stop trying. */
+const val FORGET_MAX_ATTEMPTS = 20
 
 const val FORGET_PENDING = "pending"
 const val FORGET_FAILED = "failed"
@@ -21,13 +27,20 @@ sealed interface ForgetReplay {
     data object Retry : ForgetReplay
 }
 
-/** [code] is null when no answer arrived (IOException, no network). */
-fun forgetReplay(code: Int?): ForgetReplay = when {
-    code == null -> ForgetReplay.Retry
-    code in 200..299 || code == 404 -> ForgetReplay.Done
-    code == 401 || code == 403 -> ForgetReplay.Failed(FORGET_REJECTED_ERROR)
-    code == 429 || code >= 500 -> ForgetReplay.Retry
-    else -> ForgetReplay.Failed(FORGET_REFUSED_ERROR)
+/**
+ * [code] is null when no answer arrived (IOException, no network). [attempt] is WorkManager's runAttemptCount: a retry
+ * on the last allowed attempt becomes a permanent "gave up". Answers: 2xx, 404, 410 done; 401 and 403 rejected;
+ * 408, 425, 429, 5xx and no answer retry; every other status (3xx, other 4xx) is refused.
+ */
+fun forgetReplay(code: Int?, attempt: Int = 0): ForgetReplay {
+    val replay = when {
+        code == null -> ForgetReplay.Retry
+        code in 200..299 || code == 404 || code == 410 -> ForgetReplay.Done
+        code == 401 || code == 403 -> ForgetReplay.Failed(FORGET_REJECTED_ERROR)
+        code == 408 || code == 425 || code == 429 || code >= 500 -> ForgetReplay.Retry
+        else -> ForgetReplay.Failed(FORGET_REFUSED_ERROR)
+    }
+    return if (replay == ForgetReplay.Retry && attempt + 1 >= FORGET_MAX_ATTEMPTS) ForgetReplay.Failed(FORGET_GAVE_UP_ERROR) else replay
 }
 
 /** Every queued row of the scope hides its note, pending or failed. */

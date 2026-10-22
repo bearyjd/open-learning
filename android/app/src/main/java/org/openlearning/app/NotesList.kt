@@ -38,7 +38,7 @@ internal fun NotesList(state: NotesListState, forgetWaiting: Int, forgetFailed: 
             TextButton(onClick = onClose) { Text("Close") }
         } }
         forgetWaitingLine(forgetWaiting)?.let { line -> item(key = "forget-waiting") { Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-        items(forgetFailed, key = { "forget-failed-${it.documentId}" }) { row -> FailedForgetRow(row) { model.retryForget(row.documentId) } }
+        items(forgetFailed, key = { "forget-failed-${it.documentId}" }) { row -> FailedForgetRow(row, { model.retryForget(row.documentId) }) { model.stopTryingForget(row.documentId) } }
         when (notesBody(state)) {
             NotesBody.Loading -> item { CircularProgressIndicator(Modifier.padding(vertical = 24.dp)) }
             NotesBody.Error -> item { EmptyState("Couldn't load your notes", state.error.orEmpty()) }
@@ -64,11 +64,20 @@ private fun NoteRow(note: NoteSummary, forgetting: Boolean, onForget: () -> Unit
     }
 }
 
-/** A forget the server rejected: the note stays hidden here. Fixed text only, never a title. */
+/** A forget that failed: the note stays hidden here. Fixed text only, never a title. Retry or Stop trying (after a confirm). */
 @Composable
-private fun FailedForgetRow(row: PendingForget, onRetry: () -> Unit) {
+private fun FailedForgetRow(row: PendingForget, onRetry: () -> Unit, onStop: () -> Unit) {
+    var confirming by remember { mutableStateOf(false) }
+    if (confirming) AlertDialog(
+        onDismissRequest = { confirming = false },
+        title = { Text("Stop trying to delete?") },
+        text = { Text(FORGET_STOP_MESSAGE) },
+        confirmButton = { TextButton(onClick = { confirming = false; onStop() }) { Text("Stop trying") } },
+        dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+    )
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-        Text("${forgetFailedLine(row)} — ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+        Text(forgetFailedLine(row), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
         TextButton(onClick = onRetry) { Text("Retry") }
+        TextButton(onClick = { confirming = true }, enabled = canStopTrying(row)) { Text("Stop trying") }
     }
 }

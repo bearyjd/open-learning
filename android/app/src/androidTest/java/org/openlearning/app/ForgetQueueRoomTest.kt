@@ -27,7 +27,7 @@ class ForgetQueueRoomTest {
         context.deleteDatabase(NAME)
         db = Room.databaseBuilder(context, LearningDatabase::class.java, NAME)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING).addCallback(SecureDeleteCallback).build()
-        queue = ForgetQueue(db, ForgottenNotes(), { scope, id -> scheduled += scope to id }, { scope, id -> cancelled += scope to id }, clock = { 42L })
+        queue = ForgetQueue(db, ForgottenNotes(), { scope, id, _ -> scheduled += scope to id }, { scope, id -> cancelled += scope to id }, clock = { 42L })
     }
     @After fun close() { db.close(); context.deleteDatabase(NAME) }
 
@@ -105,7 +105,7 @@ class ForgetQueueRoomTest {
         // A fresh queue and repository read only Room, as after process death.
         dao.putForget(PendingForget(scope, "d1", 1, FORGET_PENDING))
         assertEquals(listOf("feed-kept"), repo.cached.first().map { it.id })
-        val fresh = ForgetQueue(db, ForgottenNotes(), { _, _ -> }, { _, _ -> })
+        val fresh = ForgetQueue(db, ForgottenNotes(), { _, _, _ -> }, { _, _ -> })
         assertEquals(listOf("b"), fresh.visibleInsights(scope, listOf(Insight(id = "a", documentId = "d1"), Insight(id = "b", documentId = "d2"))).map { it.id })
         assertEquals(listOf("d2"), fresh.visibleNotes(scope, listOf(NoteSummary("d1", "t", null, "", 1), NoteSummary("d2", "t", null, "", 1))).map { it.documentId })
         assertEquals(emptySet<String>(), fresh.hiddenIds("other").first())
@@ -116,7 +116,46 @@ class ForgetQueueRoomTest {
         dao.put(listOf(cached(scope, "c-hidden", "d1"), cached(scope, "c-kept", "d2")))
         dao.putForget(PendingForget(scope, "d1", 1, FORGET_PENDING))
         val reviews = listOf(Review("r1", "c-hidden", "q", "", 1.0), Review("r2", "c-kept", "q", "", 1.0))
-        assertEquals(listOf("r2"), queue.visibleReviews(repo, reviews).map { it.id })
+        assertEquals(listOf("r2"), queue.visibleReviews(repo, reviews).reviews.map { it.id })
+    }
+
+    @Test fun anOversizedIdIsRejectedBeforeAnythingIsQueued() = runBlocking {
+        try { queue.forgetNoteOffline("s", "a".repeat(20_000)); fail("expected InvalidForgetIdException") } catch (expected: InvalidForgetIdException) { }
+        assertTrue(dao.forgets("s").isEmpty()); assertTrue(scheduled.isEmpty())
+    }
+
+    @Test fun resumeMarksAThrowingRowFailedAndStillSchedulesTheRest() = runBlocking {
+        val throwing = ForgetQueue(db, ForgottenNotes(), { scope, id, _ -> if (id == "bad") throw IllegalStateException("too big") else scheduled += scope to id }, { _, _ -> })
+        dao.putForget(PendingForget("s", "bad", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "ok", 1, FORGET_PENDING))
+        throwing.resumePending("s")
+        assertEquals(listOf("s" to "ok"), scheduled)
+        assertEquals(FORGET_SCHEDULE_ERROR, dao.forget("s", "bad")?.error); assertEquals(FORGET_FAILED, dao.forget("s", "bad")?.status)
+    }
+
+    @Test fun aSchedulingFailureAfterTheCommitStillCountsAsForgotten() = runBlocking {
+        val throwing = ForgetQueue(db, ForgottenNotes(), { _, _, _ -> throw IllegalStateException("x") }, { _, _ -> })
+        dao.put(listOf(cached("s", "c1", "d1")))
+        assertEquals(listOf("c1"), throwing.forgetNoteOffline("s", "d1"))
+        assertEquals(FORGET_PENDING, dao.forget("s", "d1")?.status)
+    }
+
+    @Test fun confirmationNeverDeletesAnUnrelatedLegacyRow() = runBlocking {
+        dao.putJob(PendingIngest("s", "A", "", kind = "note", status = "completed", documentId = "d1", title = "A"))
+        dao.putJob(PendingIngest("s", "B", "", kind = "note", status = "completed", documentId = null, title = "B"))
+        dao.putForget(PendingForget("s", "d1", 1, FORGET_PENDING))
+        queue.confirmed("s", "d1")
+        assertEquals(listOf("B"), dao.completedNoteRows("s", COMPLETED_STATES).map { it.id })
+    }
+
+    @Test fun stopTryingDeletesOnlyAFailedRow() = runBlocking {
+        dao.putForget(PendingForget("s", "p", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "f", 1, FORGET_FAILED, FORGET_REJECTED_ERROR))
+        assertFalse(queue.stopTrying("s", "p")); assertTrue(queue.stopTrying("s", "f"))
+        assertEquals(setOf("p"), dao.hiddenIds("s").toSet())
+    }
+
+    @Test fun otherScopeRowsAreReportedForTheTokenRotationNotice() = runBlocking {
+        dao.putForget(PendingForget("old", "d1", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "d2", 1, FORGET_PENDING))
+        assertEquals(listOf("d1"), queue.otherScopeRows("s").map { it.documentId })
     }
 
     private companion object { const val NAME = "forget-queue-test.db" }

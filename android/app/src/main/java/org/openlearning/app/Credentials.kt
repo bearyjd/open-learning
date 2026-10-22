@@ -37,13 +37,20 @@ class Credentials(context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv)); updateAAD(server.toByteArray()) }
         Connection(server, cipher.doFinal(encrypted).toString(Charsets.UTF_8))
     }.getOrNull()
+    /** The server that was connected before the latest save, once: the token-rotation notice reads it on the next connect. */
+    fun takePreviousServer(): String? {
+        val previous = preferences.getString("previousServer", null)
+        if (previous != null) preferences.edit().remove("previousServer").apply()
+        return previous
+    }
     fun save(serverInput: String, tokenInput: String, allowHttp: Boolean) {
         val server = normalizeServer(serverInput, allowHttp)
         val token = tokenInput.trim()
         require(token.isNotEmpty() && !token.contains('\n') && !token.contains('\r')) { "Enter a valid server token." }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()); updateAAD(server.toByteArray()) }
         val encrypted = cipher.doFinal(token.toByteArray())
-        check(preferences.edit().putString("server", server)
+        val previous = preferences.getString("server", null)
+        check(preferences.edit().putString("server", server).putString("previousServer", previous)
             .putString("token", Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)).commit()) { "Could not store the connection." }
         mutable.value = Connection(server, token)
