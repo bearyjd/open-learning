@@ -13,8 +13,9 @@ settings; touches only the acceptance package. Install the APK first:
     python3 scripts/android_notes.py --serial SERIAL [--port 18766]
 
 Scenarios: draft survives process death; submit posts exactly once with the expected
-hash and shows no source link; 413 maps to the fixed message; forget Cancel sends no
-DELETE and Confirm sends exactly one. Evidence goes to --out (default .omc/notes/, ignored by Git).
+hash and shows no source link; forget Cancel sends no DELETE and Confirm sends exactly one;
+429 (Retry-After, once) shows the fixed "busy, retrying automatically" message, then the retry is accepted (202) and the
+note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message. Evidence goes to --out (default .omc/notes/, ignored by Git).
 """
 
 import argparse
@@ -156,7 +157,7 @@ def count_requests(log, method, path) -> int:
     return sum(1 for e in log if e["method"] == method and e["path"] == path)
 
 
-STATE = {"log": [], "text_status": 200, "done": False}
+STATE = {"log": [], "text_status": 200, "done": False, "rate_limit_once": False, "retried": False}
 LOCK = threading.Lock()
 
 
@@ -167,7 +168,7 @@ def make_handler():
 
         _digest = None  # set per request; the log entry is written before the reply so callers see it at once
 
-        def _send(self, body, code=200):
+        def _send(self, body, code=200, headers=None):
             if self._digest is not None:
                 with LOCK:
                     STATE["log"].append({"t": round(time.time(), 1), "method": self.command, "path": self.path.split("?")[0], "status": code, **self._digest})
@@ -175,6 +176,8 @@ def make_handler():
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(data)
             return code
@@ -187,6 +190,8 @@ def make_handler():
                 with LOCK:
                     if path == "/__ctl/text_status":
                         STATE["text_status"] = int(self.path.split("=")[1])
+                    elif path == "/__ctl/rate_limit_once":
+                        STATE["rate_limit_once"] = True
                     elif path == "/__ctl/log":
                         return self._send(STATE["log"])
                 return self._send({"ok": True})
@@ -202,8 +207,15 @@ def make_handler():
                 if text_status != 200:
                     return self._send({"detail": "SENTINEL-BODY"}, text_status)
                 with LOCK:
-                    STATE["done"] = True
-                return self._send({"id": "job-1", "status": "completed"})
+                    limited = STATE["rate_limit_once"]
+                    if limited:
+                        STATE["rate_limit_once"], STATE["retried"] = False, True
+                    else:
+                        STATE["done"] = True
+                    accepted = 202 if STATE["retried"] else 200
+                if limited:  # the body is a sentinel: the app must show its fixed message, never this text
+                    return self._send({"detail": "SENTINEL-BODY"}, 429, {"Retry-After": "1"})
+                return self._send({"id": "job-1", "status": "completed"}, accepted)
             routes = {
                 ("GET", "/api/v1/feed/today"): [NOTE] if done else [],
                 ("GET", "/api/v1/library"): [],
@@ -421,12 +433,44 @@ def mock_log():
         return list(STATE["log"])
 
 
+def rate_limit_summary(log, baseline) -> dict:
+    """POSTs after `baseline` earlier ones: how many, their statuses, and whether every body had the same hash."""
+    posts = [e for e in log if e["method"] == "POST" and e["path"] == "/api/v1/ingest/text"][baseline:]
+    return {"429_posts": len(posts), "429_statuses": [e["status"] for e in posts],
+            "429_same_body_hash": bool(posts) and len({e["sha256"] for e in posts}) == 1}
+
+
+def run_rate_limit(dev, port, results):
+    """Submit the fixture once; the mock answers 429 + Retry-After, the app retries by itself, the mock then accepts."""
+    STEP["name"] = "429:open editor"
+    baseline = count_requests(mock_log(), "POST", "/api/v1/ingest/text")
+    urllib_ctl(port, "rate_limit_once")
+    dev.tap_scrolling("Write or import a note")
+    fill_editor(dev, open_editor=False)
+    dev.tap_scrolling("Add note to learning feed")
+    STEP["name"] = "429:await busy message"
+    results["429_message"] = dev.wait_for("busy, retrying automatically", timeout=30)
+    results["429_sentinel_in_ui"] = bool(dev.find("SENTINEL-BODY"))
+    dev.dump("05-429-waiting")
+    STEP["name"] = "429:await retry"
+    end = time.time() + 90  # WorkManager backoff starts at 10 s and grows
+    while time.time() < end and count_requests(mock_log(), "POST", "/api/v1/ingest/text") < baseline + 2:
+        time.sleep(MIN_POLL_GAP)
+    results.update(rate_limit_summary(mock_log(), baseline))
+    results["429_completed"] = results["429_posts"] == 2 and results["429_statuses"] == [429, 202]
+    STEP["name"] = "429:message cleared"
+    results["429_message_cleared"] = not dev.wait_for("busy, retrying automatically", timeout=6)
+    dev.dump("06-429-completed")
+
+
 def scenarios_pass(results) -> bool:
     return bool(results.get("draft_survives_process_death") and results.get("posts") == 1 and results.get("submit_hash_match") is not False
                 and results.get("submit_shows_note_card") and results.get("no_link_nodes_on_list")
                 and results.get("no_link_nodes_on_detail") and results.get("forget_cancel_deletes") == 0
                 and results.get("forget_confirm_deletes") == 1 and results.get("413_message")
-                and results.get("sentinel_body_in_ui") is False)
+                and results.get("sentinel_body_in_ui") is False
+                and results.get("429_message") and results.get("429_posts") == 2 and results.get("429_same_body_hash")
+                and results.get("429_completed") and results.get("429_sentinel_in_ui") is False)
 
 
 def write_evidence(out, results):
@@ -492,13 +536,17 @@ def main():
         dev.dump("04-after-forget")
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
 
+        run_rate_limit(dev, args.port, results)
+        if not results["429_completed"]:  # a half-finished retry would turn the next scenario's 413 into a second failure
+            return 1
+
         STEP["name"] = "413:open editor"
         urllib_set_status(args.port, 413)
         dev.tap_scrolling("Write or import a note")
         fill_editor(dev, open_editor=False)
         dev.tap_scrolling("Add note to learning feed")
         results["413_message"] = dev.wait_for("larger than your server accepts", timeout=40)
-        dev.dump("05-413")
+        dev.dump("07-413")
         results["sentinel_body_in_ui"] = bool(dev.find("SENTINEL-BODY"))
 
         ok = scenarios_pass(results)
@@ -518,9 +566,13 @@ def main():
             server.shutdown()
 
 
-def urllib_set_status(port, status):
+def urllib_ctl(port, command, query=""):
     import urllib.request
-    urllib.request.urlopen("http://127.0.0.1:%d/__ctl/text_status?code=%d" % (port, status), timeout=5).read()
+    urllib.request.urlopen("http://127.0.0.1:%d/__ctl/%s%s" % (port, command, query), timeout=5).read()
+
+
+def urllib_set_status(port, status):
+    urllib_ctl(port, "text_status", "?code=%d" % status)
 
 
 if __name__ == "__main__":

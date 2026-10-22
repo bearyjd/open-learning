@@ -328,9 +328,8 @@ Not covered: backend restart, a real backend or model, the fold return leg, phys
 
 ## Android note ingestion (E2a): what is and is not verified
 
-Device acceptance for notes has NOT been run. The app code, JVM tests and the
-instrumented tests below compile in CI, but no note flow has been executed on a phone
-or emulator yet.
+Device acceptance for notes has been run on one physical phone against a mock backend only (see the
+device runs below). CI only compiles the instrumented tests.
 
 Verified in CI (93 JVM tests, lint, debug/acceptance/androidTest builds, 21 script tests): note
 validation (code-point bounds, CRLF, NFC, control, bidi, C1 and lone-surrogate rejection), file reading
@@ -501,9 +500,33 @@ other off-screen targets were never clicked; clicks now scroll first, submit wai
 timeouts log the text-submit count and the semantics tree. These fixes are compile-only (assembleAcceptanceAndroidTest);
 they have not been run on a device.
 
-Still unverified on device: the 429 retry message, the SAF file picker through DocumentsUI, the remove-job race,
-offline forget, fold/unfold and activity recreate with a note open, and whether Bitwarden's save sheet is suppressed
-(it was not observed in four quiet runs, which is evidence rather than proof).
+Fifth supervised device run (same device, APKs built from 485c3d9, one run of each, no retries; autofill prompt YES/NO:
+NO, no Bitwarden, autofill or save-password sheet at any dump, five consecutive builds with the fix quiet at the token
+step). `scripts/android_notes.py` completed every scenario: connect, draft after `am kill` (145), 1 POST with matching
+hash, card without Refresh, no link nodes on list or detail, forget Cancel 0 / Confirm 1 DELETE, 413 fixed message with
+no sentinel body in the UI, and the new 429 scenario PASS (fixed busy/retrying message, no sentinel in the UI, statuses
+429 then 202, 2 POSTs with the same body hash, note completed, message cleared). Instrumented suites: `DeviceAcceptanceTest`
+6/6 (the previously failing `onlineSaveSurvivesOfflineRelaunchAndAccountSwitch` now passes), `DatabaseHygieneTest` 9/9,
+`MigrationTest` 1/1, `ConnectAutofillTest` 1/1. `NoteAcceptanceTest` 6/9 (9 tests, not 8): the
+`removingAQueuedNoteBeforeSubmitSendsNothing`, `serverErrorsMapToFixedMessagesWithoutEchoingTheBody` and
+`textIsClearedFromRoomAfterCompletion` failures from the fourth run are fixed. 3 still fail, all in `completeOneNote`
+(NoteAcceptanceTest.kt:169): `completedNoteShowsNoSourceLinksAndForgetCancelDoesNotDelete`,
+`forgetConfirmDeletesOnceAndPurgesRoom`, `offlineForgetKeepsEverything`. The timeout log (fixture text only) shows 1 text
+POST, the job row completed ("Note: Lecture 3 / Completed") and the feed list showing "Today's ideas" with the note card
+not in the semantics tree; the card sits in the lazy feed below the visible window, and the wait does a plain
+`onAllNodesWithText` without scrolling. Classification: test bug (the wait must scroll to the card, as `scrollTo` does
+afterwards), not an app bug, which the adb script corroborates (it scrolls and finds the card). Fixed afterwards,
+compile-only and NOT re-run on a device: the `completeOneNote` wait now scrolls to the card (bounded by the 15 s
+`waitUntil`, no sleeps). The three tests remain unverified on device until re-run.
+Observation: the "Note queued..." banner was still showing after the job completed. Nothing clears it on completion:
+`LearningViewModel.kt:204` sets `notice` and only `clearError()` (line 344, user dismiss) or another notice replaces it. `LiveLearningLoopTest`
+was not run.
+
+Still unverified on device: the SAF file picker through DocumentsUI, the remove-job race (cancel versus a submitting
+worker), offline forget at a real network loss (the instrumented test fakes it with a fixture flag and has not passed),
+the forget flows in `NoteAcceptanceTest` (blocked by the line-169 test bug; the script covers forget Cancel/Confirm),
+fold/unfold and activity recreate with a note open, and whether Bitwarden's save sheet is suppressed (not observed in
+five quiet runs, which is evidence rather than proof).
 
 Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
 earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,

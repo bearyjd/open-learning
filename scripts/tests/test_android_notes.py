@@ -144,7 +144,9 @@ class SubmitHashTests(unittest.TestCase):
         self.assertFalse(r["submit_hash_match"])
         good = {"draft_survives_process_death": True, "posts": 1, "submit_shows_note_card": True,
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
-                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False}
+                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
+                "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
+                "429_sentinel_in_ui": False}
         self.assertFalse(notes.scenarios_pass({**good, **r}))
         self.assertTrue(notes.scenarios_pass({**good, "submit_hash_match": True}))
 
@@ -161,8 +163,13 @@ class EvidenceTests(unittest.TestCase):
     def test_scenarios_pass_requires_every_result(self):
         good = {"draft_survives_process_death": True, "posts": 1, "submit_shows_note_card": True,
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
-                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False}
+                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
+                "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
+                "429_sentinel_in_ui": False}
         self.assertTrue(notes.scenarios_pass(good))
+        for key, bad in (("429_message", False), ("429_posts", 1), ("429_posts", 3), ("429_same_body_hash", False),
+                         ("429_completed", False), ("429_sentinel_in_ui", True)):
+            self.assertFalse(notes.scenarios_pass({**good, key: bad}), key)
         self.assertFalse(notes.scenarios_pass({}))
         self.assertFalse(notes.scenarios_pass({**good, "posts": 2}))
         self.assertFalse(notes.scenarios_pass({**good, "sentinel_body_in_ui": True}))
@@ -178,7 +185,7 @@ class EvidenceTests(unittest.TestCase):
 
 class MockServerTests(unittest.TestCase):
     def setUp(self):
-        notes.STATE.update(log=[], text_status=200, done=False)
+        notes.STATE.update(log=[], text_status=200, done=False, rate_limit_once=False, retried=False)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), notes.make_handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.server.server_port
@@ -216,6 +223,29 @@ class MockServerTests(unittest.TestCase):
         self.call("POST", "/api/v1/ingest/text", b"{}")
         self.assertEqual("note", json.loads(self.call("GET", "/api/v1/feed/today")[1])[0]["source_kind"])
         self.assertEqual(204, self.call("DELETE", "/api/v1/notes/note-doc")[0])
+
+    def test_rate_limit_once_answers_429_with_retry_after_then_202(self):
+        self.call("GET", "/__ctl/rate_limit_once")
+        body = b'{"text":"x"}'
+        request = urllib.request.Request(self.base + "/api/v1/ingest/text", data=body, method="POST",
+                                         headers={"Authorization": "Bearer " + notes.TOKEN})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(429, caught.exception.code)
+        self.assertEqual("1", caught.exception.headers["Retry-After"])
+        self.assertEqual(202, self.call("POST", "/api/v1/ingest/text", body)[0])
+        self.assertEqual(202, self.call("POST", "/api/v1/ingest/text", body)[0])
+        self.assertEqual([429, 202, 202], [e["status"] for e in notes.STATE["log"]])
+        self.assertEqual(1, len({e["sha256"] for e in notes.STATE["log"]}))
+
+    def test_rate_limit_scenario_summary(self):
+        log = [{"method": "POST", "path": "/api/v1/ingest/text", "status": s, "len": 5, "sha256": "h"} for s in (200, 429, 202)]
+        summary = notes.rate_limit_summary(log, baseline=1)
+        self.assertEqual({"429_posts": 2, "429_same_body_hash": True, "429_statuses": [429, 202]}, summary)
+        other = log[:1] + [dict(log[1]), {**log[2], "sha256": "other"}]
+        self.assertFalse(notes.rate_limit_summary(other, baseline=1)["429_same_body_hash"])
+        self.assertEqual(0, notes.rate_limit_summary(log[:1], baseline=1)["429_posts"])
+        self.assertFalse(notes.rate_limit_summary(log[:1], baseline=1)["429_same_body_hash"])
 
 
 if __name__ == "__main__":
