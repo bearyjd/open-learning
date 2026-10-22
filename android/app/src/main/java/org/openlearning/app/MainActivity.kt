@@ -96,7 +96,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = if (expanded) 32.dp else 20.dp)) {
                     if (state.busy || state.chatBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     state.error?.let { StatusMessage(it, true, model::clearError) }
-                    state.notice?.let { StatusMessage(it, false, model::clearError) }
+                    state.notice?.let { StatusMessage(it.text, false, model::clearError) }
                     if (connection == null) EmptyState("A home for what you learn", "Connect your own Open Learning server to collect useful ideas, explore their sources, and make them stick.")
                     else if (state.selected != null) {
                         if (state.learning) Tutor(state, model) else InsightDetail(state.selected!!, model)

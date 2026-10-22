@@ -81,6 +81,18 @@ class NoteAcceptanceTest {
         assertFalse("compose view must not be important for autofill", host.isImportantForAutofill)
     }
 
+    // NOT device-verified. The "Note queued" banner must go away once the note's job completes (it used to stay).
+    @Test fun queuedNoticeDisappearsAfterCompletion() {
+        // Hold the job in "waiting" so the banner is observable, then let it complete.
+        fixture.down.set(true)
+        launchEditor(); submit("Lecture 3", body)
+        awaitRow { it.status == "waiting" }
+        waitText("Note queued")
+        fixture.down.set(false)
+        awaitRow(45_000) { it.status == "completed" }
+        waitUntil { compose.onAllNodesWithText("Note queued", substring = true).fetchSemanticsNodes().isEmpty() }
+    }
+
     @Test fun textIsClearedFromRoomAfterCompletion() {
         launchEditor(); submit("Lecture 3", body)
         awaitRow { it.status == "completed" }

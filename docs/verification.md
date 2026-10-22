@@ -328,6 +328,8 @@ Not covered: backend restart, a real backend or model, the fold return leg, phys
 
 ## Android note ingestion (E2a): what is and is not verified
 
+Stale "Note queued" banner after the job completed: fixed (cleared when that note's job finishes or is removed, never a newer notice); JVM-tested (`NoteLogicTest`) for the `noticeAfterJobUpdate` logic only, not device-verified. The ViewModel wiring (the jobs collector in `LearningViewModel` that applies it) is covered only by the instrumented `NoteAcceptanceTest.queuedNoticeDisappearsAfterCompletion`, not by any JVM test, and that test has not been run on a device.
+
 Device acceptance for notes has been run on one physical phone against a mock backend only (see the
 device runs below). CI only compiles the instrumented tests.
 
