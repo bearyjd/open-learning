@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
 
 /**
  * The notes list and server limits, split out of the view model. The list is held in [state] (memory only) and
@@ -15,6 +14,7 @@ import retrofit2.HttpException
 internal class NotesActions(
     private val scope: CoroutineScope,
     private val forgotten: ForgottenNotes,
+    private val queue: ForgetQueue,
     private val repo: () -> LearningRepository?,
     private val state: MutableStateFlow<ScreenState>,
     private val onForgotten: () -> Unit,
@@ -32,7 +32,7 @@ internal class NotesActions(
         scope.launch {
             retryPurges(repository)
             try {
-                val fetched = repository.api.notes().toSummaries()
+                val fetched = queue.visibleNotes(repository.config.scope, repository.api.notes().toSummaries())
                 if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
@@ -40,26 +40,13 @@ internal class NotesActions(
     }
 
     /**
-     * Online-only: nothing is cleared locally unless the server confirms the note is gone (204 or 404, so a retry after a
-     * lost answer succeeds). The tombstone is set first so an in-flight refresh cannot write cards back; it is dropped only
-     * when the server did not delete. A cleanup error after the server delete keeps it (the note stays hidden).
+     * Offline-first: the note is hidden on this device at once (queued in Room, so it survives process death) and the
+     * server DELETE is replayed by [ForgetWorker] when a connection allows. Fails only if the local write fails.
      */
-    private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult {
-        val scopeKey = repository.config.scope
-        forgotten.add(scopeKey, documentId)
-        try {
-            val response = repository.api.forgetNote(documentId)
-            if (!response.isGone()) throw HttpException(response)
-        } catch (cancelled: CancellationException) { forgotten.remove(scopeKey, documentId); throw cancelled }
-        catch (error: Exception) { forgotten.remove(scopeKey, documentId); return ForgetResult.Failed(error) }
-        return try { ForgetResult.Done(repository.purgeDocument(documentId, title)) }
+    private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult =
+        try { ForgetResult.Done(queue.forgetNoteOffline(repository.config.scope, documentId, title)) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) {
-            android.util.Log.w("OpenLearning", "Could not clean up a forgotten note on this device")
-            forgotten.purgeFailed(scopeKey, documentId, title)
-            ForgetResult.PurgeFailed
-        }
-    }
+        catch (error: Exception) { forgotten.remove(repository.config.scope, documentId); ForgetResult.Failed(error) }
 
     /**
      * Re-runs the local cleanup of notes the server deleted but this device could not clean (see [ForgottenNotes.purgeFailed]).

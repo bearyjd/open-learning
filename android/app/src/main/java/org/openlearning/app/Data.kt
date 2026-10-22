@@ -8,6 +8,7 @@ import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -79,7 +80,7 @@ data class PendingIngest(
     // Note bodies are private: keep them out of logs and crash reports.
     override fun toString() = "PendingIngest(scope=$scope, id=$id, kind=$kind, jobId=$jobId, status=$status, text=${if (text == null) "null" else "<redacted>"})"
 }
-/** Reserved for offline forget (E2b-3); nothing reads or writes it yet. */
+/** A note forgotten on this device and waiting for the server DELETE. Ids and a fixed error only, never titles or text. */
 @Entity(primaryKeys = ["scope", "documentId"])
 data class PendingForget(val scope: String, val documentId: String, val createdAt: Long, val status: String, val error: String? = null)
 @Entity
@@ -120,6 +121,20 @@ interface LearningDao {
     @Query("DELETE FROM NoteDraft WHERE scope = :scope") suspend fun deleteDraft(scope: String)
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope") suspend fun allInsights(scope: String): List<CachedInsight>
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND id IN (:ids)") suspend fun deleteInsights(scope: String, ids: List<String>)
+    // Idempotent: forgetting twice keeps the first row (and its failed state, until the person retries).
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun putForget(row: PendingForget): Long
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope") fun observeForgets(scope: String): Flow<List<PendingForget>>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope") suspend fun forgets(scope: String): List<PendingForget>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun forget(scope: String, documentId: String): PendingForget?
+    @Query("SELECT documentId FROM PendingForget WHERE scope = :scope") suspend fun hiddenIds(scope: String): List<String>
+    @Query("SELECT COUNT(*) FROM PendingForget WHERE scope = :scope AND status = 'pending'") fun pendingForgetCount(scope: String): Flow<Int>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'failed' ORDER BY createdAt") fun failedForgets(scope: String): Flow<List<PendingForget>>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'pending'") suspend fun pendingForgets(scope: String): List<PendingForget>
+    @Query("UPDATE PendingForget SET status = :status, error = :error WHERE scope = :scope AND documentId = :documentId")
+    suspend fun setForgetStatus(scope: String, documentId: String, status: String, error: String?): Int
+    @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun deleteForget(scope: String, documentId: String)
+    @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND documentId = :documentId")
+    suspend fun linkedNoteRows(scope: String, documentId: String): List<PendingIngest>
 }
 @Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 3, exportSchema = true)
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
@@ -156,11 +171,14 @@ class LearningRepository(val config: Connection, private val database: LearningD
             .connectTimeout(15, TimeUnit.SECONDS).readTimeout(90, TimeUnit.SECONDS)
             .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("Authorization", "Bearer ${config.token}").build()) }.build())
         .addConverterFactory(GsonConverterFactory.create(gson)).build().create(LearningApi::class.java)
-    val cached: Flow<List<CachedInsight>> = dao.observe(config.scope)
+    // Hidden at read time from the persisted queue, so a process death cannot bring a forgotten note back.
+    val cached: Flow<List<CachedInsight>> = dao.observe(config.scope).combine(dao.observeForgets(config.scope)) { rows, forgets ->
+        rows.hideForgotten(hiddenIds(forgets, config.scope)) { decode(it).documentId }
+    }
     val jobs = dao.jobs(config.scope)
     fun decode(row: CachedInsight): Insight = gson.fromJson(row.payload, Insight::class.java).copy(saved = row.saved)
     suspend fun remember(insight: Insight, inFeed: Boolean? = null) {
-        if (forgotten.blocks(config.scope, insight)) return
+        if (forgotten.blocks(config.scope, insight) || insight.documentId in dao.hiddenIds(config.scope)) return
         val previous = dao.get(config.scope, insight.id)
         dao.put(listOf(CachedInsight(config.scope, insight.id, gson.toJson(insight), insight.saved, inFeed ?: previous?.inFeed ?: false)))
     }
@@ -234,12 +252,13 @@ class LearningRepository(val config: Connection, private val database: LearningD
     suspend fun save(item: Insight) { remember(api.save(item.id)) }
     suspend fun dismiss(item: Insight) { api.dismiss(item.id); dao.dismiss(config.scope, item.id) }
 }
-class AppContainer(context: Context) {
+class AppContainer(private val context: Context) {
     val credentials = Credentials(context)
     val database = Room.databaseBuilder(context, LearningDatabase::class.java, "learning.db")
         .addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(SecureDeleteCallback).build()
     /** Notes being forgotten: in-flight refreshes must not write their cards back. */
     val forgotten = ForgottenNotes()
+    val forgetQueue = ForgetQueue(database, forgotten, { scope, id -> ForgetWorker.schedule(context, scope, id) }, { scope, id -> IngestWorker.cancel(context, scope, id) })
     fun repository(connection: Connection) = LearningRepository(connection, database, forgotten)
 }
 class LearningApplication : Application() {

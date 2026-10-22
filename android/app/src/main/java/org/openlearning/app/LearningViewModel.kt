@@ -34,7 +34,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var requestGeneration = 0
     private var chatGeneration = 0
     private var detailJob: Job? = null
-    private val notesActions = NotesActions(viewModelScope, container.forgotten, { repo }, mutable) { memory.clear(); detailJob?.cancel(); chatGeneration++ }
+    private val notesActions = NotesActions(viewModelScope, container.forgotten, container.forgetQueue, { repo }, mutable) { memory.clear(); detailJob?.cancel(); chatGeneration++ }
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
@@ -65,6 +65,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
                     launch { notesActions.retryPurges(repository) }
+                    launch { container.forgetQueue.resumePending(repository.config.scope) }
                     launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) { limits = fetched; limitsLoaded = true } }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
@@ -313,7 +314,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         }
     }
     fun loadReviews() = request { repository ->
-        val reviews = repository.api.reviews()
+        val reviews = container.forgetQueue.visibleReviews(repository, repository.api.reviews())
         if (repo === repository) mutable.update { it.copy(reviews = reviews, reviewsLoaded = true, revealed = false, reviewSource = null) }
     }
     fun revealReview(review: Review) {
@@ -328,7 +329,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         if (repo === repository) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null, notice = Notice("Next review: ${next.dueAt}")) }
     }
     fun search(query: String) = request { repository ->
-        val results = container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim()))
+        val results = container.forgetQueue.visibleInsights(repository.config.scope, container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim())))
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
     fun loadNotes() = notesActions.load()
