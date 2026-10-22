@@ -2,9 +2,7 @@ package org.openlearning.app
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
@@ -17,7 +15,7 @@ internal class NotesActions(
     private val scope: CoroutineScope,
     private val queue: ForgetQueue,
     private val repo: () -> LearningRepository?,
-    private val state: MutableStateFlow<ScreenState>,
+    private val state: ScreenPublisher,
     private val onForgotten: () -> Unit,
     private val resume: suspend (scope: String) -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -30,7 +28,7 @@ internal class NotesActions(
 
     fun load() {
         val repository = repo() ?: return
-        state.update { it.copy(notes = it.notes.refreshStarted()) }
+        state.publish { it.copy(notes = it.notes.refreshStarted()) }
         val generation = state.value.notes.generation
         scope.launch {
             try {
@@ -43,9 +41,9 @@ internal class NotesActions(
                 try { queue.reconcile(repository.config.scope, page.ids, page.complete, startedAt) }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not settle confirmed forgets") }
-                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(raw.toSummaries(), generation)) }
+                if (repo() === repository) state.publishFresh(repository.config.scope) { it.copy(notes = it.notes.refreshed(raw.toSummaries(), generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
+            catch (error: Exception) { if (repo() === repository) state.publish { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
         }
     }
 
@@ -67,16 +65,16 @@ internal class NotesActions(
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
         if (note.documentId in state.value.notes.forgetting) return
-        state.update { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
+        state.publish { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
         scope.launch {
             val result = deleteAndPurge(repository, note.documentId, note.title)
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
+                is ForgetResult.Failed -> state.publish { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.update { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
+                    state.publish { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
         }
@@ -90,11 +88,11 @@ internal class NotesActions(
             val result = deleteAndPurge(repository, item.documentId, purgeTitle(item))
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.update { it.copy(error = result.message()) }
+                is ForgetResult.Failed -> state.publish { it.copy(error = result.message()) }
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.update { it.copy(notice = Notice(banner)) }
+                    state.publish { it.copy(notice = Notice(banner)) }
                 }
             }
         }
@@ -117,7 +115,7 @@ internal class NotesActions(
     }
 
     /** The list is memory-only and only kept while its screen is open. */
-    fun close() = state.update { it.copy(notes = it.notes.closed()) }
+    fun close() = state.publish { it.copy(notes = it.notes.closed()) }
 
-    fun messageShown() = state.update { it.copy(notes = it.notes.messageShown()) }
+    fun messageShown() = state.publish { it.copy(notes = it.notes.messageShown()) }
 }

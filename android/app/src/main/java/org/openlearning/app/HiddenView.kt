@@ -48,5 +48,10 @@ fun ScreenState.viewFor(hiddenScope: String, hidden: Set<String>): ScreenState =
 fun ScreenState.purgedFor(hiddenScope: String, hidden: Set<String>): ScreenState =
     if (scope == hiddenScope) purgedOf(hidden) else this
 
-/** TEMP stub. */
-fun ScreenState.published(sets: List<Pair<String, Set<String>>>, transform: (ScreenState) -> ScreenState): ScreenState = transform(this)
+/**
+ * The only way a publication reaches the retained state: [transform] is applied, then the result is purged with every hidden
+ * set supplied (each only if it belongs to the state's own account). A response for a document forgotten meanwhile is
+ * therefore never stored, so it cannot come back when a confirmed tombstone is pruned.
+ */
+fun ScreenState.published(sets: List<Pair<String, Set<String>>>, transform: (ScreenState) -> ScreenState): ScreenState =
+    sets.fold(transform(this)) { state, (scope, ids) -> state.purgedFor(scope, ids) }

@@ -58,4 +58,21 @@ class SingleWriterScanTest {
         assertEquals(emptyList<File>(), offenders)
         assertTrue(writesCards(File(dir(), "CardWriter.kt").readText(), methods))
     }
+
+    /** Text scan, NOT a runtime guarantee: a direct write to a ScreenState flow is allowed only inside ScreenPublisher.kt. */
+    @Test fun onlyThePublisherWritesTheScreenState() {
+        val files = mainSources().filter { "ScreenState" in it.readText() || "ScreenPublisher" in it.readText() }
+        assertTrue(files.any { it.name == "ScreenPublisher.kt" } && files.any { it.name == "LearningViewModel.kt" } && files.any { it.name == "NotesActions.kt" })
+        val offenders = files.filter { it.name != "ScreenPublisher.kt" && writesScreenFlow(it.readText()) }
+        assertEquals(emptyList<File>(), offenders)
+        assertTrue(writesScreenFlow(File(dir(), "ScreenPublisher.kt").readText()))
+    }
+    @Test fun screenFlowWritesAreFound() {
+        assertTrue(writesScreenFlow("mutable.update { it }")); assertTrue(writesScreenFlow("state . update {"))
+        assertTrue(writesScreenFlow("mutable.value = ScreenState()")); assertTrue(writesScreenFlow("mutable\n  .value=x"))
+        assertFalse(writesScreenFlow("if (mutable.value == x) y; val s = state.value; publisher.publish { it }"))
+    }
 }
+
+/** Text scan for `mutable`/`state` flow writes (`update`, `value =`, `emit`, `tryEmit`); reads and `.value ==` are not writes. */
+fun writesScreenFlow(text: String) = Regex("""\b(?:mutable|state)\s*\.\s*(?:update\b|value\s*=(?!=)|emit\b|tryEmit\b)""").containsMatchIn(text)

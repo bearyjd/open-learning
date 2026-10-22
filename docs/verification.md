@@ -667,3 +667,13 @@ NOT tested at all: the `writeCards` transaction on a real database as it runs; `
 wrapping in the view model; the once-per-start notice; `Credentials` deleting the old previous-server key; the Compose screens;
 and the server's `document_id` on reviews (a backend change in a separate PR). The earlier `ForgetHardeningTest` marker tests
 were removed with the marker.
+
+E2b-3 fourth-pass fixes (still NOT device-verified). New JVM tests: `ReviewScrubTest` (blank id from cache, network or payload is
+dropped and never mapped; a blank cached value falls through to the network; non-blank resolves), `PublishTest` (`published`: a
+late search, review, notes, jobs, detail or chat publication for a hidden document is not stored; nothing returns after the
+tombstone is pruned; another account's set is not applied), `JobWriteDecisionTest` (`jobWriteDecision`), and
+`SingleWriterScanTest.onlyThePublisherWritesTheScreenState` (a TEXT scan: no direct write to a screen-state flow outside
+`ScreenPublisher.kt`). Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the transactional `updateJobUnlessHidden`
+(forget committing between the response and the update). Untested: `ScreenPublisher` itself (the snapshot re-check loop, the Room
+flow collector, `publishFresh` DAO read), its wiring in the view model and `NotesActions`, the real transaction on a device, and the
+residual of an unlinked processing row whose worker never answers.

@@ -193,6 +193,20 @@ the same removal is applied to the stored state, so when a confirmed row is late
 to reappear. The view and the purge use only the hidden set of the account that owns the state; during an account switch the
 view is blank until that account's set arrives. The ingest worker deletes, instead of saving, a completed import row whose
 document is hidden, so a delayed import cannot show a forgotten title.
+Single publish function: EVERY write to the retained screen state (search results, detail, chat, reviews, revealed source, notes
+list and refresh, jobs, notices, resets) goes through `ScreenPublisher` (`publish`, `publishFresh`, `reset`), which applies
+`purgedOf` with the CURRENT hidden set to the result inside the same atomic update, before it is stored; a response that lands
+after a forget is therefore never stored, not merely masked, and nothing returns once the tombstone is pruned. The hidden set is
+the latest value of the Room flow, held in a snapshot by the same collector that purges on every change, and `publish` re-checks
+the snapshot after the write so a set that arrives mid-publication is applied too. Network-origin publications (`publishFresh`)
+additionally read the hidden ids from the DAO right then. The derived view stays as defense in depth. A test scans the sources
+for direct writes to a screen-state flow outside `ScreenPublisher.kt`; it is a TEXT scan, not a runtime guarantee (aliasing and
+reflection are not caught).
+Ingest update is transactional: the worker reads the hidden ids and writes (or deletes) the job row in ONE Room transaction
+(`updateJobUnlessHidden`), so a forget that commits between a response naming the document and the update is still seen. A
+processing row that has no document id yet cannot be matched by `forgetNoteOffline` (titles are never stored or matched); the
+residual is that such a row stays until its worker answers, at which point the transactional update deletes it. A worker that
+never answers leaves the unlinked row, which holds only what the person typed or imported.
 Confirmation is one transaction too: the row is upserted as `confirmed` (even if it went missing or failed) and the cards and
 linked completed import rows are purged. Stop trying deletes the row (the person's override).
 Pruning, TTL 7 days: each `GET /notes` answer settles confirmed rows (`reconcile`). A confirmed row older than 7 days, measured
@@ -215,7 +229,7 @@ document, never the title or legacy fallback. After the commit nothing can undo 
 to schedule is recovered by the resume, not reported as "nothing was hidden"; the resume cannot crash the app.
 Reviews: a review carries its own `document_id` (additive on the server; an older server sends nothing, which reads as blank).
 A review with a blank id FAILS CLOSED always, whether or not a forget exists yet (so a later forget can still scrub it): its document is looked up (cache, then the
-server, at most 20 lookups, none after the first network failure) and a review that cannot be resolved is dropped; a 404 on one
+server, at most 20 lookups, none after the first network failure) and a review that cannot be resolved is dropped (a blank id from the payload, the cache or the network counts as unresolved: a blank cached value falls through to the network and no blank mapping is ever stored); a 404 on one
 lookup drops only that review. The derived view removes reviews by their own id, the recorded id and the revealed source.
 Failing statuses: 2xx, 404 and 410 are done; 408, 425, 429, 5xx and no answer retry, giving up after 20 attempts (the row is
 failed with "gave up", still hidden); 401 and 403 fail as "rejected by the server"; every other status (3xx, other 4xx) fails
