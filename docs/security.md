@@ -145,6 +145,23 @@ title and label.
 `min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
 validates against. All new response fields are additive and optional.
 
+Android handling of those limits (E2b-2): the app never trusts the server's numbers unbounded. Clamp ceilings:
+`max_document_chars` and `min_text_chars` at 200,000 characters, `max_title_chars` and `max_label_chars` at 2,000
+(the backend defaults are 500 and 100, `MAX_TITLE_CHARS`/`MAX_LABEL_CHARS` in `notes.py`, so 2,000 is only a safety
+ceiling, not a mismatch). A missing, non-positive or contradictory value falls back to the app default. A shared
+text may exceed the note limit by 10,000 characters (so the editor can show it as over-limit) but never 256,000
+characters, which is the hard cap. The share is judged only after the `/limits` fetch finished (loaded or failed), so
+the defaults cannot reject a share the real limit allows. A "too long" rejection is shown once and is dropped if the
+activity is recreated before it is shown. `FLAG_SECURE` on the editor and the notes list is reference-counted per
+window (`SecureWindow`): the first screen sets it and it is cleared only when the last one leaves.
+
+Forgetting a note on Android: when the server delete succeeded but the local cleanup threw, the note stays hidden and
+the cleanup is retried on the next connect and whenever the notes list is opened. The need is held in memory only
+(persisting it would need a new table). If the process dies before a retry, nothing re-runs the cleanup: the cached
+cards and completed import rows of that note stay on the device until it is cleaned some other way. Unlinked
+(pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
+match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
+
 The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
 On SQLite with the API and the worker as separate processes, a forget can commit between
 the worker's read of the document and its job update and leave a dangling `document_id`

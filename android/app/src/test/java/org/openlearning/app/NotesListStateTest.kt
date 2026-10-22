@@ -69,4 +69,18 @@ class NotesListStateTest {
         assertFalse("SECRET" in state.toString())
         assertFalse("SECRET" in state.notes.toString())
     }
+
+    @Test fun lateAnswerFromBeforeCloseIsIgnoredAfterReopen() {
+        val first = NotesListState().refreshStarted()                 // request A (slow)
+        val reopened = first.closed().refreshStarted()                // close, then request B
+        assertNotEquals(first.generation, reopened.generation)
+        val afterLateA = reopened.refreshed(listOf(a), first.generation)
+        assertTrue(afterLateA.items.isEmpty()); assertTrue(afterLateA.loading)
+        assertEquals(listOf(b), afterLateA.refreshed(listOf(b), reopened.generation).items)
+    }
+    @Test fun closeKeepsNothingButTheGeneration() {
+        val closed = NotesListState().refreshed(listOf(a)).refreshStarted().closed()
+        assertTrue(closed.items.isEmpty()); assertFalse(closed.loaded); assertFalse(closed.loading); assertTrue(closed.gone.isEmpty())
+        assertTrue(closed.generation > 0)
+    }
 }

@@ -44,3 +44,9 @@ fun NotesListState.forgetSucceeded(documentId: String, message: String = "Note f
 fun NotesListState.forgetFailed(documentId: String, message: String) = copy(forgetting = forgetting - documentId, message = message)
 
 fun NotesListState.messageShown() = copy(message = null)
+
+/**
+ * Closing empties the list but keeps counting generations: resetting to 0 would let a load started before the close
+ * share a generation with one started after reopening, and be accepted.
+ */
+fun NotesListState.closed() = NotesListState(generation = generation + 1)

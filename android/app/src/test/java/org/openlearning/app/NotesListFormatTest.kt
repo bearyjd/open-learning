@@ -33,9 +33,9 @@ class NotesListFormatTest {
 
     @Test fun sharedNoteWaitsForTheAccountButLinkDoesNot() {
         val text = ShareRoute.Note("t", "body")
-        assertTrue(shareDeferred(text, false, true)); assertFalse(shareDeferred(text, true, true))
-        assertFalse(shareDeferred(ShareRoute.Url("https://a.example"), false, false))
-        assertFalse(shareDeferred(ShareRoute.Ignore, false, false))
+        assertTrue(shareDeferred(text, false, true, true)); assertFalse(shareDeferred(text, true, true, true))
+        assertFalse(shareDeferred(ShareRoute.Url("https://a.example"), false, false, false))
+        assertFalse(shareDeferred(ShareRoute.Ignore, false, false, false))
     }
     @Test fun onlyLinksFillTheImportField() {
         assertEquals("https://a.example", importTextFor(ShareRoute.Url("https://a.example")))

@@ -10,6 +10,15 @@ class ForgottenNotes {
     fun remove(scope: String, documentId: String) { keys.remove(key(scope, documentId)) }
     fun blocks(scope: String, insight: Insight) = insight.documentId.isNotBlank() && key(scope, insight.documentId) in keys
     fun allowed(scope: String, items: List<Insight>) = items.filterNot { blocks(scope, it) }
+    /**
+     * Documents the server deleted whose local cleanup threw, to be retried. Memory only (the title is private and the
+     * cheap option; a persisted table is future work), so a process death before the retry forgets them.
+     */
+    data class PendingPurge(val documentId: String, val title: String?)
+    private val pending = ConcurrentHashMap<String, PendingPurge>()
+    fun purgeFailed(scope: String, documentId: String, title: String?) { if (documentId.isNotBlank()) pending[key(scope, documentId)] = PendingPurge(documentId, title) }
+    fun pendingPurges(scope: String): List<PendingPurge> = pending.filterKeys { it.startsWith("$scope\u0000") }.values.toList()
+    fun purgeDone(scope: String, documentId: String) { pending.remove(key(scope, documentId)) }
 }
 
 /** The editable note fields. Immutable: every edit is a new value. */
@@ -105,3 +114,9 @@ fun ForgetResult.message(): String? = when (this) {
     ForgetResult.PurgeFailed -> FORGET_PARTIAL_MESSAGE
     is ForgetResult.Failed -> forgetFailureMessage(error)
 }
+
+/**
+ * The title to match unlinked import rows against. [Insight.title] is the model-written headline of one idea; the
+ * import row and the notes list hold the note's own title, which the server returns as the document title (sourceTitle).
+ */
+fun purgeTitle(item: Insight): String? { val title: String? = item.sourceTitle; return title }

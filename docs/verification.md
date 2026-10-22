@@ -560,3 +560,15 @@ additions (load before delete, out-of-order responses, stale failure, partial fo
 forget outcome mapping, `NoteLimitsTest` clamping, `SecureRefCountTest`. Not covered by any test: the Activity wiring
 (`onCreate`/`onNewIntent`/`consumeShare`), the `DisposableEffect` that clears the list, and `FLAG_SECURE` counting on a
 real window; the instrumented tests were not extended or run.
+
+### E2b-2 second review fixes (still NOT device-verified)
+
+Fixed: the share cap now waits for the limits fetch (`limitsLoaded`, reset on scope change); the notes list generation
+no longer resets on close; a failed local purge is retried in memory on connect and list open; the forget-from-detail
+purge title is the document title (`sourceTitle`) instead of the idea headline; a mismatching title no longer deletes
+all unlinked pre-migration rows; `draftReady` is set in a `finally`. New JVM tests (pass in CI, no device run):
+`ShareEntryTest` (limits-late cold start with a 100k share, deferral on `limitsLoaded`, draft ready on throw, stale
+load, ordering), `NotesListStateTest` (late answer after close and reopen, close keeps counting), `NoteLogicTest`
+(pending purge retry per scope, purge title), `NoteWorkLogicTest` (no-match keeps other rows, single-row cleanup, NFC
+titles). Not covered: the Activity and view model wiring of the retry and flags. A process death before a purge retry
+still leaves the rows (see docs/security.md).

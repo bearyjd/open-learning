@@ -77,9 +77,9 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     var composingNote by rememberSaveable { mutableStateOf(false) }
     var showingNotes by rememberSaveable { mutableStateOf(false) }
     val accountReady = connection != null && state.scope == connection?.scope
-    LaunchedEffect(shared, accountReady, model.draftReady) { if (shared != null) {
+    LaunchedEffect(shared, accountReady, model.draftReady, model.limitsLoaded) { if (shared != null) {
         val route = routeShare(shared, model.limits)
-        if (!shareDeferred(route, accountReady, model.draftReady)) {
+        if (!shareDeferred(route, accountReady, model.draftReady, model.limitsLoaded)) {
             importTextFor(route)?.let { importText = it }
             if (route is ShareRoute.Note) model.receiveSharedNote(route)
             if (route is ShareRoute.TooLong) model.reportShareRejected(route)

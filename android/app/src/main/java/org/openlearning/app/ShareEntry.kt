@@ -10,11 +10,13 @@ internal fun shouldHandleShare(isShare: Boolean, isNewIntent: Boolean, recreated
 
 /**
  * A shared note needs the connected account's draft, so it waits until the view model has switched to that account
- * and finished loading that account's saved draft. A rejected share only needs the account (its message is per account).
+ * and finished loading that account's saved draft. Both kinds also wait for the limits fetch to finish (loaded or failed):
+ * the share cap depends on the server's limit, so a route judged against the defaults could wrongly reject a valid share.
+ * A rejected share does not need the draft.
  */
-internal fun shareDeferred(route: ShareRoute, accountReady: Boolean, draftReady: Boolean) = when (route) {
-    is ShareRoute.Note -> !(accountReady && draftReady)
-    is ShareRoute.TooLong -> !accountReady
+internal fun shareDeferred(route: ShareRoute, accountReady: Boolean, draftReady: Boolean, limitsLoaded: Boolean) = when (route) {
+    is ShareRoute.Note -> !(accountReady && draftReady && limitsLoaded)
+    is ShareRoute.TooLong -> !(accountReady && limitsLoaded)
     else -> false
 }
 
@@ -29,3 +31,11 @@ internal fun replaceDialogText(fromShare: Boolean) =
 
 internal fun shareTooLongMessage(route: ShareRoute.TooLong) =
     "That shared text is too long to add as a note (${formatCount(route.chars)} characters; the most accepted is ${formatCount(route.cap)}). Nothing was added."
+
+/**
+ * Runs the draft load and marks the draft ready even if the load throws, so a failing DAO call cannot block shares for
+ * good. A load for an account that is no longer current never marks ready. The exception still propagates.
+ */
+internal suspend fun loadDraftThen(isCurrent: () -> Boolean, markReady: () -> Unit, load: suspend () -> Unit) {
+    try { load() } finally { if (isCurrent()) markReady() }
+}

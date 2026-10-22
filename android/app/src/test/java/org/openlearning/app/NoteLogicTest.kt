@@ -135,4 +135,18 @@ class NoteLogicTest {
         assertEquals(forgetFailureMessage(java.io.IOException("x")), failed)
         assertFalse("SECRET" in failed)
     }
+
+    @Test fun failedPurgeIsRetriedForThatScopeUntilItSucceeds() {
+        val forgotten = ForgottenNotes()
+        forgotten.purgeFailed("s", "d1", "Lecture"); forgotten.purgeFailed("t", "d2", null)
+        assertEquals(listOf(ForgottenNotes.PendingPurge("d1", "Lecture")), forgotten.pendingPurges("s"))
+        assertEquals(listOf(ForgottenNotes.PendingPurge("d2", null)), forgotten.pendingPurges("t"))
+        forgotten.purgeDone("s", "d1")
+        assertTrue(forgotten.pendingPurges("s").isEmpty())
+        assertEquals(1, forgotten.pendingPurges("t").size)
+    }
+    @Test fun purgeTitleIsTheDocumentTitleNotTheInsightHeadline() {
+        val item = Insight(title = "A model-written headline", sourceTitle = "My lecture note", sourceKind = "note")
+        assertEquals("My lecture note", purgeTitle(item))
+    }
 }

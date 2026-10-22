@@ -44,6 +44,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     var limits by mutableStateOf(DEFAULT_LIMITS); private set
     // True only once the Room draft of the active account has loaded: a share must not see an empty draft before that.
     var draftReady by mutableStateOf(false); private set
+    // True once the limits fetch for the active account has finished (loaded or failed): a share is judged against the real cap only after.
+    var limitsLoaded by mutableStateOf(false); private set
     var pendingFromShare by mutableStateOf(false); private set
     private val draftLock = Mutex()
     init {
@@ -57,12 +59,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
-                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS
+                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
-                    launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) limits = fetched }
+                    launch { notesActions.retryPurges(repository) }
+                    launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) { limits = fetched; limitsLoaded = true } }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
                         mutable.update { it.copy(feed = rows.filter { row -> row.inFeed }.map(repository::decode), library = rows.filter { row -> row.saved }.map(repository::decode)) }
@@ -174,10 +177,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true, kind = "note")
     }
     private suspend fun loadDraft(repository: LearningRepository) {
-        val saved = container.database.dao().draft(repository.config.scope)
-        if (repo !== repository) return
-        if (saved != null && draft.isEmpty) draft = NoteDraftFields(saved.title, saved.label, saved.text)
-        draftReady = true
+        loadDraftThen({ repo === repository }, { draftReady = true }) {
+            val saved = container.database.dao().draft(repository.config.scope)
+            if (repo === repository && saved != null && draft.isEmpty) draft = NoteDraftFields(saved.title, saved.label, saved.text)
+        }
     }
     private suspend fun saveDraft(fields: NoteDraftFields) {
         val repository = repo ?: return
