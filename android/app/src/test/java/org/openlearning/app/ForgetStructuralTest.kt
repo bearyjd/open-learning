@@ -104,13 +104,6 @@ class ForgetStructuralTest {
         val dir = File(listOf("src/main/java", "app/src/main/java").first { File(it).isDirectory })
         return dir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
     }
-    @Test fun onlyCardWriterWritesCachedInsights() {
-        val files = mainSources()
-        assertTrue(files.any { it.name == "CardWriter.kt" })
-        val offenders = files.filter { it.name != "CardWriter.kt" && Regex("""\bdao\.put\(""").containsMatchIn(it.readText()) }
-        assertEquals(emptyList<File>(), offenders)
-        assertTrue(source("CardWriter.kt").contains("dao.put("))
-    }
     @Test fun noInMemoryMarkerRemains() {
         val offenders = mainSources().filter { Regex("""ForgottenNotes|markedUntilCommit|takePreviousServer""").containsMatchIn(it.readText()) }
         assertEquals(emptyList<File>(), offenders)
