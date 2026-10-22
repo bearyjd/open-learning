@@ -100,7 +100,7 @@ class NoteAcceptanceTest {
             submit("Title $code", body)
             val row = awaitRow { it.status == status }
             assertEquals(message, row.error)
-            compose.onNodeWithText(message).assertExists()
+            scrollTo(message).assertExists()
             assertTrue(compose.onAllNodesWithText("SENTINEL-BODY", substring = true).fetchSemanticsNodes().isEmpty())
             work.cancelAllWork().result.get(10, TimeUnit.SECONDS)
         }
@@ -108,12 +108,12 @@ class NoteAcceptanceTest {
 
     @Test fun completedNoteShowsNoSourceLinksAndForgetCancelDoesNotDelete() {
         completeOneNote()
-        compose.onNodeWithText("Your note: Lecture 3").performClick()
+        scrollTo("Your note: Lecture 3").performClick()
         waitText("Forget this note")
         assertTrue(compose.onAllNodesWithText("Open original source", substring = true).fetchSemanticsNodes().isEmpty())
         assertTrue(compose.onAllNodesWithText("Check source", substring = true).fetchSemanticsNodes().isEmpty())
         assertTrue(compose.onAllNodesWithText("Open source article", substring = true).fetchSemanticsNodes().isEmpty())
-        compose.onNodeWithText("Forget this note").performClick()
+        scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Cancel").performClick()
         assertEquals(0, fixture.count("DELETE", "/api/v1/notes/note-doc"))
         assertEquals(1, io { container.database.dao().allInsights(scope()).size })
@@ -121,9 +121,9 @@ class NoteAcceptanceTest {
 
     @Test fun forgetConfirmDeletesOnceAndPurgesRoom() {
         completeOneNote()
-        compose.onNodeWithText("Your note: Lecture 3").performClick()
+        scrollTo("Your note: Lecture 3").performClick()
         waitText("Forget this note")
-        compose.onNodeWithText("Forget this note").performClick()
+        scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Forget", substring = false).performClick()
         waitUntil { fixture.count("DELETE", "/api/v1/notes/note-doc") == 1 }
         waitUntil { io { container.database.dao().allInsights(scope()).isEmpty() } }
@@ -132,10 +132,10 @@ class NoteAcceptanceTest {
 
     @Test fun offlineForgetKeepsEverything() {
         completeOneNote()
-        compose.onNodeWithText("Your note: Lecture 3").performClick()
+        scrollTo("Your note: Lecture 3").performClick()
         waitText("Forget this note")
         fixture.down.set(true)
-        compose.onNodeWithText("Forget this note").performClick()
+        scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Forget", substring = false).performClick()
         waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
         assertEquals(0, fixture.count("DELETE", "/api/v1/notes/note-doc"))
@@ -146,7 +146,7 @@ class NoteAcceptanceTest {
         fixture.down.set(true)
         launchEditor(); submit("Lecture 3", body)
         awaitRow { it.status == "waiting" }
-        compose.onNodeWithText("Remove note").performClick()
+        scrollTo("Remove note").performClick()
         waitUntil { io { container.database.dao().jobs(scope()).first().isEmpty() } }
         fixture.down.set(false)
         Thread.sleep(2_000)
@@ -169,13 +169,21 @@ class NoteAcceptanceTest {
         waitUntil { compose.onAllNodesWithText("Your note: Lecture 3").fetchSemanticsNodes().isNotEmpty() }
     }
     private fun launchEditor() { scenario = ActivityScenario.launch(MainActivity::class.java); openEditor() }
-    private fun openEditor() { waitText("Write or import a note"); compose.onNodeWithText("Write or import a note").performClick() }
+    private fun openEditor() { waitText("Write or import a note"); scrollTo("Write or import a note").performClick() }
     private fun submit(title: String, text: String, label: String = "") {
         waitText("Add note to learning feed")
+        // The button is disabled while the screen is busy (e.g. the first refresh after connecting).
+        waitUntil { compose.onAllNodes(hasText("Add note to learning feed") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Title").performTextInput(title)
         if (label.isNotEmpty()) compose.onNodeWithText("Label (optional)").performTextInput(label)
         compose.onNodeWithText("Note text").performTextInput(text)
-        compose.onNodeWithText("Add note to learning feed").performClick()
+        // performClick does not scroll: the button is below the fold, and the IME is open after text input.
+        compose.onNodeWithText("Add note to learning feed").performScrollTo().performClick()
+    }
+    /** Brings a node into view in whichever scroll container holds it, then returns it (works for lazy lists too). */
+    private fun scrollTo(text: String): SemanticsNodeInteraction {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+        return compose.onNodeWithText(text)
     }
     private fun scope() = checkNotNull(container.credentials.connection.value).scope
     private fun awaitRow(timeout: Long = 20_000, predicate: (PendingIngest) -> Boolean): PendingIngest {
@@ -184,7 +192,14 @@ class NoteAcceptanceTest {
     }
     private fun workInfo(row: PendingIngest): List<WorkInfo> = work.getWorkInfosForUniqueWork("ingest-${row.scope}-${row.id}").get(10, TimeUnit.SECONDS)
     private fun waitText(text: String) = waitUntil { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
-    private fun waitUntil(timeout: Long = 15_000, condition: () -> Boolean) = compose.waitUntil(timeout, condition)
+    private fun waitUntil(timeout: Long = 15_000, condition: () -> Boolean) {
+        try { compose.waitUntil(timeout, condition) } catch (error: Throwable) {
+            // Fixture sentinels only: request counts and the semantics tree explain a timeout without real note text.
+            android.util.Log.w("NoteAcceptance", "Timed out; text submits=${fixture.count("POST", "/api/v1/ingest/text")}")
+            runCatching { compose.onRoot().printToLog("NoteAcceptance") }
+            throw error
+        }
+    }
     private fun <T> io(block: suspend () -> T): T = runBlocking(Dispatchers.IO) { block() }
 }
 

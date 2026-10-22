@@ -492,6 +492,15 @@ code was changed; the same behaviours passed in the adb script against the same 
 cause (instrumentation device state, WorkManager scheduling under test) is suspected but unconfirmed.
 `LiveLearningLoopTest` was not run (needs a real backend and model).
 
+Follow-up (static diagnosis, NOT re-run on a device): the 6 failures above are test bugs, not app bugs. In
+`onlineSaveSurvivesOfflineRelaunchAndAccountSwitch` the tail asserted that alpha's saved card returns after a switch to
+beta, but the scope-change purge deliberately deletes other scopes' cards (saved ones included) and the fixture was
+already closed; it now asserts the purge (alpha cards gone, unsent draft kept) and reconnects alpha to a fresh fixture.
+In `NoteAcceptanceTest` Compose `performClick` does not scroll, so the submit button (below the fold, IME open) and
+other off-screen targets were never clicked; clicks now scroll first, submit waits for the button to be enabled, and
+timeouts log the text-submit count and the semantics tree. These fixes are compile-only (assembleAcceptanceAndroidTest);
+they have not been run on a device.
+
 Still unverified on device: the 429 retry message, the SAF file picker through DocumentsUI, the remove-job race,
 offline forget, fold/unfold and activity recreate with a note open, and whether Bitwarden's save sheet is suppressed
 (it was not observed in four quiet runs, which is evidence rather than proof).
