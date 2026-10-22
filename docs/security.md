@@ -204,18 +204,24 @@ by re-running the transform. When any note is newly hidden the whole tutor chat 
 reply citing a hidden document is dropped with its question (this replaces the earlier accepted tutor-prose residual). Source scans
 (TEXT scans, not runtime proofs; aliasing and reflection are not caught) cover direct writes to any `MutableStateFlow<ScreenState>`,
 use of the removed `publish`, and content fields in `publishLocal`. This is best-effort against the interleavings known so far,
-found by six adversarial review passes, not a guarantee. It is still NOT device-verified.
+found by seven adversarial review passes, not a guarantee. It is still NOT device-verified.
 Two-sided hidden protocol (sixth pass): a publication that read the hidden set before a forget committed could store the forgotten
 note before any Room-flow collector caught up. Forget side: `ForgetQueue.forgetNoteOffline` (and `confirmed`) calls `onHidden` right
 after its transaction commits and before returning, which is `ScreenPublisher.purgeNow(scope, ids)`: an atomic, idempotent purge of
-the retained state that also records the ids in a purge floor (ids age out after two Room arrivals without them, so a stopped forget
-shows the note again). Read side: every `publishFresh`/`publishFreshWith` store also purges with the floor, and AFTER the store
+the retained state that also records the ids in a purge floor (ids age out as described in the release rules below). Read side: every `publishFresh`/`publishFreshWith` store also purges with the floor, and AFTER the store
 re-reads the DAO hidden ids and applies the idempotent purge only (never the transform again). Ordering argument, C = forget commit,
 P = its purge (after C), S = the atomic store, R = the publication's re-read (after S): S before P is removed by P; S after P is
 removed by the floor purge inside S; C before R makes R purge. So for every order of {first read, C, S} the id is gone once P and R
 ran. The derived view scrubs with the Room set united with the floor. The tutor chat generation is bumped only by
 `ChatSession.reset()`, which also clears the chat and the busy flag, so a double bump (collector, then forget completion) cannot
 leave the chat busy. Still best-effort and not device-verified; the `ScreenPublisher`, `ViewModel` and Room-flow wiring is untested at runtime.
+Floor release rules (seventh pass, one P2: forget commit, resumed worker marks the row failed, Room delivers the id before `onHidden`,
+`purgeNow` adds it at age 0, then "Stop trying" deletes the row and one arrival lacking the id only aged it to 1, so the floor hid a
+note the person wanted back, indefinitely). An id now leaves the floor on the first of: a Room arrival holding it; an explicit release
+(`ForgetQueue.onReleased`, wired to `ScreenPublisher.release`, called after EVERY delete of PendingForget rows: `stopTrying` and the
+TTL prune in `reconcile`; a text scan test checks this); two arrivals lacking it; or a 10-minute time bound (`PURGE_FLOOR_TTL_MS`,
+injected clock) so a missed release cannot hide a note forever. Releasing is safe because a pending, failed or confirmed row is also in
+the Room set, which hides the note independently of the floor. Best-effort and NOT device-verified.
 Ingest update is transactional: the worker reads the hidden ids and writes (or deletes) the job row in ONE Room transaction
 (`updateJobUnlessHidden`), so a forget that commits between a response naming the document and the update is still seen. A
 processing row that has no document id yet cannot be matched by `forgetNoteOffline` (titles are never stored or matched); the

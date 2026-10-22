@@ -29,4 +29,32 @@ class PurgeFloorTest {
         val floor = PurgeFloor().added("A", setOf("d1"))
         assertEquals(floor, floor.arrived("B", emptySet()))
     }
+    @Test fun releaseRemovesIdsAtOnceAndOnlyInItsScope() {
+        val floor = PurgeFloor().added("A", setOf("d1", "d2"))
+        assertEquals(setOf("d2"), floor.released("A", setOf("d1")).idsFor("A"))
+        assertEquals(floor, floor.released("B", setOf("d1")))
+    }
+    @Test fun theCodexSequenceLeavesNothingInTheFloor() {
+        // commit -> failed row delivered (holds id) -> purgeNow adds id at age 0 -> stopTrying releases -> one arrival without it.
+        val floor = PurgeFloor().added("A", setOf("d1")).released("A", setOf("d1")).arrived("A", emptySet())
+        assertEquals(emptySet<String>(), floor.idsFor("A", 0))
+    }
+    @Test fun withoutTheReleaseOneArrivalLeavesTheIdHiddenIndefinitely() {
+        val floor = PurgeFloor().added("A", setOf("d1")).arrived("A", emptySet())
+        assertEquals(setOf("d1"), floor.idsFor("A", 0))
+    }
+    @Test fun theTimeBoundReleasesAfterTheTtlWithAFakeClock() {
+        val floor = PurgeFloor().added("A", setOf("d1"), now = 1_000)
+        assertEquals(setOf("d1"), floor.idsFor("A", 1_000 + PURGE_FLOOR_TTL_MS - 1))
+        assertEquals(emptySet<String>(), floor.idsFor("A", 1_000 + PURGE_FLOOR_TTL_MS))
+        assertEquals(emptySet<String>(), floor.arrived("A", emptySet(), 1_000 + PURGE_FLOOR_TTL_MS).ids.keys)
+    }
+    @Test fun theTtlIsTenMinutes() { assertEquals(600_000L, PURGE_FLOOR_TTL_MS) }
+    @Test fun aStillPendingForgetStaysHiddenThroughTheRoomSetAfterTheFloorReleases() {
+        val room = setOf("d1")
+        val floor = PurgeFloor().added("A", setOf("d1"), now = 0)
+        val later = PURGE_FLOOR_TTL_MS + 1
+        assertEquals(emptySet<String>(), floor.idsFor("A", later))
+        assertEquals(setOf("d1"), room + floor.idsFor("A", later))
+    }
 }

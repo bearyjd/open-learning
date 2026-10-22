@@ -119,4 +119,19 @@ class ForgetStructuralTest {
         assertTrue(text.contains("queue.reconcile("))
         assertTrue(text.contains("serverPage("))
     }
+
+    // A text scan, NOT a runtime guarantee: every PendingForget row delete in the queue is followed by the release hook.
+    @Test fun everyPendingForgetDeleteIsFollowedByTheReleaseHook() {
+        val main = listOf("src/main/java/org/openlearning/app", "app/src/main/java/org/openlearning/app").first { File(it).isDirectory }
+        val callers = File(main).walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "Data.kt" && Regex("""\.deleteForgets?\(""").containsMatchIn(it.readText()) }.toList()
+        assertEquals(listOf("ForgetQueue.kt"), callers.map { it.name })
+        val text = callers.single().readText()
+        val calls = Regex("""\.deleteForgets?\(""").findAll(text).toList()
+        assertEquals(2, calls.size)
+        calls.forEach { call ->
+            val rest = text.substring(call.range.last)
+            val body = rest.substringBefore("\n    suspend fun ").substringBefore("\n    fun ")
+            assertTrue("no onReleased after ${call.value}", "onReleased(" in body)
+        }
+    }
 }

@@ -696,3 +696,11 @@ forget-completion bump: not stuck busy; a late final never clears a newer chat's
 Compile-only (androidTest, not run): `ForgetQueueRoomTest.forgetCommitCallsTheHiddenHookAfterTheCommit`.
 NOT tested: `ScreenPublisher` under real concurrency, the view model and `NotesActions` wiring at runtime, Room flows and their
 delivery order, and the floor's two-arrival aging against real Room emissions.
+
+E2b-3 seventh-pass fix (best-effort; found by 7 adversarial passes, the last found one P2; still NOT device-verified). Purge-floor
+release: `ForgetQueue.onReleased` (-> `ScreenPublisher.release`) runs after every PendingForget delete (`stopTrying`, `reconcile` prune),
+and floor entries also expire after 10 minutes (`PURGE_FLOOR_TTL_MS`, injected clock), besides the Room-arrival rules. New JVM tests
+(written first, RED: test compile failed on the missing API): `PurgeFloorTest` (release at once, the exact Codex sequence leaves the id
+out of the floor, the unreleased sequence stays hidden, fake-clock TTL, still-pending forget stays hidden via the Room set),
+`ScreenPublisherTest` (release shows the note again; clock TTL), `ForgetStructuralTest` (TEXT scan: every deleteForget(s) call in
+`ForgetQueue` is followed by `onReleased`). NOT tested: Room flows and delivery order, the view model wiring at runtime.

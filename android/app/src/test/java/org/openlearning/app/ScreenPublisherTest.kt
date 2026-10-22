@@ -161,4 +161,21 @@ class ScreenPublisherTest {
         forgetPurge(p)
         assertEquals("A" to setOf("d1"), p.hiddenForView.first())
     }
+
+    @Test fun releaseDropsTheFloorAtOnceSoAStoppedForgetShowsAgain() = runBlocking {
+        val p = ScreenPublisher({ emptySet() }, { flowOf(emptySet()) }).also { it.reset("A") }
+        p.purgeNow("A", setOf("d1")); p.release("A", setOf("d1"))
+        assertEquals("A" to emptySet<String>(), p.hiddenForView.first())
+        p.hiddenArrived("A" to emptySet())
+        assertEquals("A" to emptySet<String>(), p.hiddenForView.first())
+    }
+    @Test fun theFloorLeavesTheViewAfterTheClockTtl() = runBlocking {
+        var now = 0L
+        val p = ScreenPublisher({ emptySet() }, { flowOf(emptySet()) }, { now }) { }.also { it.reset("A") }
+        p.purgeNow("A", setOf("d1"))
+        assertEquals("A" to setOf("d1"), p.hiddenForView.first())
+        now = PURGE_FLOOR_TTL_MS
+        p.hiddenArrived("A" to emptySet())
+        assertEquals("A" to emptySet<String>(), p.hiddenForView.first())
+    }
 }

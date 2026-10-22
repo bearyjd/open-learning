@@ -25,6 +25,12 @@ class ForgetQueue(
     @Volatile var onHidden: (scope: String, ids: Set<String>) -> Unit = { _, _ -> }
 
     /**
+     * Called after a PendingForget row was deleted (stop trying, TTL prune) so the purge floor lets go of its ids at once
+     * ([ScreenPublisher.release]). Every delete of PendingForget rows here is followed by this call (a test scans for it).
+     */
+    @Volatile var onReleased: (scope: String, ids: Set<String>) -> Unit = { _, _ -> }
+
+    /**
      * Validates the id first (a bad one is never queued). One transaction: queue the forget (idempotent), purge cached cards
      * of the document, the completed import rows linked to it ([noteRowsToPurge]) and the queued, running or failed import
      * rows linked to it. The commit is the success point, and from then on [LearningRepository.writeCards] keeps any late
@@ -80,11 +86,14 @@ class ForgetQueue(
      * the note after the TTL) goes back to pending and its worker is enqueued again; the DELETE is idempotent.
      */
     suspend fun reconcile(scope: String, serverIds: Set<String>, complete: Boolean, requestStartedAt: Long) {
+        var decisionsDeleted = emptyList<String>()
         val revived = database.withTransaction {
             val decisions = confirmedDecisions(scope, dao.confirmedForgets(scope), serverIds, complete, requestStartedAt)
             if (decisions.delete.isNotEmpty()) dao.deleteForgets(scope, decisions.delete)
+            decisionsDeleted = decisions.delete
             decisions.revive.map { id -> PendingForget(scope, id, clock(), FORGET_PENDING).also { dao.confirmForget(it) } }
         }
+        if (decisionsDeleted.isNotEmpty()) onReleased(scope, decisionsDeleted.toSet())
         if (revived.isNotEmpty()) scheduleEach(revived, ForgetTrigger.RETRY, schedule) { markFailed(it.scope, it.documentId, FORGET_SCHEDULE_ERROR) }
     }
 
@@ -106,6 +115,7 @@ class ForgetQueue(
         val row = dao.forget(scope, documentId) ?: return false
         if (!canStopTrying(row)) return false
         dao.deleteForget(scope, documentId)
+        onReleased(scope, setOf(documentId))
         return true
     }
 

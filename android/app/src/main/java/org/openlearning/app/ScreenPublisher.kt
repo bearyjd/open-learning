@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.update
 class ScreenPublisher(
     private val hiddenNow: suspend (String) -> Set<String>,
     private val hiddenFlow: (String) -> Flow<Set<String>>,
+    private val clock: () -> Long = System::currentTimeMillis,
     private val onHiddenGained: () -> Unit = {},
 ) {
     private val mutable = MutableStateFlow(ScreenState())
@@ -39,7 +40,7 @@ class ScreenPublisher(
     private val floor = MutableStateFlow(PurgeFloor())
 
     /** What the derived view scrubs with: the Room set together with the latest purge ids, so it never lags a forget commit. */
-    val hiddenForView: Flow<Pair<String, Set<String>>> = combine(hiddenByScope, floor) { (scope, ids), known -> scope to (ids + known.idsFor(scope)) }
+    val hiddenForView: Flow<Pair<String, Set<String>>> = combine(hiddenByScope, floor) { (scope, ids), known -> scope to (ids + known.idsFor(scope, clock())) }
 
     /**
      * The forget side of the two-sided protocol. [ForgetQueue] calls this right after its transaction committed and before it
@@ -51,8 +52,16 @@ class ScreenPublisher(
      */
     fun purgeNow(scope: String, ids: Set<String>) {
         if (ids.isEmpty()) return
-        floor.update { it.added(scope, ids) }
+        floor.update { it.added(scope, ids, clock()) }
         mutable.update { it.purgedFor(scope, ids) }
+    }
+
+    /**
+     * The release side: a PendingForget row was deleted (stop trying, TTL prune), so its ids leave the floor at once and the
+     * note is visible on the next refresh. Called by [ForgetQueue.onReleased]; a row still in the Room set stays hidden by it.
+     */
+    fun release(scope: String, ids: Set<String>) {
+        if (ids.isNotEmpty()) floor.update { it.released(scope, ids) }
     }
 
     /**
@@ -62,7 +71,7 @@ class ScreenPublisher(
     fun hiddenArrived(hidden: Pair<String, Set<String>>) {
         val gained = hiddenGained(hiddenSnapshot.value, hidden)
         hiddenSnapshot.value = hidden
-        floor.update { it.arrived(hidden.first, hidden.second) }
+        floor.update { it.arrived(hidden.first, hidden.second, clock()) }
         if (gained) onHiddenGained()
         mutable.update { current ->
             val purged = current.purgedFor(hidden.first, hidden.second)
@@ -104,7 +113,7 @@ class ScreenPublisher(
         var used = hiddenSnapshot.value
         mutable.update { current ->
             applied = scope == null || current.scope == scope
-            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used, floor.value.scope to floor.value.idsFor(floor.value.scope)) + extra, transform) }
+            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used, floor.value.scope to floor.value.idsFor(floor.value.scope, clock())) + extra, transform) }
         }
         val latest = hiddenSnapshot.value
         if (applied && latest !== used) mutable.update { it.purgedFor(latest.first, latest.second) }
