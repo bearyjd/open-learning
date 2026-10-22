@@ -112,5 +112,18 @@ class ForgetGuardRoomTest {
         assertEquals(FORGET_CONFIRMED, dao.forget(scope, "d9")?.status)
     }
 
+    // A delayed import completing for a forgotten note is deleted, not published.
+    @Test fun completedImportOfAForgottenNoteIsDeletedNotPublished() = runBlocking {
+        val running = PendingIngest(scope, "j1", "", kind = "note", status = "running", title = "Secret title")
+        dao.putJob(running)
+        queue.forgetNoteOffline(scope, "d1")
+        val changed = dao.updateJobUnlessHidden(running.copy(status = "completed", documentId = "d1"), queue.hidden(scope))
+        assertEquals(0, changed); assertNull(dao.job(scope, "j1"))
+        val other = PendingIngest(scope, "j2", "", kind = "note", status = "running")
+        dao.putJob(other)
+        assertEquals(1, dao.updateJobUnlessHidden(other.copy(status = "completed", documentId = "d2"), queue.hidden(scope)))
+        assertEquals("completed", dao.job(scope, "j2")?.status)
+    }
+
     private companion object { const val NAME = "forget-guard-test.db" }
 }

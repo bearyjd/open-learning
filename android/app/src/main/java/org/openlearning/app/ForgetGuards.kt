@@ -69,6 +69,16 @@ fun documentIdOfPayload(payload: String): String? =
 
 fun Insight.isHiddenBy(hidden: Set<String>) = documentId.isNotBlank() && documentId in hidden
 
+/** A completed import row names the document it created; a row of a forgotten document is never shown or kept. */
+fun PendingIngest.isHiddenBy(hidden: Set<String>) = !documentId.isNullOrBlank() && documentId in hidden
+
+/**
+ * Saves a worker's update of an import row unless its document is hidden: such a row is deleted instead (and 0 is returned,
+ * as for a row the user removed), so a delayed import cannot put a forgotten note's title back in Recent imports.
+ */
+suspend fun LearningDao.updateJobUnlessHidden(row: PendingIngest, hidden: Set<String>): Int =
+    if (row.isHiddenBy(hidden)) { deleteJob(row.scope, row.id); 0 } else updateJob(row)
+
 const val REVIEW_FETCH_CAP = 20
 
 /** The document of a review; Gson leaves it null when an older server does not send it. */

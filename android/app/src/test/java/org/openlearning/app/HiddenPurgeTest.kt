@@ -52,4 +52,10 @@ class HiddenPurgeTest {
         assertSame(state, state.purgedFor("other", setOf("d1")))
         assertEquals(state.purgedOf(setOf("d1")), state.purgedFor("s", setOf("d1")))
     }
+    @Test fun anImportRowIsHiddenByItsOwnDocumentId() {
+        assertTrue(job("j1", "d1").isHiddenBy(setOf("d1")))
+        assertFalse(job("j2", "d2").isHiddenBy(setOf("d1")))
+        assertFalse(job("j3", null).isHiddenBy(setOf("d1"))); assertFalse(job("j4", "").isHiddenBy(setOf("")))
+        assertFalse(job("j1", "d1").isHiddenBy(emptySet()))
+    }
 }
