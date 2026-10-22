@@ -31,12 +31,11 @@ class HiddenViewTest {
         val state = ScreenState(selected = ins("a", "d2"), chat = listOf(ChatLine("You", "hi")), learning = true)
         assertSame(state, state.withoutHidden(setOf("d1")))
     }
-    @Test fun citationsOfHiddenDocumentsAreDropped() {
-        val reply = ChatLine("Tutor", "answer", "q", listOf(Citation(documentId = "d1"), Citation(documentId = "d2")))
-        val state = ScreenState(selected = ins("a", "d2"), chat = listOf(reply))
+    @Test fun aChatCitingAHiddenDocumentIsClearedEntirely() {
+        val reply = ChatLine("Tutor", "answer quoting the note", "q", listOf(Citation(documentId = "d1"), Citation(documentId = "d2")))
+        val state = ScreenState(selected = ins("a", "d2"), chat = listOf(ChatLine("You", "q"), reply), chatBusy = true)
         val next = state.withoutHidden(setOf("d1"))
-        assertEquals(listOf("d2"), next.chat.single().citations.map { it.documentId })
-        assertEquals("answer", next.chat.single().text)
+        assertTrue(next.chat.isEmpty()); assertFalse(next.chatBusy); assertEquals("a", next.selected?.id)
     }
     @Test fun reviewsAreDroppedByTheirOwnDocumentId() {
         val state = ScreenState(reviews = listOf(review("r1", "i1", "d1"), review("r2", "i2", "d2")))

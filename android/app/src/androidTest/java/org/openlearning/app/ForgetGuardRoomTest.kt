@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -125,16 +127,33 @@ class ForgetGuardRoomTest {
         assertEquals("completed", dao.job(scope, "j2")?.status)
     }
 
-    // The response identified d1 while the stored row was still unlinked; the forget commits after that and misses the row. The
-    // hidden read and the write share one transaction, so the late update still sees the forget. Compile-checked, not run.
-    @Test fun forgetCommittingBetweenTheResponseAndTheUpdateStillDeletesTheRow() = runBlocking {
+    // The update's transaction has read the hidden set (empty) and is held open by the gate; a forget starts meanwhile. The
+    // forget cannot commit inside that window, so it runs after the update and purges the linked row. Read-then-write without one
+    // transaction would let the forget commit in the gap and the late write would keep the row. Compile-checked, NOT run on a
+    // device, and it cannot prove Room's lock order, only that the window is held open by the hook.
+    @Test fun forgetStartingInsideTheUpdateWindowStillDeletesTheRow() = runBlocking {
         val processing = PendingIngest(scope, "j3", "", kind = "note", status = "processing", title = "Secret title")
         dao.putJob(processing)
         val completed = processing.copy(status = "completed", documentId = "d1")
-        queue.forgetNoteOffline(scope, "d1")
-        assertNotNull(dao.job(scope, "j3"))
-        assertEquals(0, db.updateJobUnlessHidden(completed))
+        val inWindow = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val update = launch(Dispatchers.IO) { db.updateJobUnlessHidden(completed) { inWindow.complete(Unit); release.await() } }
+        inWindow.await()
+        val forget = launch(Dispatchers.IO) { queue.forgetNoteOffline(scope, "d1") }
+        delay(200)
+        release.complete(Unit)
+        update.join(); forget.join()
         assertNull(dao.job(scope, "j3"))
+        assertEquals(setOf("d1"), queue.hidden(scope))
+    }
+
+    // The manual retry goes through the guarded path: a row of a forgotten document is deleted, not updated. Compile-checked.
+    @Test fun manualRetryOfAForgottenNoteRowIsDeleted() = runBlocking {
+        val failed = PendingIngest(scope, "j4", "", kind = "note", status = "failed", documentId = "d1", title = "Secret title")
+        dao.putJob(failed)
+        queue.forgetNoteOffline(scope, "d1")
+        dao.putJob(failed)
+        assertEquals(0, db.updateJobUnlessHidden(failed.copy(status = "queued")))
+        assertNull(dao.job(scope, "j4"))
     }
 
     @Test fun cardFlagsProjectsOnlyTheFeedFlag() = runBlocking {

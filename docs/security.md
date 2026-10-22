@@ -193,15 +193,18 @@ the same removal is applied to the stored state, so when a confirmed row is late
 to reappear. The view and the purge use only the hidden set of the account that owns the state; during an account switch the
 view is blank until that account's set arrives. The ingest worker deletes, instead of saving, a completed import row whose
 document is hidden, so a delayed import cannot show a forgotten title.
-Single publish function: EVERY write to the retained screen state (search results, detail, chat, reviews, revealed source, notes
-list and refresh, jobs, notices, resets) goes through `ScreenPublisher` (`publish`, `publishFresh`, `reset`), which applies
-`purgedOf` with the CURRENT hidden set to the result inside the same atomic update, before it is stored; a response that lands
-after a forget is therefore never stored, not merely masked, and nothing returns once the tombstone is pruned. The hidden set is
-the latest value of the Room flow, held in a snapshot by the same collector that purges on every change, and `publish` re-checks
-the snapshot after the write so a set that arrives mid-publication is applied too. Network-origin publications (`publishFresh`)
-additionally read the hidden ids from the DAO right then. The derived view stays as defense in depth. A test scans the sources
-for direct writes to a screen-state flow outside `ScreenPublisher.kt`; it is a TEXT scan, not a runtime guarantee (aliasing and
-reflection are not caught).
+Single publication path: EVERY write to the retained screen state goes through `ScreenPublisher`, which purges the result with a
+hidden set inside the same atomic update before it is stored. Only Room-flow collectors (`publishFlow`) may use the collector's
+snapshot, and only when it belongs to the state's account (a snapshot of another account is unknown, so Room is read). Every user,
+network or restore-origin publication (`publishFresh`: select, restore, search, reviews, reveal, notes refresh, chat reply) reads
+the hidden ids from the DAO right then, and chat reads the selected note through that check before sending. `publishLocal` is for
+changes that add no document content. A publication is applied once; it is dropped when the state's account is no longer the one
+the response belongs to (a connection switch during the read); a hidden set arriving mid-publication is applied by purging, never
+by re-running the transform. When any note is newly hidden the whole tutor chat is cleared and the tutor memory dropped, and a late
+reply citing a hidden document is dropped with its question (this replaces the earlier accepted tutor-prose residual). Source scans
+(TEXT scans, not runtime proofs; aliasing and reflection are not caught) cover direct writes to any `MutableStateFlow<ScreenState>`,
+use of the removed `publish`, and content fields in `publishLocal`. This is best-effort against the interleavings known so far,
+found by five adversarial review passes, not a guarantee. It is still NOT device-verified.
 Ingest update is transactional: the worker reads the hidden ids and writes (or deletes) the job row in ONE Room transaction
 (`updateJobUnlessHidden`), so a forget that commits between a response naming the document and the update is still seen. A
 processing row that has no document id yet cannot be matched by `forgetNoteOffline` (titles are never stored or matched); the
@@ -240,8 +243,7 @@ says "Some notes you forgot while connected to another server or token are still
 names no server; the stored previous-server key of earlier builds is deleted. Reconnecting with that account finishes them;
 there is no other way to delete them from this device.
 Residuals: an import of the same text that is still in flight on the server can republish the note after a forget (the confirm
-dialog says "A note that is still being imported may reappear."). Tutor prose can quote a note that is still pending: an answer
-generated from it is not rewritten, only its citations of a hidden document are removed. Reviews from older servers depend on
+dialog says "A note that is still being imported may reappear."). Reviews from older servers depend on
 the lookup, so offline they are hidden. Untested wiring (no device or Robolectric run): the ViewModel collectors, the worker's
 use of the hidden set and the Room helpers are compile-checked only; the pure functions behind them are unit-tested. Hidden rows persist until a list reconcile. A forgotten note cannot be un-hidden except
 through Stop trying on a failed row.

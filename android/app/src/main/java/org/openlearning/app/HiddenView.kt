@@ -12,15 +12,16 @@ fun ScreenState.withoutHidden(hidden: Set<String>): ScreenState {
     val selectedGone = selected?.let(::gone) == true
     val sourceGone = reviewSource?.let(::gone) == true
     val dropReview = { review: Review -> goneId(review.docId()) || goneId(reviewDocs[review.insightId]) || (sourceGone && review.insightId == reviewSource?.id) }
+    val chatCitesHidden = chat.any { line -> line.citations.any { goneId(it.documentId) } }
     val touched = feed.any(::gone) || library.any(::gone) || results.any(::gone) || selectedGone || sourceGone ||
         jobs.any { goneId(it.documentId) } || reviews.any(dropReview) || reviewDocs.values.any(::goneId) ||
-        chat.any { line -> line.citations.any { goneId(it.documentId) } } || notes.items.any { goneId(it.documentId) }
+        chatCitesHidden || notes.items.any { goneId(it.documentId) }
     if (!touched) return this
     return copy(
         feed = feed.filterNot(::gone), library = library.filterNot(::gone), results = results.filterNot(::gone),
         selected = if (selectedGone) null else selected,
-        chat = if (selectedGone) emptyList() else chat.map { line -> if (line.citations.any { goneId(it.documentId) }) line.copy(citations = line.citations.filterNot { goneId(it.documentId) }) else line },
-        chatBusy = if (selectedGone) false else chatBusy,
+        chat = if (selectedGone || chatCitesHidden) emptyList() else chat,
+        chatBusy = if (selectedGone || chatCitesHidden) false else chatBusy,
         learning = if (selectedGone) false else learning,
         jobs = jobs.filterNot { goneId(it.documentId) },
         reviews = reviews.filterNot(dropReview),

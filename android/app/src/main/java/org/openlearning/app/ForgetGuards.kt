@@ -77,10 +77,13 @@ fun PendingIngest.isHiddenBy(hidden: Set<String>) = !documentId.isNullOrBlank() 
  * Saves a worker's update of an import row unless its document is hidden, in ONE transaction: the hidden set is read and the
  * row written (or deleted, returning 0 as for a row the user removed) under the same lock, so a forget that commits in between
  * cannot be missed. A delayed import therefore never puts a forgotten note's title back in Recent imports.
+ * [afterHiddenRead] runs inside the transaction between the read and the write; only the tests pass one, to hold the window open.
  */
-suspend fun LearningDatabase.updateJobUnlessHidden(row: PendingIngest): Int = withTransaction {
+suspend fun LearningDatabase.updateJobUnlessHidden(row: PendingIngest, afterHiddenRead: suspend () -> Unit = {}): Int = withTransaction {
     val dao = dao()
-    when (jobWriteDecision(row, dao.hiddenIds(row.scope).toSet())) {
+    val hidden = dao.hiddenIds(row.scope).toSet()
+    afterHiddenRead()
+    when (jobWriteDecision(row, hidden)) {
         JobWrite.DELETE -> { dao.deleteJob(row.scope, row.id); 0 }
         JobWrite.UPDATE -> dao.updateJob(row)
     }

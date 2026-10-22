@@ -63,9 +63,43 @@ class SingleWriterScanTest {
     @Test fun onlyThePublisherWritesTheScreenState() {
         val files = mainSources().filter { "ScreenState" in it.readText() || "ScreenPublisher" in it.readText() }
         assertTrue(files.any { it.name == "ScreenPublisher.kt" } && files.any { it.name == "LearningViewModel.kt" } && files.any { it.name == "NotesActions.kt" })
-        val offenders = files.filter { it.name != "ScreenPublisher.kt" && writesScreenFlow(it.readText()) }
+        val names = mainSources().flatMap { screenFlowNames(it.readText()) }.toSet()
+        assertTrue("mutable" in names)
+        val offenders = files.filter { it.name != "ScreenPublisher.kt" && writesScreenFlow(it.readText(), names) }
         assertEquals(emptyList<File>(), offenders)
-        assertTrue(writesScreenFlow(File(dir(), "ScreenPublisher.kt").readText()))
+        assertTrue(writesScreenFlow(File(dir(), "ScreenPublisher.kt").readText(), names))
+    }
+    @Test fun screenFlowDeclarationsAreDiscoveredUnderAnyName() {
+        assertEquals(setOf("a", "b", "c"), screenFlowNames("private val a = MutableStateFlow(ScreenState())\nval b: MutableStateFlow<ScreenState> = x\nvar c = MutableStateFlow<ScreenState>(ScreenState())"))
+        assertEquals(emptySet<String>(), screenFlowNames("val d = MutableStateFlow(0)"))
+        assertTrue(writesScreenFlow("screenBox.update { it }", setOf("screenBox")))
+        assertFalse(writesScreenFlow("screenBox.value == 1", setOf("screenBox")))
+    }
+
+    /** Text scan: only the publisher and the flow collectors in LearningViewModel may use the snapshot paths; `publish(` is gone. */
+    @Test fun noOneCallsTheRemovedSnapshotPublish() {
+        val offenders = mainSources().filter { it.name != "ScreenPublisher.kt" && Regex("""\.publish\s*[({]""").containsMatchIn(it.readText()) }
+        assertEquals(emptyList<File>(), offenders)
+        assertTrue(hasBarePublish("publisher.publish { it }")); assertTrue(hasBarePublish("state\n .publish(x)"))
+        assertFalse(hasBarePublish("publisher.publishFresh(scope) { it }; publishLocal { it }"))
+    }
+    @Test fun snapshotFlowPublicationsStayInTheViewModelCollectors() {
+        val offenders = mainSources().filter { it.name !in setOf("ScreenPublisher.kt", "LearningViewModel.kt") && "publishFlow" in it.readText() }
+        assertEquals(emptyList<File>(), offenders)
+    }
+    @Test fun localPublicationsCarryNoContentFields() {
+        val offenders = mainSources().flatMap { f -> f.readLines().filter { "publishLocal" in it && contentField.containsMatchIn(it) }.map { "${f.name}: $it" } }
+        assertEquals(emptyList<String>(), offenders)
+        assertTrue(contentField.containsMatchIn("publishLocal { it.copy(selected = item) }"))
+        assertTrue(contentField.containsMatchIn("publishLocal { it.copy(results = r) }"))
+        assertFalse(contentField.containsMatchIn("publishLocal { it.copy(selected = null, reviews = it.reviews.filterNot { }) }"))
+    }
+
+    /** Text scan: a direct DAO write of a job row outside the guarded path (ForgetGuards.kt) and the workers' own rows. */
+    @Test fun manualRetryUsesTheGuardedJobUpdate() {
+        val vm = File(dir(), "LearningViewModel.kt").readText()
+        val retry = vm.substringAfter("private suspend fun retryNote").substringBefore("private suspend fun loadDraft")
+        assertTrue("updateJobUnlessHidden" in retry); assertFalse(Regex("""dao\.updateJob\(""").containsMatchIn(retry))
     }
     @Test fun screenFlowWritesAreFound() {
         assertTrue(writesScreenFlow("mutable.update { it }")); assertTrue(writesScreenFlow("state . update {"))
@@ -74,5 +108,16 @@ class SingleWriterScanTest {
     }
 }
 
-/** Text scan for `mutable`/`state` flow writes (`update`, `value =`, `emit`, `tryEmit`); reads and `.value ==` are not writes. */
-fun writesScreenFlow(text: String) = Regex("""\b(?:mutable|state)\s*\.\s*(?:update\b|value\s*=(?!=)|emit\b|tryEmit\b)""").containsMatchIn(text)
+/** Row-content fields a local (snapshot-purged) publication may only reduce: assigning anything but null or the field's own value fails. */
+private val contentField = Regex("""\b(selected|results|feed|library|reviews|reviewSource|jobs)\s*=\s*+(?!null\b|it\.\1\b)""")
+fun hasBarePublish(text: String) = Regex("""\.\s*publish\s*[({]""").containsMatchIn(text)
+
+/** Names of every `MutableStateFlow<ScreenState>` declared (`val x = MutableStateFlow(ScreenState(...))` or `val x: MutableStateFlow<ScreenState>`). */
+fun screenFlowNames(text: String): Set<String> =
+    Regex("""(?:val|var)\s+(\w+)\s*(?::\s*MutableStateFlow<ScreenState>|=\s*MutableStateFlow\s*(?:<ScreenState>)?\(\s*ScreenState)""").findAll(text).map { it.groupValues[1] }.toSet()
+
+/** Text scan for writes (`update`, `value =`, `emit`, `tryEmit`) on a discovered ScreenState flow or the usual `mutable`/`state`; reads and `.value ==` are not writes. */
+fun writesScreenFlow(text: String, names: Set<String> = emptySet()): Boolean {
+    val alternatives = (names + setOf("mutable", "state")).joinToString("|") { Regex.escape(it) }
+    return Regex("""\b(?:$alternatives)\s*\.\s*(?:update\b|value\s*=(?!=)|emit\b|tryEmit\b)""").containsMatchIn(text)
+}

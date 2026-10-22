@@ -28,7 +28,7 @@ internal class NotesActions(
 
     fun load() {
         val repository = repo() ?: return
-        state.publish { it.copy(notes = it.notes.refreshStarted()) }
+        state.publishLocal { it.copy(notes = it.notes.refreshStarted()) }
         val generation = state.value.notes.generation
         scope.launch {
             try {
@@ -43,7 +43,7 @@ internal class NotesActions(
                 catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not settle confirmed forgets") }
                 if (repo() === repository) state.publishFresh(repository.config.scope) { it.copy(notes = it.notes.refreshed(raw.toSummaries(), generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo() === repository) state.publish { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
+            catch (error: Exception) { if (repo() === repository) state.publishLocal { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
         }
     }
 
@@ -65,16 +65,16 @@ internal class NotesActions(
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
         if (note.documentId in state.value.notes.forgetting) return
-        state.publish { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
+        state.publishLocal { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
         scope.launch {
             val result = deleteAndPurge(repository, note.documentId, note.title)
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.publish { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
+                is ForgetResult.Failed -> state.publishLocal { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.publish { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
+                    state.publishLocal { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
         }
@@ -88,11 +88,11 @@ internal class NotesActions(
             val result = deleteAndPurge(repository, item.documentId, purgeTitle(item))
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.publish { it.copy(error = result.message()) }
+                is ForgetResult.Failed -> state.publishLocal { it.copy(error = result.message()) }
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.publish { it.copy(notice = Notice(banner)) }
+                    state.publishLocal { it.copy(notice = Notice(banner)) }
                 }
             }
         }
@@ -115,7 +115,7 @@ internal class NotesActions(
     }
 
     /** The list is memory-only and only kept while its screen is open. */
-    fun close() = state.publish { it.copy(notes = it.notes.closed()) }
+    fun close() = state.publishLocal { it.copy(notes = it.notes.closed()) }
 
-    fun messageShown() = state.publish { it.copy(notes = it.notes.messageShown()) }
+    fun messageShown() = state.publishLocal { it.copy(notes = it.notes.messageShown()) }
 }
