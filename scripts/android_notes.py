@@ -109,11 +109,15 @@ def body_digest(raw: bytes) -> dict:
 def expected_submit_bodies(title=NOTE_TITLE, text=NOTE_TEXT):
     """Candidate request bodies the app's Gson/Retrofit client should send, keyed by label variant.
 
-    Gson (apiGson) writes compact JSON in field order title,text,label, omits a null label and UTF-8 encodes it. The
+    Gson (apiGson) writes compact JSON in field order title,text,label (or text,title), omits a null label and UTF-8 encodes it. The
     fixture text has no characters Gson HTML-escapes (< > & = '), so these bytes are exact unless the app's label
-    handling differs; both an omitted and an empty label are therefore accepted.
+    handling differs; both an omitted and an empty label are therefore accepted. Gson's key order follows JVM
+    reflection order, which is not contractual (observed on device: text before title), so both orders are accepted;
+    the server parses JSON and does not care.
     """
-    variants = {"label_omitted": {"title": title, "text": text}, "label_empty": {"title": title, "text": text, "label": ""}}
+    variants = {"label_omitted": {"title": title, "text": text}, "label_empty": {"title": title, "text": text, "label": ""},
+                "label_omitted_text_first": {"text": text, "title": title},
+                "label_empty_text_first": {"text": text, "title": title, "label": ""}}
     return {k: json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode() for k, v in variants.items()}
 
 

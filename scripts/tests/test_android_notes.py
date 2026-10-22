@@ -134,6 +134,11 @@ class SubmitHashTests(unittest.TestCase):
         self.assertTrue(r["submit_hash_match"])
         self.assertEqual("label_omitted", r["submit_hash_variant"])
 
+    def test_text_first_key_order_observed_on_device_matches(self):
+        raw = notes.expected_submit_bodies()["label_omitted_text_first"]
+        self.assertTrue(raw.startswith(b'{"text":'))
+        self.assertEqual("label_omitted_text_first", notes.check_submit_digest(notes.body_digest(raw))["submit_hash_variant"])
+
     def test_mismatch_is_flagged_and_blocks_pass(self):
         r = notes.check_submit_digest({"len": 5, "sha256": "0" * 64})
         self.assertFalse(r["submit_hash_match"])
