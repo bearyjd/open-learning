@@ -1,7 +1,5 @@
 package org.openlearning.app
 
-import java.text.NumberFormat
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** Documents the user is forgetting. Set before the server call so an in-flight refresh cannot write cards back. */
@@ -31,8 +29,7 @@ fun filePlan(draft: NoteDraftFields): FilePlan = if (draft.text.isBlank()) FileP
 /** Fills the text from the file; a title the person already typed is kept. */
 fun NoteDraftFields.withFile(file: NoteFileResult.Loaded) = copy(title = title.ifBlank { file.title }, text = file.text)
 
-fun noteCounter(text: String): String =
-    "${NumberFormat.getIntegerInstance(Locale.US).format(text.codePointCount(0, text.length))} / ${NumberFormat.getIntegerInstance(Locale.US).format(NOTE_MAX_CHARS)}"
+fun noteCounter(text: String, max: Int = NOTE_MAX_CHARS): String = "${formatCount(text.codePointCount(0, text.length))} / ${formatCount(max)}"
 
 fun PendingIngest.isNoteJob() = kind == "note"
 

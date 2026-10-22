@@ -14,7 +14,6 @@ const val NOTE_MIN_CHARS = 100
 const val NOTE_MAX_CHARS = 60_000
 const val NOTE_MAX_TITLE = 500
 const val NOTE_MAX_LABEL = 100
-const val NOTE_FILE_MAX_BYTES = 256 * 1024
 const val NOTE_EXPIRED = "This note's text expired; add it again."
 
 data class ValidNote(val title: String, val text: String, val label: String?) {
@@ -49,23 +48,23 @@ private fun String.strip() = trim { it.isWhitespace() }
 private fun badTextChar(c: Char) = (c < ' ' && c != '\t' && c != '\n') || isC1OrDel(c) || isBidi(c)
 private fun badLineChar(c: Char) = c < ' ' || isC1OrDel(c) || c == '\u2028' || c == '\u2029' || isBidi(c)
 
-fun validateNote(title: String, text: String, label: String?): NoteCheck {
+fun validateNote(title: String, text: String, label: String?, limits: EffectiveLimits = DEFAULT_LIMITS): NoteCheck {
     if (hasLoneSurrogate(title) || hasLoneSurrogate(text) || (label != null && hasLoneSurrogate(label)))
         return NoteCheck.Invalid("Text must be valid Unicode.")
     val body = Normalizer.normalize(text.replace("\r\n", "\n").replace('\r', '\n'), Normalizer.Form.NFC)
     // Check before trim: trimming would silently drop edge controls such as U+0085.
     if (body.any(::badTextChar)) return NoteCheck.Invalid("Text contains control characters that can't be saved.")
     val cleanText = body.strip()
-    if (codePoints(cleanText) !in NOTE_MIN_CHARS..NOTE_MAX_CHARS)
-        return NoteCheck.Invalid("Text must be between 100 and 60,000 characters.")
+    if (codePoints(cleanText) !in limits.minChars..limits.maxChars)
+        return NoteCheck.Invalid("Text must be between ${formatCount(limits.minChars)} and ${formatCount(limits.maxChars)} characters.")
     val rawTitle = Normalizer.normalize(title, Normalizer.Form.NFC)
     if (rawTitle.any(::badLineChar)) return NoteCheck.Invalid("Title must be a single line.")
     val cleanTitle = rawTitle.strip()
-    if (codePoints(cleanTitle) !in 1..NOTE_MAX_TITLE) return NoteCheck.Invalid("Title must be between 1 and 500 characters.")
+    if (codePoints(cleanTitle) !in 1..limits.maxTitle) return NoteCheck.Invalid("Title must be between 1 and ${formatCount(limits.maxTitle)} characters.")
     val rawLabel = label?.let { Normalizer.normalize(it, Normalizer.Form.NFC) }
     if (rawLabel != null && rawLabel.any(::badLineChar)) return NoteCheck.Invalid("Label must be a single line.")
     val cleanLabel = rawLabel?.strip()?.takeIf { it.isNotEmpty() }
-    if (cleanLabel != null && codePoints(cleanLabel) > NOTE_MAX_LABEL) return NoteCheck.Invalid("Label must be at most 100 characters.")
+    if (cleanLabel != null && codePoints(cleanLabel) > limits.maxLabel) return NoteCheck.Invalid("Label must be at most ${formatCount(limits.maxLabel)} characters.")
     return NoteCheck.Valid(ValidNote(cleanTitle, cleanText, cleanLabel))
 }
 
@@ -79,17 +78,18 @@ sealed interface NoteFileResult {
 private val NOTE_EXTENSIONS = listOf(".txt", ".md", ".markdown")
 
 /** [open] is called only after the name and size checks pass. The caller must never keep the Uri. */
-fun readNoteFile(name: String?, size: Long?, open: () -> InputStream?): NoteFileResult {
+fun readNoteFile(name: String?, size: Long?, limits: EffectiveLimits = DEFAULT_LIMITS, open: () -> InputStream?): NoteFileResult {
+    val maxBytes = noteFileMaxBytes(limits)
     val fileName = name.orEmpty()
     val extension = NOTE_EXTENSIONS.firstOrNull { fileName.lowercase().endsWith(it) }
         ?: return NoteFileResult.Rejected("Choose a .txt or .md file.")
-    if (size != null && size > NOTE_FILE_MAX_BYTES) return NoteFileResult.Rejected("That file is larger than 256 KB.")
+    if (size != null && size > maxBytes) return NoteFileResult.Rejected(fileTooLargeMessage(limits))
     val bytes = try {
-        (open() ?: return NoteFileResult.Rejected("Could not open that file.")).use { readCapped(it) }
+        (open() ?: return NoteFileResult.Rejected("Could not open that file.")).use { readCapped(it, maxBytes) }
     } catch (error: IOException) {
         return NoteFileResult.Rejected("Could not read that file.")
     }
-    if (bytes.size > NOTE_FILE_MAX_BYTES) return NoteFileResult.Rejected("That file is larger than 256 KB.")
+    if (bytes.size > maxBytes) return NoteFileResult.Rejected(fileTooLargeMessage(limits))
     val utf16 = bytes.size >= 2 && ((bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) || (bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()))
     if (utf16) return NoteFileResult.Rejected("That file is not UTF-8 text.")
     if (bytes.any { it == 0.toByte() }) return NoteFileResult.Rejected("That file is not plain text.")
@@ -101,16 +101,16 @@ fun readNoteFile(name: String?, size: Long?, open: () -> InputStream?): NoteFile
     }
     val text = decoded.removePrefix("\uFEFF")
     // Same measure validateNote applies, so a file that loads here can still be submitted.
-    if (codePoints(text.replace("\r\n", "\n").replace('\r', '\n').strip()) > NOTE_MAX_CHARS)
-        return NoteFileResult.Rejected("That file has more than 60,000 characters.")
-    val title = fileName.dropLast(extension.length).map { if (badLineChar(it)) ' ' else it }.joinToString("").strip().takeCodePoints(NOTE_MAX_TITLE)
+    if (codePoints(text.replace("\r\n", "\n").replace('\r', '\n').strip()) > limits.maxChars)
+        return NoteFileResult.Rejected("That file has more than ${formatCount(limits.maxChars)} characters.")
+    val title = fileName.dropLast(extension.length).map { if (badLineChar(it)) ' ' else it }.joinToString("").strip().takeCodePoints(limits.maxTitle)
     return NoteFileResult.Loaded(title.ifEmpty { "Note" }, text)
 }
 
-private fun readCapped(input: InputStream): ByteArray {
+private fun readCapped(input: InputStream, maxBytes: Int): ByteArray {
     val out = ByteArrayOutputStream()
     val buffer = ByteArray(8192)
-    var remaining = NOTE_FILE_MAX_BYTES + 1
+    var remaining = maxBytes + 1
     while (remaining > 0) {
         val read = input.read(buffer, 0, minOf(buffer.size, remaining))
         if (read < 0) break

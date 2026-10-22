@@ -67,7 +67,7 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
     val draft = model.draft
     val message = model.noteMessage
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) model.loadNoteFile(uri) }
-    val overCap = draft.text.codePointCount(0, draft.text.length) > NOTE_MAX_CHARS
+    val overCap = draft.text.codePointCount(0, draft.text.length) > model.limits.maxChars
     model.pendingFile?.let {
         AlertDialog(
             onDismissRequest = model::discardPendingFile,
@@ -82,7 +82,7 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
         OutlinedTextField(draft.title, { model.editDraft(draft.copy(title = it)) }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
         OutlinedTextField(draft.label, { model.editDraft(draft.copy(label = it)) }, Modifier.fillMaxWidth(), label = { Text("Label (optional)") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
         OutlinedTextField(draft.text, { model.editDraft(draft.copy(text = it)) }, Modifier.fillMaxWidth(), label = { Text("Note text") }, minLines = 8, maxLines = 16, keyboardOptions = TextInputPrivacy.noLearningKeyboard,
-            isError = overCap, supportingText = { Text(noteCounter(draft.text)) })
+            isError = overCap, supportingText = { Text(noteCounter(draft.text, model.limits.maxChars)) })
         message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         OutlinedButton(onClick = { picker.launch(NOTE_MIME_TYPES) }) {
             Icon(Icons.Default.UploadFile, null); Spacer(Modifier.width(6.dp)); Text("Import a .txt or .md file")

@@ -39,6 +39,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     var noteMessage by mutableStateOf<String?>(null); private set
     // A picked file waiting for the person to confirm replacing the text they typed. Held in memory only.
     var pendingFile by mutableStateOf<NoteFileResult.Loaded?>(null); private set
+    // Server limits fetched on connect (best-effort); the defaults apply until then and when the fetch fails.
+    var limits by mutableStateOf(DEFAULT_LIMITS); private set
     private var draftReady = false
     private val draftLock = Mutex()
     init {
@@ -52,11 +54,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
-                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null
+                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; limits = DEFAULT_LIMITS
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
+                    launch { loadLimits(repository) }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
                         mutable.update { it.copy(feed = rows.filter { row -> row.inFeed }.map(repository::decode), library = rows.filter { row -> row.saved }.map(repository::decode)) }
@@ -167,6 +170,10 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         // @Update, not REPLACE: a row the user removed meanwhile must stay removed.
         if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true, kind = "note")
     }
+    private suspend fun loadLimits(repository: LearningRepository) {
+        val fetched = runCatching { repository.api.limits() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+        if (repo === repository) limits = effectiveLimits(fetched)
+    }
     private suspend fun loadDraft(repository: LearningRepository) {
         val saved = container.database.dao().draft(repository.config.scope)
         if (repo !== repository) return
@@ -193,7 +200,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun submitNote(): Boolean {
         val repository = repo ?: return false
         val fields = draft
-        val note = when (val check = validateNote(fields.title, fields.text, fields.label)) {
+        val note = when (val check = validateNote(fields.title, fields.text, fields.label, limits)) {
             is NoteCheck.Invalid -> { noteMessage = check.message; return false }
             is NoteCheck.Valid -> check.note
         }
@@ -217,6 +224,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     /** Reads a picked file into the draft. The Uri is used only inside this call and never stored. */
     fun loadNoteFile(uri: Uri) {
         val resolver = getApplication<Application>().contentResolver
+        val fileLimits = limits
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 var name: String? = null
@@ -225,15 +233,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
                         if (c.moveToFirst()) { name = c.getString(0); if (!c.isNull(1)) size = c.getLong(1) }
                     }
-                    readNoteFile(name, size) { resolver.openInputStream(uri) }
+                    readNoteFile(name, size, fileLimits) { resolver.openInputStream(uri) }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { NoteFileResult.Rejected("Could not open that file.") }
             }
             when (result) {
-                is NoteFileResult.Loaded -> when (filePlan(draft)) {
-                    FilePlan.Apply -> { draft = draft.withFile(result); noteMessage = null }
-                    FilePlan.ConfirmReplace -> { pendingFile = result; noteMessage = null }
-                }
+                is NoteFileResult.Loaded -> offerText(result)
                 is NoteFileResult.Rejected -> noteMessage = result.message
             }
         }
@@ -345,13 +350,50 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         val results = container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim()))
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
+    fun loadNotes() {
+        val repository = repo ?: return
+        mutable.update { it.copy(notes = it.notes.refreshStarted()) }
+        viewModelScope.launch {
+            try {
+                val fetched = repository.api.notes().toSummaries()
+                if (repo === repository) mutable.update { it.copy(notes = it.notes.refreshed(fetched)) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { if (repo === repository) mutable.update { it.copy(notes = it.notes.refreshFailed(error.userMessage())) } }
+        }
+    }
+    fun forgetListedNote(note: NoteSummary) {
+        val repository = repo ?: return
+        val scope = repository.config.scope
+        if (note.documentId in state.value.notes.forgetting) return
+        mutable.update { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
+        viewModelScope.launch {
+            container.forgotten.add(scope, note.documentId)
+            try {
+                val response = repository.api.forgetNote(note.documentId)
+                if (!response.isGone()) throw HttpException(response)
+                val purged = repository.purgeDocument(note.documentId)
+                if (repo === repository) {
+                    memory.clear(); detailJob?.cancel(); chatGeneration++
+                    mutable.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId)) }
+                }
+            } catch (cancelled: CancellationException) { container.forgotten.remove(scope, note.documentId); throw cancelled }
+            catch (error: Exception) {
+                container.forgotten.remove(scope, note.documentId)
+                if (repo === repository) mutable.update { it.copy(notes = it.notes.forgetFailed(note.documentId, forgetFailureMessage(error))) }
+            }
+        }
+    }
+    fun noteMessageShown() = mutable.update { it.copy(notes = it.notes.messageShown()) }
+    /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
+    fun receiveSharedNote(note: ShareRoute.Note) {
+        offerText(NoteFileResult.Loaded(note.title, note.text))
+    }
+    private fun offerText(loaded: NoteFileResult.Loaded) {
+        noteMessage = null
+        when (filePlan(draft)) {
+            FilePlan.Apply -> draft = draft.withFile(loaded)
+            FilePlan.ConfirmReplace -> pendingFile = loaded
+        }
+    }
     fun clearError() { mutable.update { it.copy(error = null, notice = null) } }
 }
-data class ChatLine(val role: String, val text: String, val question: String = "", val citations: List<Citation> = emptyList())
-data class ScreenState(
-    val feed: List<Insight> = emptyList(), val library: List<Insight> = emptyList(),
-    val results: List<Insight> = emptyList(), val searched: Boolean = false,
-    val jobs: List<PendingIngest> = emptyList(), val reviews: List<Review> = emptyList(), val reviewsLoaded: Boolean = false,
-    val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
-    val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
-)
