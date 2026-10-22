@@ -440,7 +440,17 @@ General live model quality, misconception detection, and opposing-viewpoint
 generation have not been independently validated. This milestone does not
 complete the entire requested platform or an Android-to-live-model acceptance run.
 
-Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is NOT device-verified. The
+Device attempt (Pixel 10 Pro Fold, acceptance build, mock backend, one supervised run): on the Connect screen the
+server URL and access token were typed once and no Bitwarden or other autofill/save-password sheet appeared (the
+script's uiautomator dump after the token step listed only the app's own window and no autofill text). The script then
+reached the note editor and the 145-character draft survived `am kill` (counter 145 / 60,000), but the run stopped at
+the next step: "Add note to learning feed" was not in the uiautomator tree (the button is below the visible editor, so
+the script would need to scroll). Submit, no-link, forget cancel/confirm and 413 scenarios are therefore INCONCLUSIVE,
+and the instrumented suites (including `ConnectAutofillTest`) were not run. One observation of a quiet token step is
+evidence, not proof, for the autofill opt-out; the earlier aborted attempts (a save sheet appeared) were on builds without
+the fix. The note-editor field itself was not exercised by autofill beyond the draft typing in this run.
+
+Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
 earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
 which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and
 fail-loudly logic against fakes (not real views); the instrumented `ConnectAutofillTest` and
