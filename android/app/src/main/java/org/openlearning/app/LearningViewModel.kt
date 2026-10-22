@@ -350,6 +350,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
     fun loadNotes() = notesActions.load()
+    fun closeNotes() = notesActions.close()
     fun forgetListedNote(note: NoteSummary) = notesActions.forget(note)
     fun noteMessageShown() = notesActions.messageShown()
     /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */

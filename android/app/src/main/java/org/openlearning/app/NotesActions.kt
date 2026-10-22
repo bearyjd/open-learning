@@ -28,12 +28,13 @@ internal class NotesActions(
     fun load() {
         val repository = repo() ?: return
         state.update { it.copy(notes = it.notes.refreshStarted()) }
+        val generation = state.value.notes.generation
         scope.launch {
             try {
                 val fetched = repository.api.notes().toSummaries()
-                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched)) }
+                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage())) } }
+            catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
         }
     }
 
@@ -60,6 +61,9 @@ internal class NotesActions(
             }
         }
     }
+
+    /** The list is memory-only and only kept while its screen is open. */
+    fun close() = state.update { it.copy(notes = NotesListState()) }
 
     fun messageShown() = state.update { it.copy(notes = it.notes.messageShown()) }
 }

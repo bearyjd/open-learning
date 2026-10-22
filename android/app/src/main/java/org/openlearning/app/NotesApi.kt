@@ -6,7 +6,9 @@ const val NOTES_PAGE_LIMIT = 100
 data class NoteListItem(
     val documentId: String? = null, val title: String? = null, val label: String? = null,
     val createdAt: String? = null, val charCount: Int? = null,
-)
+) {
+    override fun toString() = "NoteListItem(documentId=$documentId, title=<redacted>, label=<redacted>)"
+}
 
 /** GET /limits. Every field is optional: a missing one falls back to the default in [effectiveLimits]. */
 data class Limits(
@@ -16,6 +18,7 @@ data class Limits(
 
 /** What the notes list shows. Held in memory only; never written to Room. */
 data class NoteSummary(val documentId: String, val title: String, val label: String?, val createdAt: String, val charCount: Int) {
+    override fun toString() = "NoteSummary(documentId=$documentId, title=<redacted>, label=<redacted>)"
     /** YYYY-MM-DD from the ISO timestamp, for display. */
     val createdDate get() = createdAt.take(10)
 }

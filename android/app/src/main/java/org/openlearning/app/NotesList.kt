@@ -35,6 +35,8 @@ internal fun SecureWindow() {
 internal fun NotesList(state: NotesListState, model: LearningViewModel, onClose: () -> Unit) {
     SecureWindow()
     LaunchedEffect(Unit) { model.loadNotes() }
+    // Titles leave memory when the screen closes (back, Close, tab switch, rotation, scope change).
+    DisposableEffect(Unit) { onDispose { model.closeNotes() } }
     var confirming by remember { mutableStateOf<NoteSummary?>(null) }
     confirming?.let { note ->
         AlertDialog(
