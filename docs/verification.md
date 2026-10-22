@@ -460,6 +460,17 @@ script crashed before printing results or saving the mock request log, so the PO
 cancel/confirm and 413 scenarios remain INCONCLUSIVE, and the instrumented suites were not run. Whether the missing card
 is a script gap (a Refresh or tab change may be needed) or an app defect is undetermined. No reruns were made.
 
+Third supervised device attempt (same device, script commits 4852649 and c4f8ef9): no Bitwarden or other
+autofill/save-password sheet appeared at any dump (token step quiet again, so three consecutive builds with the fix
+were quiet). PASS: connect; draft survived process death (counter 145); submit posted exactly once to
+`/api/v1/ingest/text`; the "Your note: Acceptance note" card appeared with no Refresh tap (the earlier miss was a
+script gap: the card was in the lazy feed below the visible window, so it was absent from the dump; the app does
+refresh the feed after a completed note in `IngestWorker.runNote`, as it does after a completed URL import); no
+source-link nodes on the list or the detail; forget Cancel sent 0 DELETEs and Confirm sent 1. The run then crashed
+at "Write or import a note" (the feed list was still scrolled past it after the detail view; the script now scrolls
+back, bounded), so the 413 scenario is INCONCLUSIVE, 429 is not scripted, and the instrumented suites were not run
+because not every scenario completed. No reruns were made after the crash (device stopped per the zero-retry rule).
+
 Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
 earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
 which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and

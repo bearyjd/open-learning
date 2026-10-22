@@ -112,7 +112,7 @@ class ScrollHelperTests(unittest.TestCase):
         dev = self._device(["[100,2100][900,2200]"])
         with self.assertRaises(RuntimeError):
             dev.tap_scrolling("Add note")
-        self.assertEqual(notes.MAX_SCROLLS, len(dev.calls))
+        self.assertEqual(3 * notes.MAX_SCROLLS, len(dev.calls))
         self.assertTrue(all(c[1] == "swipe" for c in dev.calls))
 
     def test_tap_scrolling_never_taps_partially_visible_node(self):
