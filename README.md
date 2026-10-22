@@ -187,6 +187,8 @@ status, created_at and, once completed, document_id) so a failed job can be remo
 `DELETE /api/v1/jobs/{id}`. `GET /api/v1/notes` also returns `char_count`;
 `PATCH /api/v1/notes/{document_id}` edits a note's title and label without reprocessing it;
 `GET /api/v1/limits` reports the server's note length limits.
+`GET /api/v1/reviews/due` and `POST /api/v1/reviews/{id}/answer` return an additive
+`document_id` (the reviewed insight's document) so clients can map reviews to notes.
 `OL_NOTE_MAX_PENDING_JOBS` (default 20) limits queued plus running note jobs (429
 beyond it; SQLite can overshoot slightly), and failed jobs keep note text for at
 least `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168) only while the worker or note

@@ -60,6 +60,7 @@ class ReviewOutput(BaseModel):
     due_at: datetime
     interval_days: float
     insight_title: str
+    document_id: str
 
 
 class Citation(BaseModel):
