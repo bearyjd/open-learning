@@ -278,6 +278,23 @@ class Device:
             time.sleep(0.8)
         raise RuntimeError("UI element not reachable after %d scrolls: %s" % (max_scrolls, pattern))
 
+    def visible_scrolling(self, pattern, max_scrolls=MAX_SCROLLS):
+        """True when a node matching pattern is fully on screen, swiping inside the app at most max_scrolls times.
+
+        A LazyColumn composes only what is on screen, so a card below the fold is absent from the dump.
+        """
+        for attempt in range(max_scrolls + 1):
+            root = self.dump()
+            node = self.find(pattern, root)
+            if node and fully_visible(parse_bounds(node["bounds"]), app_viewport(root)):
+                return True
+            if attempt == max_scrolls:
+                return False
+            sx, sy, ex, ey = swipe_points(app_viewport(root))
+            self.shell("input", "swipe", str(sx), str(sy), str(ex), str(ey), "400")
+            time.sleep(0.8)
+        return False
+
     def type(self, text):
         self.shell("input", "text", adb_text(text))
         time.sleep(0.5)
@@ -343,9 +360,43 @@ def fill_editor(dev):
     time.sleep(1.5)  # the draft is saved 400 ms after the last edit
 
 
+def await_note_card(dev, results, timeout=40):
+    """Wait (bounded) for the job row to read Completed, look for the card by scrolling, tap Refresh at most once if absent."""
+    STEP["name"] = "submit:await completed"
+    results["job_row_completed"] = dev.wait_for("Completed", timeout=timeout)
+    STEP["name"] = "submit:find card"
+    card = "Your note: " + NOTE_TITLE
+    results["card_found_without_refresh"] = dev.visible_scrolling(card)
+    results["refresh_tapped"] = False
+    if results["card_found_without_refresh"]:
+        return True
+    STEP["name"] = "submit:refresh once"
+    dev.tap_scrolling("^Refresh\\|")
+    results["refresh_tapped"] = True
+    time.sleep(MIN_POLL_GAP)
+    return dev.visible_scrolling(card)
+
+
 def mock_log():
     with LOCK:
         return list(STATE["log"])
+
+
+def scenarios_pass(results) -> bool:
+    return bool(results.get("draft_survives_process_death") and results.get("posts") == 1
+                and results.get("submit_shows_note_card") and results.get("no_link_nodes_on_list")
+                and results.get("no_link_nodes_on_detail") and results.get("forget_cancel_deletes") == 0
+                and results.get("forget_confirm_deletes") == 1 and results.get("413_message")
+                and results.get("sentinel_body_in_ui") is False)
+
+
+def write_evidence(out, results):
+    """Always persist the request log and print partial results, even after an abort or crash."""
+    try:
+        (out / "request-log.json").write_text(json.dumps(mock_log(), indent=1))
+    except OSError as exc:
+        results["evidence_write_error"] = repr(exc)
+    print(json.dumps(results, indent=1))
 
 
 def main():
@@ -381,14 +432,14 @@ def main():
         results["draft_counter"] = counter
 
         dev.tap_scrolling("Add note to learning feed")
-        results["submit_shows_note_card"] = dev.wait_for("Your note: " + NOTE_TITLE, timeout=40)
+        results["submit_shows_note_card"] = await_note_card(dev, results)
         texts = dev.texts(dev.dump("02-after-submit"))
         log = mock_log()
         post = [e for e in log if e["method"] == "POST" and e["path"] == "/api/v1/ingest/text"]
         results["posts"] = len(post)
         results["no_link_nodes_on_list"] = not link_labels_present(texts)
 
-        dev.tap("Your note: " + NOTE_TITLE)
+        dev.tap_scrolling("Your note: " + NOTE_TITLE)
         dev.wait_for("Forget this note")
         results["no_link_nodes_on_detail"] = not link_labels_present(dev.texts(dev.dump("03-detail")))
         dev.tap("Forget this note")
@@ -408,19 +459,17 @@ def main():
         dev.dump("05-413")
         results["sentinel_body_in_ui"] = bool(dev.find("SENTINEL-BODY"))
 
-        (out / "request-log.json").write_text(json.dumps(mock_log(), indent=1))
-        print(json.dumps(results, indent=1))
-        ok = (results["draft_survives_process_death"] and results["posts"] == 1 and results["submit_shows_note_card"]
-              and results["no_link_nodes_on_list"] and results["no_link_nodes_on_detail"]
-              and results["forget_cancel_deletes"] == 0 and results["forget_confirm_deletes"] == 1
-              and results["413_message"] and not results["sentinel_body_in_ui"])
+        ok = scenarios_pass(results)
         return 0 if ok else 1
     except SupervisedAbort as exc:
         results["ABORTED"] = str(exc)
         results.setdefault("bitwarden_prompt_at_token_step", "token" in STEP["name"] or None)
-        print(json.dumps(results, indent=1))
         return 2
+    except Exception as exc:  # evidence below still gets written; the device is left untouched
+        results["CRASHED"] = "step %r: %r" % (STEP["name"], exc)
+        return 3
     finally:
+        write_evidence(out, results)
         if owns_reverse:
             dev.run("reverse", "--remove", remote, check=False)
         if server:

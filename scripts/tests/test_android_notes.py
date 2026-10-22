@@ -122,6 +122,25 @@ class ScrollHelperTests(unittest.TestCase):
         self.assertNotIn("tap", [c[1] for c in dev.calls])
 
 
+class EvidenceTests(unittest.TestCase):
+    def test_scenarios_pass_requires_every_result(self):
+        good = {"draft_survives_process_death": True, "posts": 1, "submit_shows_note_card": True,
+                "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
+                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False}
+        self.assertTrue(notes.scenarios_pass(good))
+        self.assertFalse(notes.scenarios_pass({}))
+        self.assertFalse(notes.scenarios_pass({**good, "posts": 2}))
+        self.assertFalse(notes.scenarios_pass({**good, "sentinel_body_in_ui": True}))
+
+    def test_write_evidence_persists_partial_results(self):
+        import contextlib, io, tempfile
+        results = {"ABORTED": "x"}
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as buf:
+            notes.write_evidence(Path(d), results)
+            self.assertTrue((Path(d) / "request-log.json").exists())
+        self.assertIn("ABORTED", buf.getvalue())
+
+
 class MockServerTests(unittest.TestCase):
     def setUp(self):
         notes.STATE.update(log=[], text_status=200, done=False)
