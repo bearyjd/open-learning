@@ -57,6 +57,71 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(2, notes.count_requests(log, "DELETE", "/a"))
 
 
+class ScrollHelperTests(unittest.TestCase):
+    VIEW = (0, 0, 1080, 2000)
+
+    def test_parse_bounds(self):
+        self.assertEqual((1, 2, 3, 4), notes.parse_bounds("[1,2][3,4]"))
+
+    def test_fully_visible_requires_whole_rect_inside_viewport(self):
+        self.assertTrue(notes.fully_visible((100, 1800, 900, 1900), self.VIEW))
+        self.assertFalse(notes.fully_visible((100, 1900, 900, 2100), self.VIEW))
+        self.assertFalse(notes.fully_visible((100, 2100, 900, 2200), self.VIEW))
+        self.assertFalse(notes.fully_visible((100, -5, 900, 50), self.VIEW))
+        self.assertFalse(notes.fully_visible((100, 100, 100, 200), self.VIEW))
+
+    def test_swipe_points_stay_inside_viewport(self):
+        sx, sy, ex, ey = notes.swipe_points(self.VIEW)
+        for x, y in ((sx, sy), (ex, ey)):
+            self.assertTrue(0 < x < 1080 and 0 < y < 2000)
+        self.assertGreater(sy, ey)
+
+    def _root(self, ime_top=None):
+        import xml.etree.ElementTree as ET
+        ime = '<node package="com.google.android.inputmethod.latin" bounds="[0,%s][1080,2364]"/>' % ime_top if ime_top else ""
+        return ET.fromstring('<hierarchy><node package="%s" bounds="[0,0][1080,2364]"/>%s</hierarchy>' % (notes.PACKAGE, ime))
+
+    def test_viewport_excludes_ime(self):
+        self.assertEqual((0, 0, 1080, 2364), notes.app_viewport(self._root()))
+        self.assertEqual((0, 0, 1080, 1500), notes.app_viewport(self._root(1500)))
+
+    def _device(self, button_bounds_by_dump):
+        import xml.etree.ElementTree as ET
+        dev = notes.Device.__new__(notes.Device)
+        dumps = iter(button_bounds_by_dump)
+        dev.calls = []
+        def fake_dump(name=None):
+            b = next(dumps, button_bounds_by_dump[-1])
+            return ET.fromstring('<hierarchy><node package="%s" bounds="[0,0][1080,2000]">'
+                                 '<node package="%s" text="Add note" bounds="%s"/></node></hierarchy>' % (notes.PACKAGE, notes.PACKAGE, b))
+        dev.dump = fake_dump
+        dev.shell = lambda *a, **k: dev.calls.append(a)
+        return dev
+
+    def test_tap_scrolling_taps_immediately_when_visible(self):
+        dev = self._device(["[100,1000][900,1100]"])
+        dev.tap_scrolling("Add note")
+        self.assertEqual([("input", "tap", "500", "1050")], dev.calls)
+
+    def test_tap_scrolling_scrolls_then_taps(self):
+        dev = self._device(["[100,2100][900,2200]", "[100,1000][900,1100]"])
+        dev.tap_scrolling("Add note")
+        self.assertEqual(["swipe", "tap"], [c[1] for c in dev.calls])
+
+    def test_tap_scrolling_caps_scroll_attempts(self):
+        dev = self._device(["[100,2100][900,2200]"])
+        with self.assertRaises(RuntimeError):
+            dev.tap_scrolling("Add note")
+        self.assertEqual(notes.MAX_SCROLLS, len(dev.calls))
+        self.assertTrue(all(c[1] == "swipe" for c in dev.calls))
+
+    def test_tap_scrolling_never_taps_partially_visible_node(self):
+        dev = self._device(["[100,1950][900,2050]"])
+        with self.assertRaises(RuntimeError):
+            dev.tap_scrolling("Add note")
+        self.assertNotIn("tap", [c[1] for c in dev.calls])
+
+
 class MockServerTests(unittest.TestCase):
     def setUp(self):
         notes.STATE.update(log=[], text_status=200, done=False)

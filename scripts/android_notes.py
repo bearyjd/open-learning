@@ -46,11 +46,47 @@ ALLOWED_PACKAGES = {PACKAGE, "com.google.android.inputmethod.latin", "com.androi
 FORBIDDEN_TEXT = re.compile(r"bitwarden|save password|autofill|use saved|password manager", re.I)
 MIN_INPUT_GAP = 2.0  # seconds between any two input actions
 MIN_POLL_GAP = 3.0   # seconds between uiautomator dumps
+MAX_SCROLLS = 3      # bounded scroll attempts to reach an off-screen control
 STEP = {"name": "start", "last_input": 0.0, "last_dump": 0.0}
 
 
 class SupervisedAbort(RuntimeError):
     """An unexpected overlay or foreground change: stop touching the device immediately."""
+
+
+def parse_bounds(raw):
+    """'[x1,y1][x2,y2]' -> (x1, y1, x2, y2)."""
+    x1, y1, x2, y2 = map(int, re.findall(r"-?\d+", raw))
+    return x1, y1, x2, y2
+
+
+def fully_visible(bounds, viewport):
+    """True only when the whole node rectangle lies inside the viewport and is non-empty."""
+    x1, y1, x2, y2 = bounds
+    vx1, vy1, vx2, vy2 = viewport
+    return x2 > x1 and y2 > y1 and x1 >= vx1 and y1 >= vy1 and x2 <= vx2 and y2 <= vy2
+
+
+def app_viewport(root):
+    """Visible app area: the app window's extent minus any input-method window covering its bottom."""
+    # Window roots only (direct children of <hierarchy>): scrolled-off descendants have bounds outside the window.
+    app = [parse_bounds(n.get("bounds")) for n in root.findall("node") if n.get("package") == PACKAGE and n.get("bounds")]
+    if not app:
+        raise SupervisedAbort("no app nodes to derive a viewport from")
+    left, top = min(b[0] for b in app), min(b[1] for b in app)
+    right, bottom = max(b[2] for b in app), max(b[3] for b in app)
+    ime = [parse_bounds(n.get("bounds"))[1] for n in root.iter("node")
+           if n.get("package") not in (None, PACKAGE) and "inputmethod" in n.get("package") and n.get("bounds")]
+    if ime:
+        bottom = min(bottom, min(ime))
+    return left, top, right, bottom
+
+
+def swipe_points(viewport):
+    """Swipe-up gesture strictly inside the viewport (centre column, 75% -> 35% of its height)."""
+    x1, y1, x2, y2 = viewport
+    h = y2 - y1
+    return (x1 + x2) // 2, y1 + h * 75 // 100, (x1 + x2) // 2, y1 + h * 35 // 100
 
 
 LINK_LABELS = ("Open original source", "Check source", "Open source article")
@@ -224,6 +260,24 @@ class Device:
             time.sleep(MIN_POLL_GAP)
         raise RuntimeError("UI element not found: " + pattern)
 
+    def tap_scrolling(self, pattern, max_scrolls=MAX_SCROLLS):
+        """Tap a node only when fully on screen; otherwise swipe inside the app window, at most max_scrolls times."""
+        for attempt in range(max_scrolls + 1):
+            root = self.dump()
+            node = self.find(pattern, root)
+            viewport = app_viewport(root)
+            if node and fully_visible(parse_bounds(node["bounds"]), viewport):
+                x1, y1, x2, y2 = parse_bounds(node["bounds"])
+                self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+                time.sleep(0.8)
+                return
+            if attempt == max_scrolls:
+                break
+            sx, sy, ex, ey = swipe_points(viewport)
+            self.shell("input", "swipe", str(sx), str(sy), str(ex), str(ey), "400")
+            time.sleep(0.8)
+        raise RuntimeError("UI element not reachable after %d scrolls: %s" % (max_scrolls, pattern))
+
     def type(self, text):
         self.shell("input", "text", adb_text(text))
         time.sleep(0.5)
@@ -326,7 +380,7 @@ def main():
         results["draft_survives_process_death"] = counter == expected
         results["draft_counter"] = counter
 
-        dev.tap("Add note to learning feed")
+        dev.tap_scrolling("Add note to learning feed")
         results["submit_shows_note_card"] = dev.wait_for("Your note: " + NOTE_TITLE, timeout=40)
         texts = dev.texts(dev.dump("02-after-submit"))
         log = mock_log()
@@ -349,7 +403,7 @@ def main():
         urllib_set_status(args.port, 413)
         dev.tap("Write or import a note")
         fill_editor(dev)
-        dev.tap("Add note to learning feed")
+        dev.tap_scrolling("Add note to learning feed")
         results["413_message"] = dev.wait_for("larger than your server accepts", timeout=40)
         dev.dump("05-413")
         results["sentinel_body_in_ui"] = bool(dev.find("SENTINEL-BODY"))
