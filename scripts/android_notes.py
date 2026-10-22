@@ -185,7 +185,7 @@ def list_summary(log, texts, forgotten="5eed0000-0000-4000-8000-0000000000a1", k
             "list_other_row_remains": any(kept_title in x for x in texts), "list_forgotten_row_gone": gone(texts)}
 
 
-STATE = {"log": [], "text_status": 200, "list_deleted": set(), "offline": False, "done": False, "rate_limit_once": False, "retried": False}
+STATE = {"log": [], "text_status": 200, "list_deleted": set(), "offline": False, "done": False, "rate_limit_once": False, "retried": False, "dropped": []}
 LOCK = threading.Lock()
 
 
@@ -216,6 +216,8 @@ def make_handler():
             self._digest = None if path.startswith("/__ctl/") else body_digest(raw)
             with LOCK:
                 offline = STATE["offline"]
+                if offline and not path.startswith("/__ctl/"):  # evidence the app tried; kept out of "log" so request counts stay exact
+                    STATE["dropped"].append({"t": round(time.time(), 1), "method": self.command, "path": path})
             if offline and not path.startswith("/__ctl/"):  # drop the connection unanswered and unlogged, like a dead network
                 self.close_connection = True
                 return
@@ -489,6 +491,11 @@ def mock_log():
         return list(STATE["log"])
 
 
+def mock_dropped():
+    with LOCK:
+        return list(STATE["dropped"])
+
+
 def rate_limit_summary(log, baseline) -> dict:
     """POSTs after `baseline` earlier ones: how many, their statuses, and whether every body had the same hash."""
     posts = [e for e in log if e["method"] == "POST" and e["path"] == "/api/v1/ingest/text"][baseline:]
@@ -553,6 +560,7 @@ def write_evidence(out, results):
     """Always persist the request log and print partial results, even after an abort or crash."""
     try:
         (out / "request-log.json").write_text(json.dumps(mock_log(), indent=1))
+        (out / "dropped-offline-attempts.json").write_text(json.dumps(mock_dropped(), indent=1))
     except OSError as exc:
         results["evidence_write_error"] = repr(exc)
     print(json.dumps(results, indent=1))
@@ -614,6 +622,7 @@ def main():
 
         run_notes_list(dev, results)
         offline_forget.run_offline_forget(dev, lambda on: urllib_ctl(args.port, "offline", "?on=%d" % on), mock_log, STEP, results)
+        results["offline_dropped_attempts"] = len(mock_dropped())
 
         run_rate_limit(dev, args.port, results)
         if not results["429_completed"]:  # a half-finished retry would turn the next scenario's 413 into a second failure

@@ -194,7 +194,7 @@ class EvidenceTests(unittest.TestCase):
 
 class MockServerTests(unittest.TestCase):
     def setUp(self):
-        notes.STATE.update(log=[], text_status=200, offline=False, done=False, rate_limit_once=False, retried=False, list_deleted=set())
+        notes.STATE.update(log=[], text_status=200, offline=False, done=False, rate_limit_once=False, retried=False, list_deleted=set(), dropped=[])
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), notes.make_handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.server.server_port
@@ -270,6 +270,7 @@ class MockServerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1")
         self.assertEqual([], notes.STATE["log"])
+        self.assertEqual([("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1")], [(e["method"], e["path"]) for e in notes.mock_dropped()])
         self.call("GET", "/__ctl/offline?on=0")
         self.assertEqual(204, self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1")[0])
         self.assertEqual(1, forget.deletes_for(notes.STATE["log"]))
