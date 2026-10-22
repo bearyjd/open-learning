@@ -125,5 +125,10 @@ class ForgetGuardRoomTest {
         assertEquals("completed", dao.job(scope, "j2")?.status)
     }
 
+    @Test fun cardFlagsProjectsOnlyTheFeedFlag() = runBlocking {
+        repo.writeCards(listOf(card("a", "d1")), CardList.FEED); repo.writeCards(listOf(card("b", "d2")), CardList.LIBRARY)
+        assertEquals(mapOf("a" to true, "b" to false), dao.cardFlags(scope).associate { it.id to it.inFeed })
+    }
+
     private companion object { const val NAME = "forget-guard-test.db" }
 }

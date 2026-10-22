@@ -6,7 +6,6 @@ import org.junit.Test
 /** The pure part of the one cache writer: which rows may be written, and with which flags. */
 class CardWriterTest {
     private fun card(id: String, doc: String = "", saved: Boolean = false) = Insight(id = id, documentId = doc, saved = saved)
-    private fun row(id: String, inFeed: Boolean, saved: Boolean = false) = CachedInsight("s", id, "{}", saved, inFeed)
 
     @Test fun hiddenDocumentsAreNeverWritten() {
         val rows = cardRows("s", listOf(card("a", "d1"), card("b", "d2")), setOf("d1"), emptyMap(), CardList.FEED)
@@ -22,14 +21,14 @@ class CardWriterTest {
         assertEquals("s", rows.single().scope)
     }
     @Test fun libraryReplaceMarksSavedAndKeepsInFeed() {
-        val previous = mapOf("a" to row("a", inFeed = true), "b" to row("b", inFeed = false))
+        val previous = mapOf("a" to true, "b" to false)
         val rows = cardRows("s", listOf(card("a"), card("b"), card("c")), emptySet(), previous, CardList.LIBRARY)
         assertEquals(listOf(true, true, true), rows.map { it.saved })
         assertEquals(listOf(true, false, false), rows.map { it.inFeed })
         assertTrue(apiGson.fromJson(rows[0].payload, Insight::class.java).saved)
     }
     @Test fun plainWriteKeepsInFeedFromThePreviousRow() {
-        val previous = mapOf("a" to row("a", inFeed = true))
+        val previous = mapOf("a" to true)
         val rows = cardRows("s", listOf(card("a"), card("z")), emptySet(), previous, null)
         assertEquals(listOf(true, false), rows.map { it.inFeed })
     }

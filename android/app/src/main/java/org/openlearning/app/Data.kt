@@ -89,6 +89,8 @@ data class PendingForget(val scope: String, val documentId: String, val createdA
 data class NoteDraft(@PrimaryKey val scope: String, val title: String, val label: String, val text: String) {
     override fun toString() = "NoteDraft(scope=$scope, text=<redacted>)"
 }
+data class CardFlag(val id: String, val inFeed: Boolean)
+
 @Dao
 interface LearningDao {
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope AND (saved = 1 OR inFeed = 1)")
@@ -121,6 +123,8 @@ interface LearningDao {
     @Query("SELECT * FROM NoteDraft WHERE scope = :scope") suspend fun draft(scope: String): NoteDraft?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDraft(draft: NoteDraft)
     @Query("DELETE FROM NoteDraft WHERE scope = :scope") suspend fun deleteDraft(scope: String)
+    /** Only the flag a write needs, so a refresh does not load every payload. */
+    @Query("SELECT id, inFeed FROM CachedInsight WHERE scope = :scope") suspend fun cardFlags(scope: String): List<CardFlag>
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope") suspend fun allInsights(scope: String): List<CachedInsight>
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND id IN (:ids)") suspend fun deleteInsights(scope: String, ids: List<String>)
     // Idempotent: forgetting twice keeps the first row (and its failed state, until the person retries).

@@ -179,21 +179,28 @@ match and several unlinked rows none are deleted, so a title residue can remain 
 
 Durable tombstone and single writer (structural fix). There is no in-memory marker any more. A confirmed row stays in
 `PendingForget` with status `confirmed`, and the same table hides the note from every read, pending, failed or confirmed.
-`LearningRepository.writeCards` is the only code that writes `CachedInsight` (a JVM test fails if `dao.put(` appears anywhere
-else in the app sources). In ONE Room transaction it reads the durable set, clears the list being replaced, puts the allowed
+`LearningRepository.writeCards` is the only code that writes `CachedInsight` (a JVM text scan fails if a DAO method that writes
+`CachedInsight` is called through `dao`, `dao()` or `dao::` anywhere else in the app sources; it is a source scan, not a runtime
+guarantee, and aliasing or reflection would evade it). It reads only the (id, inFeed) projection of the existing rows, not
+every payload. In ONE Room transaction it reads the durable set, clears the list being replaced, puts the allowed
 rows and prunes, so a feed, library, save or detail response that was in flight when a note was forgotten (or after the server
 confirmed, or after a process restart) cannot write its cards back, however late it lands. Nothing waits on the network inside
 that transaction. The screen state is a derived view: the published state combined with the live hidden set, with hidden
 documents removed from the feed, library, results, open detail, chat and its citations, review list, revealed source and notes
-list on every emission. A stale publication is scrubbed whenever it lands; the explicit checks that remain are the restore
-decision for a saved tutor selection and the card writer.
+list and Recent imports (completed import rows by document id) on every emission. A stale publication is scrubbed whenever it lands; the explicit checks that remain are the restore
+decision for a saved tutor selection and the card writer. The hidden set also PURGES the retained state: whenever it changes,
+the same removal is applied to the stored state, so when a confirmed row is later pruned nothing forgotten is still held in memory
+to reappear. The view and the purge use only the hidden set of the account that owns the state; during an account switch the
+view is blank until that account's set arrives. The ingest worker deletes, instead of saving, a completed import row whose
+document is hidden, so a delayed import cannot show a forgotten title.
 Confirmation is one transaction too: the row is upserted as `confirmed` (even if it went missing or failed) and the cards and
 linked completed import rows are purged. Stop trying deletes the row (the person's override).
 Pruning, TTL 7 days: each `GET /notes` answer settles confirmed rows (`reconcile`). A confirmed row older than 7 days, measured
 from the START of the list request (so a row confirmed while it was in flight is never judged by it), is deleted only when the
 page was complete (fewer than 100 notes) and does not list it. If the server still lists it after 7 days it goes back to
 pending and its worker is enqueued again (the DELETE is idempotent). Anything else is kept, including every row after an
-incomplete page. Hidden rows therefore persist until a list answer reconciles them. A periodic unique work `forget-sweep`
+incomplete page. Hidden rows therefore persist until a list answer reconciles them. With more than 100 notes (`NOTES_PAGE_LIMIT`) the page is
+never complete, so pruning never runs: confirmed rows then persist, which is safe (they only hide) but unbounded. A periodic unique work `forget-sweep`
 (every 6 hours, network required, KEEP) resumes pending rows and reconciles when a confirmed row is past its TTL.
 Document ids are validated before anything is committed (at most 64 characters of hex and dashes, what the server issues);
 anything else is refused with a local message and never queued, because an oversized id would make WorkManager throw on every
@@ -207,7 +214,7 @@ failed and the work succeeds), so no failed work poisons a chain. The confirmati
 document, never the title or legacy fallback. After the commit nothing can undo the forget: a failure to cancel an import or
 to schedule is recovered by the resume, not reported as "nothing was hidden"; the resume cannot crash the app.
 Reviews: a review carries its own `document_id` (additive on the server; an older server sends nothing, which reads as blank).
-A review with a blank id FAILS CLOSED while any forget row exists for the account: its document is looked up (cache, then the
+A review with a blank id FAILS CLOSED always, whether or not a forget exists yet (so a later forget can still scrub it): its document is looked up (cache, then the
 server, at most 20 lookups, none after the first network failure) and a review that cannot be resolved is dropped; a 404 on one
 lookup drops only that review. The derived view removes reviews by their own id, the recorded id and the revealed source.
 Failing statuses: 2xx, 404 and 410 are done; 408, 425, 429, 5xx and no answer retry, giving up after 20 attempts (the row is
@@ -221,7 +228,8 @@ there is no other way to delete them from this device.
 Residuals: an import of the same text that is still in flight on the server can republish the note after a forget (the confirm
 dialog says "A note that is still being imported may reappear."). Tutor prose can quote a note that is still pending: an answer
 generated from it is not rewritten, only its citations of a hidden document are removed. Reviews from older servers depend on
-the lookup, so offline they are hidden. Hidden rows persist until a list reconcile. A forgotten note cannot be un-hidden except
+the lookup, so offline they are hidden. Untested wiring (no device or Robolectric run): the ViewModel collectors, the worker's
+use of the hidden set and the Room helpers are compile-checked only; the pure functions behind them are unit-tested. Hidden rows persist until a list reconcile. A forgotten note cannot be un-hidden except
 through Stop trying on a failed row.
 
 The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
