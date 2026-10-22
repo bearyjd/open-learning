@@ -650,3 +650,20 @@ short circuit, hidden), restore of a hidden note, marker ordering, post-commit b
 state and copy, replay table (410, 408, 425, attempt cap), malformed payload, dialog residual copy. Untested: APPEND_OR_REPLACE
 chaining in real WorkManager, a late network response in flight, the Room transaction and `Credentials.takePreviousServer`,
 the Stop trying dialog, and the notice banner. Compile-only instrumented additions are in `ForgetQueueRoomTest`.
+
+E2b-3 structural fix (durable tombstone, single card writer, derived view): STILL NOT device-verified. JVM tests added or changed:
+`CardWriterTest` (`cardRows`: hidden, blank id, inFeed and saved flags), `ForgetPruneTest` (`confirmedDecisions` TTL edge, incomplete
+page, still listed, request start versus delivery, other scopes; `serverPage`; sweep trigger), `HiddenViewTest` (`withoutHidden` for
+every field, citations, identity), `ForgetStructuralTest` (enqueue policy table with REPLACE and KEEP, enqueue error
+classification, `resolveReviews` with `documentId` and 404, review JSON from an old server, notice computation, and three
+source scans). The source scans are text checks, not behaviour: only `CardWriter.kt` may call `dao.put(`; no `ForgottenNotes`
+marker remains; `confirmed()` calls `confirmForget` and not `deleteForget`; `NotesActions` calls `queue.reconcile(`.
+Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the seven interleavings (forget then stale write; write then
+forget; confirm then stale write; simulated restart then stale write; reconcile inside the TTL and on an incomplete page;
+confirmed and still listed after the TTL flips to pending; `forgetsOutside` excludes confirmed). `ForgetQueueRoomTest` was updated.
+NOT tested at all: the `writeCards` transaction on a real database as it runs; `ForgetWorker` and `ForgetSweepWorker` in WorkManager
+(REPLACE versus a running worker, the awaited enqueue, the periodic schedule, never returning a failed result); the derived
+`state` flow in the view model (scope switch, combine timing); `NotesActions.load` wiring beyond the source scan; resume
+wrapping in the view model; the once-per-start notice; `Credentials` deleting the old previous-server key; the Compose screens;
+and the server's `document_id` on reviews (a backend change in a separate PR). The earlier `ForgetHardeningTest` marker tests
+were removed with the marker.
