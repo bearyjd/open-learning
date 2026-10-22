@@ -67,6 +67,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                             mutable.update { it.copy(jobs = jobs, notice = noticeAfterJobUpdate(it.notice, jobs)) }
                             if (recover) {
                                 recover = false
+                                // "paused" is excluded here but is not in NoteLogic's TERMINAL set: a paused job needs a manual retry
+                                // so it is not rescheduled, yet it stays in flight and keeps its "Note queued" banner.
                                 jobs.filter { it.status.lowercase() !in setOf("completed", "complete", "succeeded", "success", "done", "failed", "error", "cancelled", "paused") }
                                     .forEach { IngestWorker.schedule(getApplication(), it.scope, it.id) }
                             }
