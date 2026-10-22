@@ -30,6 +30,18 @@ fun requireForgetDocumentId(id: String) { if (!validForgetDocumentId(id)) throw 
 /** Validates, then lowercases: ids are stored and compared in lower case, so "ABC" and "abc" are one note. */
 fun normalizedForgetDocumentId(id: String): String { requireForgetDocumentId(id); return id.lowercase() }
 
+/**
+ * Rows stored before ids were lowercased may differ only by case. One row per (scope, lower-case id) survives, stored under the
+ * lower-case id: confirmed beats pending beats failed, then the newest, then the smaller original id (so the result never depends on order).
+ */
+fun mergeForgetRowsByLowerId(rows: List<PendingForget>): List<PendingForget> {
+    fun strength(status: String) = when (status) { FORGET_CONFIRMED -> 2; FORGET_PENDING -> 1; else -> 0 }
+    return rows.groupBy { it.scope to it.documentId.lowercase() }.map { (key, group) ->
+        val best = group.sortedWith(compareByDescending<PendingForget> { strength(it.status) }.thenByDescending { it.createdAt }.thenBy { it.documentId }).first()
+        best.copy(documentId = key.second)
+    }
+}
+
 class InvalidForgetIdException : IllegalArgumentException("Invalid document id")
 
 const val FORGET_INVALID_ID_MESSAGE =

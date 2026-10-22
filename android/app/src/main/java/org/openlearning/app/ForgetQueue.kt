@@ -68,7 +68,8 @@ class ForgetQueue(
      * rows are purged (linked rows only: the title fallback ran once at forget time and must not widen). The tombstone keeps
      * hiding the note, and [LearningRepository.writeCards] keeps refusing its cards, until [reconcile] settles it.
      */
-    suspend fun confirmed(scope: String, documentId: String) {
+    suspend fun confirmed(scope: String, rawDocumentId: String) {
+        val documentId = normalizedForgetDocumentId(rawDocumentId)
         database.withTransaction {
             dao.confirmForget(PendingForget(scope, documentId, clock(), FORGET_CONFIRMED))
             val ids = dao.allInsights(scope).filter { documentIdOfPayload(it.payload) == documentId }.map { it.id }
@@ -99,10 +100,11 @@ class ForgetQueue(
     /** The background sweep only fetches the list when this is true. */
     suspend fun confirmedNeedReconcile(scope: String): Boolean = sweepNeedsReconcile(dao.confirmedForgets(scope), clock())
 
-    suspend fun markFailed(scope: String, documentId: String, error: String) { dao.failForgetIfPending(scope, documentId, error) }
+    suspend fun markFailed(scope: String, rawDocumentId: String, error: String) { dao.failForgetIfPending(scope, rawDocumentId.lowercase(), error) }
 
     /** Failed rows only: puts the row back to pending and schedules the worker again (appended, never dropped). */
-    suspend fun retryForget(scope: String, documentId: String) {
+    suspend fun retryForget(scope: String, rawDocumentId: String) {
+        val documentId = rawDocumentId.lowercase() // lenient: a stuck row with an unqueueable id must stay retryable
         val row = dao.forget(scope, documentId) ?: return
         if (!canStopTrying(row)) return
         dao.setForgetStatus(scope, documentId, FORGET_PENDING, null)
@@ -110,7 +112,8 @@ class ForgetQueue(
     }
 
     /** Failed rows only: the person gives up. The row goes and the note is shown again (it stays on the server). */
-    suspend fun stopTrying(scope: String, documentId: String): Boolean {
+    suspend fun stopTrying(scope: String, rawDocumentId: String): Boolean {
+        val documentId = rawDocumentId.lowercase() // lenient: a failed row with an unqueueable id must stay removable
         if (dao.deleteForgetIfFailed(scope, documentId) == 0) return false
         onReleased(scope, setOf(documentId))
         return true

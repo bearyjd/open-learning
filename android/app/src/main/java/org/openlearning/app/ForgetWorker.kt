@@ -13,7 +13,9 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val container = (applicationContext as LearningApplication).container
         val scope = inputData.getString("scope") ?: return Result.success()
-        val documentId = inputData.getString("documentId") ?: return Result.success()
+        val storedId = inputData.getString("documentId") ?: return Result.success()
+        // Work enqueued before ids were lowercased still carries the old spelling: rows and the server use lower case.
+        val documentId = try { normalizedForgetDocumentId(storedId) } catch (invalid: InvalidForgetIdException) { return Result.success() }
         val queue = container.forgetQueue
         // REPLACE can start this work again for a row that was settled meanwhile: only a pending row has anything to do.
         if (container.database.dao().forget(scope, documentId)?.status != FORGET_PENDING) return Result.success()

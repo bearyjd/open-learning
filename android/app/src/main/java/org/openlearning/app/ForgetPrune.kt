@@ -14,8 +14,9 @@ fun confirmedDecisions(
     scope: String, rows: List<PendingForget>, serverIds: Set<String>, complete: Boolean, startedAt: Long, ttl: Long = FORGET_CONFIRMED_TTL_MS,
 ): ConfirmedDecisions {
     val old = rows.filter { it.scope == scope && it.status == FORGET_CONFIRMED && startedAt - it.createdAt >= ttl }
-    val revive = old.filter { it.documentId in serverIds }.map { it.documentId }
-    val delete = if (complete) old.filter { it.documentId !in serverIds }.map { it.documentId } else emptyList()
+    val listed = serverIds.mapTo(HashSet()) { it.lowercase() }
+    val revive = old.filter { it.documentId.lowercase() in listed }.map { it.documentId }
+    val delete = if (complete) old.filter { it.documentId.lowercase() !in listed }.map { it.documentId } else emptyList()
     return ConfirmedDecisions(delete, revive)
 }
 

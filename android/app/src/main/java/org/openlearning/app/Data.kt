@@ -152,7 +152,7 @@ interface LearningDao {
     @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND lower(documentId) = lower(:documentId)")
     suspend fun linkedNoteRows(scope: String, documentId: String): List<PendingIngest>
 }
-@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 3, exportSchema = true)
+@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 4, exportSchema = true)
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
 
 // Overwrite deleted pages and flush the WAL so cleared note text does not linger on disk.
@@ -227,7 +227,7 @@ class LearningRepository(val config: Connection, internal val database: Learning
 class AppContainer(private val context: Context) {
     val credentials = Credentials(context)
     val database = Room.databaseBuilder(context, LearningDatabase::class.java, "learning.db")
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(SecureDeleteCallback).build()
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).addCallback(SecureDeleteCallback).build()
     val forgetQueue = ForgetQueue(database, { scope, id, enqueue -> ForgetWorker.schedule(context, scope, id, enqueue) }, { scope, id -> IngestWorker.cancel(context, scope, id) })
     fun repository(connection: Connection) = LearningRepository(connection, database)
 }

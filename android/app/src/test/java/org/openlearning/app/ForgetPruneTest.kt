@@ -68,4 +68,27 @@ class ForgetPruneTest {
         assertFalse(sweepNeedsReconcile(listOf(PendingForget("s", "p", 0, FORGET_PENDING)), ttl * 3, ttl))
         assertFalse(sweepNeedsReconcile(emptyList(), ttl * 3, ttl))
     }
+
+    // Legacy rows may be mixed case while the server lists lower-case ids.
+    @Test fun aMixedCaseTombstoneStillListedByTheServerIsRevivedNotDeleted() {
+        val d = confirmedDecisions("s", listOf(confirmed("ABC-1", 0)), setOf("abc-1"), true, ttl, ttl)
+        assertEquals(listOf("ABC-1"), d.revive)
+        assertTrue(d.delete.isEmpty())
+    }
+    @Test fun aMixedCaseTombstoneNotListedIsStillDeleted() {
+        assertEquals(listOf("ABC-1"), confirmedDecisions("s", listOf(confirmed("ABC-1", 0)), setOf("other"), true, ttl, ttl).delete)
+    }
+    @Test fun legacyRowsAreLoweredAndCollisionsKeepTheStrongerRow() {
+        val rows = listOf(
+            PendingForget("s", "ABC", 5, FORGET_FAILED, FORGET_REJECTED_ERROR), PendingForget("s", "abc", 1, FORGET_PENDING),
+            PendingForget("s", "DEF", 2, FORGET_PENDING), PendingForget("s", "Def", 9, FORGET_CONFIRMED),
+            PendingForget("t", "ABC", 3, FORGET_FAILED, FORGET_REJECTED_ERROR),
+        )
+        val merged = mergeForgetRowsByLowerId(rows).sortedWith(compareBy({ it.scope }, { it.documentId }))
+        assertEquals(listOf(
+            PendingForget("s", "abc", 1, FORGET_PENDING), PendingForget("s", "def", 9, FORGET_CONFIRMED),
+            PendingForget("t", "abc", 3, FORGET_FAILED, FORGET_REJECTED_ERROR),
+        ), merged)
+        assertEquals(merged, mergeForgetRowsByLowerId(rows.reversed()).sortedWith(compareBy({ it.scope }, { it.documentId })))
+    }
 }
