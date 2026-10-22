@@ -643,3 +643,10 @@ these only once someone runs them.
 Device-acceptance script: `scripts/android_notes.py` has an offline-forget scenario (mock offline, forget the remaining listed
 note, expect the "forgotten note waiting for the server" line and no DELETE, then mock online and expect exactly one DELETE
 within 150 s and the line gone). Written, not run.
+
+E2b-3 review fixes (still NOT device-verified). New JVM tests (`ForgetHardeningTest`): marker kept after confirm and cleared by a
+fresh list, enqueue policy, id validation, per-row scheduling failure, linked-only confirmation purge, review resolution (cap,
+short circuit, hidden), restore of a hidden note, marker ordering, post-commit best effort, token-rotation copy, Stop trying
+state and copy, replay table (410, 408, 425, attempt cap), malformed payload, dialog residual copy. Untested: APPEND_OR_REPLACE
+chaining in real WorkManager, a late network response in flight, the Room transaction and `Credentials.takePreviousServer`,
+the Stop trying dialog, and the notice banner. Compile-only instrumented additions are in `ForgetQueueRoomTest`.

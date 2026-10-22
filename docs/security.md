@@ -177,6 +177,32 @@ The old in-memory retry of failed local cleanups is removed: the queue supersede
 (pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
 match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
 
+Review hardening (E2b-3 follow-up). Stale responses: when the server confirms, the queue row goes but an in-memory marker for
+the document stays until a fresh `GET /notes` answer no longer lists it, so a feed, library or search response already in
+flight cannot write the cards back (the marker is set before the commit and removed if the commit fails or is cancelled; the
+Room row hides the note from every read). Document ids are validated before anything is committed (at most 64 characters of
+hex and dashes, what the server issues); anything else is refused with a local message and never queued, because an
+oversized id would make WorkManager throw on every launch. Scheduling is per row and exception safe: a row whose worker cannot
+be built is marked failed ("this device could not schedule it") and the others continue. Work is enqueued with
+APPEND_OR_REPLACE for a new forget and for Retry (so an enqueue during a finishing worker is not lost) and KEEP for the
+idempotent resume, which runs on every connect and whenever Your notes opens. The confirmation cleanup removes only rows
+linked to the document, never the title or legacy fallback, so an unrelated legacy import row survives. After the commit
+nothing can undo the forget: a failure to cancel an import or to schedule is recovered by the resume, not reported as
+"nothing was hidden". Reviews and saved selections: reviews whose insight is no longer cached are resolved against the
+server only while a forget is queued (at most 20 lookups, none after the first network failure; unresolved reviews stay
+hidden), the document id is recorded per review, "Show explanation" and the restored tutor selection check the queue before
+anything is shown (a hidden note is treated as missing), and forgetting drops reviews by that recorded id too.
+Failing statuses: 2xx, 404 and 410 are done; 408, 425, 429, 5xx and no answer retry, giving up after 20 attempts (the row is
+failed with "gave up", still hidden); 401 and 403 fail as "rejected by the server"; every other status (3xx, other 4xx) fails
+as "server refused". Failed rows offer Retry and "Stop trying", which deletes the queue row and shows the note again on the
+next refresh; the note stays on the server. Error text is one of five fixed strings, never a title or server text.
+Token rotation: a row belongs to the scope of the server and token it was forgotten under (a hash of both), so after the token
+changes its delete waits for the old token and stays hidden only while that scope is not purged. When the server is unchanged
+and other scopes still hold queued forgets, a one-time notice says so (without naming the server); reconnecting with the old
+token finishes them, and there is no other way to delete them from this device. Residual: an import of the same text that is
+still in flight on the server can republish the note after a forget; the confirm dialog says "A note that is still being
+imported may reappear." A forgotten note cannot be un-hidden except through Stop trying on a failed row.
+
 The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
 On SQLite with the API and the worker as separate processes, a forget can commit between
 the worker's read of the document and its job update and leave a dangling `document_id`
