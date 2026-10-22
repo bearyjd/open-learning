@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 
 /** "Your notes": titles and labels come from the server on each open and live in memory only, never in Room. */
 @Composable
-internal fun NotesList(state: NotesListState, model: LearningViewModel, onClose: () -> Unit) {
+internal fun NotesList(state: NotesListState, forgetWaiting: Int, forgetFailed: List<PendingForget>, model: LearningViewModel, onClose: () -> Unit) {
     SecureWindow()
     LaunchedEffect(Unit) { model.loadNotes() }
     // Titles leave memory when the screen closes (back, Close, tab switch, rotation, scope change).
@@ -37,6 +37,8 @@ internal fun NotesList(state: NotesListState, model: LearningViewModel, onClose:
             OutlinedButton(onClick = model::loadNotes, enabled = !state.loading) { Text("Refresh") }
             TextButton(onClick = onClose) { Text("Close") }
         } }
+        forgetWaitingLine(forgetWaiting)?.let { line -> item(key = "forget-waiting") { Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+        items(forgetFailed, key = { "forget-failed-${it.documentId}" }) { row -> FailedForgetRow(row) { model.retryForget(row.documentId) } }
         when (notesBody(state)) {
             NotesBody.Loading -> item { CircularProgressIndicator(Modifier.padding(vertical = 24.dp)) }
             NotesBody.Error -> item { EmptyState("Couldn't load your notes", state.error.orEmpty()) }
@@ -59,5 +61,14 @@ private fun NoteRow(note: NoteSummary, forgetting: Boolean, onForget: () -> Unit
                 TextButton(onClick = onForget, enabled = !forgetting) { Text(if (forgetting) "Forgetting…" else "Forget") }
             }
         }
+    }
+}
+
+/** A forget the server rejected: the note stays hidden here. Fixed text only, never a title. */
+@Composable
+private fun FailedForgetRow(row: PendingForget, onRetry: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+        Text("${forgetFailedLine(row)} — ", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+        TextButton(onClick = onRetry) { Text("Retry") }
     }
 }

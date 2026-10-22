@@ -52,6 +52,7 @@ class ForgetQueue(
     /** The server confirmed (or had nothing to delete): drop the queue row and repeat the local purge. */
     suspend fun confirmed(scope: String, documentId: String) {
         database.withTransaction { dao.deleteForget(scope, documentId); purgeLocal(scope, documentId, null) }
+        forgotten.remove(scope, documentId)
         database.checkpointBestEffort()
     }
 

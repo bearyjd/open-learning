@@ -3,6 +3,7 @@ package org.openlearning.app
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -30,7 +31,6 @@ internal class NotesActions(
         state.update { it.copy(notes = it.notes.refreshStarted()) }
         val generation = state.value.notes.generation
         scope.launch {
-            retryPurges(repository)
             try {
                 val fetched = queue.visibleNotes(repository.config.scope, repository.api.notes().toSummaries())
                 if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
@@ -48,20 +48,10 @@ internal class NotesActions(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { forgotten.remove(repository.config.scope, documentId); ForgetResult.Failed(error) }
 
-    /**
-     * Re-runs the local cleanup of notes the server deleted but this device could not clean (see [ForgottenNotes.purgeFailed]).
-     * Called on connect and whenever the list is opened. Memory only: a process death before a retry forgets the need.
-     */
-    suspend fun retryPurges(repository: LearningRepository) {
+    /** The outcome plus the queue state (waiting and failed counts, ids only) read from Room. */
+    private suspend fun banner(repository: LearningRepository, result: ForgetResult): String {
         val scopeKey = repository.config.scope
-        for (pending in forgotten.pendingPurges(scopeKey)) {
-            try {
-                val purged = repository.purgeDocument(pending.documentId, pending.title)
-                forgotten.purgeDone(scopeKey, pending.documentId)
-                if (repo() === repository) state.update { it.withoutDocument(pending.documentId, purged) }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { android.util.Log.w("OpenLearning", "Retrying the cleanup of a forgotten note failed") }
-        }
+        return forgetBanner(result, queue.pendingForgetCount(scopeKey).first(), queue.failedForgets(scopeKey).first().size)
     }
 
     fun forget(note: NoteSummary) {
@@ -72,11 +62,11 @@ internal class NotesActions(
             val result = deleteAndPurge(repository, note.documentId, note.title)
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message().orEmpty())) }
-                else -> {
+                is ForgetResult.Failed -> state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
+                is ForgetResult.Done -> {
                     onForgotten()
-                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
-                    state.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId, result.message() ?: "Note forgotten.")) }
+                    val banner = banner(repository, result)
+                    state.update { it.withoutDocument(note.documentId, result.purged).copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
         }
@@ -91,13 +81,19 @@ internal class NotesActions(
             if (repo() !== repository) return@launch
             when (result) {
                 is ForgetResult.Failed -> state.update { it.copy(error = result.message()) }
-                else -> {
+                is ForgetResult.Done -> {
                     onForgotten()
-                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
-                    state.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice(result.message() ?: "Note forgotten.")) }
+                    val banner = banner(repository, result)
+                    state.update { it.withoutDocument(item.documentId, result.purged + item.id).copy(notice = Notice(banner)) }
                 }
             }
         }
+    }
+
+    /** Failed rows only: the row goes back to pending and its worker is scheduled again. */
+    fun retryForget(documentId: String) {
+        val repository = repo() ?: return
+        scope.launch { queue.retryForget(repository.config.scope, documentId) }
     }
 
     /** The list is memory-only and only kept while its screen is open. */

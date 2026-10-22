@@ -1,7 +1,7 @@
 package org.openlearning.app
 
 /** Fixed strings only: a server response body never reaches Room or the screen. */
-const val FORGET_REJECTED_ERROR = "Could not delete (sign-in rejected)"
+const val FORGET_REJECTED_ERROR = "Could not delete (the server rejected the request)"
 const val FORGET_REFUSED_ERROR = "Could not delete (server refused the request)"
 
 const val FORGET_PENDING = "pending"

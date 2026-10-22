@@ -208,33 +208,8 @@ class LearningRepository(val config: Connection, private val database: LearningD
         return row
     }
     /**
-     * Deletes every cached card of this scope that belongs to the document, scanning all rows (not the feed/library
-     * filter), and only the completed, text-free import rows linked to that document ([purgeNoteLinkedRows]).
-     */
-    suspend fun purgeDocument(documentId: String, title: String? = null): List<String> {
-        val ids = database.withTransaction {
-            val found = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
-            if (found.isNotEmpty()) dao.deleteInsights(config.scope, found)
-            deleteNoteRows(documentId, title)
-            found
-        }
-        database.checkpointBestEffort()
-        return ids
-    }
-    /** Targeted purge of the completed import rows of one note; see [noteRowsToPurge] for the pre-migration fallback. */
-    suspend fun purgeNoteLinkedRows(documentId: String, title: String? = null): Int {
-        val removed = database.withTransaction { deleteNoteRows(documentId, title) }
-        database.checkpointBestEffort()
-        return removed
-    }
-    private suspend fun deleteNoteRows(documentId: String, title: String?): Int {
-        val rows = noteRowsToPurge(dao.completedNoteRows(config.scope, COMPLETED_STATES), documentId, title)
-        rows.forEach { dao.deleteJob(it.scope, it.id) }
-        return rows.size
-    }
-    /**
      * Drops the cards and the completed, text-free import rows of other scopes. Unsent note text (queued, failed,
-     * waiting or paused rows) and note drafts of other scopes are never deleted: they stay hidden until that account
+     * waiting or paused rows), note drafts and PendingForget rows of other scopes are never deleted: they stay hidden until that account
      * is connected again. Does nothing when [isCurrent] says this connection is no longer the active one (A to B to A).
      * Returns the removed rows so their work can be cancelled.
      */

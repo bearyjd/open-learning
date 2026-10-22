@@ -8,4 +8,6 @@ data class ScreenState(
     val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
     val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
     val notes: NotesListState = NotesListState(),
+    /** Offline forget queue of the active account (counts and ids only, never titles), kept in step with Room. */
+    val forgetWaiting: Int = 0, val forgetFailed: List<PendingForget> = emptyList(),
 )

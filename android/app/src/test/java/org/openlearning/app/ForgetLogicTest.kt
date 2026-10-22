@@ -17,7 +17,7 @@ class ForgetLogicTest {
         assertEquals(ForgetReplay.Failed(FORGET_REFUSED_ERROR), forgetReplay(400))
     }
     @Test fun errorStringsAreFixed() {
-        assertEquals("Could not delete (sign-in rejected)", FORGET_REJECTED_ERROR)
+        assertEquals("Could not delete (the server rejected the request)", FORGET_REJECTED_ERROR)
         assertFalse(FORGET_REFUSED_ERROR.contains("SENTINEL"))
     }
     @Test fun schedulingConstants() {

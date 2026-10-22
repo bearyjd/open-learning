@@ -27,6 +27,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var purgeJob: Job? = null
     private var feedFlow: Job? = null
     private var jobsFlow: Job? = null
+    private var forgetFlow: Job? = null
     private val mutable = MutableStateFlow(ScreenState())
     val state = mutable.asStateFlow()
     private var cached: List<CachedInsight> = emptyList()
@@ -56,7 +57,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 val restore = step.restore
                 restorePending = step.restorePending
                 if (step.clearMemory) memory.clear()
-                feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
+                feedFlow?.cancel(); jobsFlow?.cancel(); forgetFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
                 draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
@@ -64,8 +65,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
-                    launch { notesActions.retryPurges(repository) }
                     launch { container.forgetQueue.resumePending(repository.config.scope) }
+                    forgetFlow = launch {
+                        val queue = container.forgetQueue
+                        combine(queue.pendingForgetCount(repository.config.scope), queue.failedForgets(repository.config.scope)) { waiting, failed -> waiting to failed }
+                            .collect { (waiting, failed) -> if (repo === repository) mutable.update { it.copy(forgetWaiting = waiting, forgetFailed = failed) } }
+                    }
                     launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) { limits = fetched; limitsLoaded = true } }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
@@ -335,6 +340,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun loadNotes() = notesActions.load()
     fun closeNotes() = notesActions.close()
     fun forgetListedNote(note: NoteSummary) = notesActions.forget(note)
+    fun retryForget(documentId: String) = notesActions.retryForget(documentId)
     fun noteMessageShown() = notesActions.messageShown()
     /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
     fun receiveSharedNote(note: ShareRoute.Note) {

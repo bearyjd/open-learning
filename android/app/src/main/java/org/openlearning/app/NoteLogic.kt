@@ -2,7 +2,7 @@ package org.openlearning.app
 
 import java.util.concurrent.ConcurrentHashMap
 
-/** Documents the user is forgetting. Set before the server call so an in-flight refresh cannot write cards back. */
+/** In-memory cache of documents being forgotten, so an in-flight refresh cannot write cards back. The PendingForget table is the durable source. */
 class ForgottenNotes {
     private val keys = ConcurrentHashMap.newKeySet<String>()
     private fun key(scope: String, documentId: String) = "$scope\u0000$documentId"
@@ -10,15 +10,6 @@ class ForgottenNotes {
     fun remove(scope: String, documentId: String) { keys.remove(key(scope, documentId)) }
     fun blocks(scope: String, insight: Insight) = insight.documentId.isNotBlank() && key(scope, insight.documentId) in keys
     fun allowed(scope: String, items: List<Insight>) = items.filterNot { blocks(scope, it) }
-    /**
-     * Documents the server deleted whose local cleanup threw, to be retried. Memory only (the title is private and the
-     * cheap option; a persisted table is future work), so a process death before the retry forgets them.
-     */
-    data class PendingPurge(val documentId: String, val title: String?)
-    private val pending = ConcurrentHashMap<String, PendingPurge>()
-    fun purgeFailed(scope: String, documentId: String, title: String?) { if (documentId.isNotBlank()) pending[key(scope, documentId)] = PendingPurge(documentId, title) }
-    fun pendingPurges(scope: String): List<PendingPurge> = pending.filterKeys { it.startsWith("$scope\u0000") }.values.toList()
-    fun purgeDone(scope: String, documentId: String) { pending.remove(key(scope, documentId)) }
 }
 
 /** The editable note fields. Immutable: every edit is a new value. */
@@ -92,27 +83,22 @@ fun ScreenState.withoutDocument(documentId: String, insightIds: Collection<Strin
     )
 }
 
-/** [outcome] completes "so ...", e.g. "the note was not forgotten". */
-fun forgetFailureMessage(error: Throwable, outcome: String = "the note was not forgotten"): String = when (error) {
+/** [outcome] completes "so ...", e.g. "the job was not removed". */
+fun forgetFailureMessage(error: Throwable, outcome: String): String = when (error) {
     is java.io.IOException -> "Can't reach your server, so $outcome. Try again when you're online."
     else -> "The server could not complete that, so $outcome. Try again."
 }
 
-/** How forgetting a note ended. The server DELETE decides success; a local cleanup failure afterwards is only partial. */
+/** How forgetting a note ended. Forgetting is offline-first: it fails only when the local write fails. */
 sealed interface ForgetResult {
     data class Done(val purged: List<String>) : ForgetResult
-    /** The server deleted it but this device's cleanup threw: the tombstone stays so the note remains hidden. */
-    data object PurgeFailed : ForgetResult
     data class Failed(val error: Throwable) : ForgetResult
 }
 
-const val FORGET_PARTIAL_MESSAGE = "Deleted on the server; cleaning up this device failed. It will be hidden."
-
-/** The banner for a finished forget, or null when it simply worked. */
-fun ForgetResult.message(): String? = when (this) {
-    is ForgetResult.Done -> null
-    ForgetResult.PurgeFailed -> FORGET_PARTIAL_MESSAGE
-    is ForgetResult.Failed -> forgetFailureMessage(error)
+/** The banner text for a finished forget. A failure never echoes error text. */
+fun ForgetResult.message(): String = when (this) {
+    is ForgetResult.Done -> FORGET_QUEUED_MESSAGE
+    is ForgetResult.Failed -> FORGET_LOCAL_FAILED_MESSAGE
 }
 
 /**

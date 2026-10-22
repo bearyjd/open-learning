@@ -28,7 +28,11 @@ class NotesListFormatTest {
     @Test fun forgetCopyDoesNotClaimEveryCompletedImportIsCleared() {
         assertFalse(FORGET_NOTE_MESSAGE.contains("every completed"))
         assertTrue(FORGET_NOTE_MESSAGE.contains("before this update"))
-        assertTrue(FORGET_NOTE_MESSAGE.contains("needs a connection"))
+        assertTrue(FORGET_NOTE_MESSAGE.contains("hides the note"))
+        assertTrue(FORGET_NOTE_MESSAGE.contains("when a connection is available"))
+        assertTrue(FORGET_NOTE_MESSAGE.contains("There is no undo"))
+        assertTrue(FORGET_NOTE_MESSAGE.contains("retried"))
+        assertFalse(FORGET_NOTE_MESSAGE.contains("needs a connection"))
     }
 
     @Test fun sharedNoteWaitsForTheAccountButLinkDoesNot() {
