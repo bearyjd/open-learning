@@ -537,7 +537,7 @@ fail-loudly logic against fakes (not real views); the instrumented `ConnectAutof
 `NoteAcceptanceTest.noteEditorAncestorIsExcludedFromAutofill` are compile-checked only. Whether Bitwarden's save
 sheet is suppressed on a real device has not been observed.
 
-## E2b-2 Android notes list (NOT device-verified)
+## E2b-2 Android notes list (partly device-verified, see "E2b-2 device run" below)
 
 Implemented: notes list screen ("Your notes" on Discover), targeted forget, server limits, share-as-note and the
 30 s note backoff. JVM tests cover the list state reducer, row formatting, body selection, forget dialog copy, share
@@ -572,3 +572,46 @@ load, ordering), `NotesListStateTest` (late answer after close and reopen, close
 (pending purge retry per scope, purge title), `NoteWorkLogicTest` (no-match keeps other rows, single-row cleanup, NFC
 titles). Not covered: the Activity and view model wiring of the retry and flags. A process death before a purge retry
 still leaves the rows (see docs/security.md).
+
+### E2b-2 device run (Pixel 10 Pro Fold, one run, no retries)
+
+Supervised run on 2026-10-22 against the acceptance build. No Bitwarden, autofill or save-password sheet, system dialog or
+foreign window appeared at any point (the script's foreground guard never fired; the foreground was the launcher before
+and after).
+
+`scripts/android_notes.py` (all scenarios, exit 0, uiautomator dumps only, dumps deleted): PASS for draft survives process
+death (counter 145), submit posts exactly once with the expected hash and shows no source link, forget Cancel sends 0 DELETEs
+and Confirm sends 1, notes list (rows shown, forget one of two sends 1 DELETE for it and 0 for the other, forgotten row gone,
+other row remains), 429 then retry (2 POSTs, same body hash, message cleared), 413 fixed message, no sentinel text in the UI.
+
+Instrumented run (`am instrument`, NotesListAcceptanceTest, NoteAcceptanceTest, DeviceAcceptanceTest, MigrationTest,
+DatabaseHygieneTest, ConnectAutofillTest; LiveLearningLoopTest skipped): 36 tests, 5 failed (7 failure entries, two are
+`@After` fallout), 31 passed. MigrationTest, DatabaseHygieneTest and ConnectAutofillTest passed in full. Failures:
+
+- `NoteAcceptanceTest.queuedNoticeDisappearsAfterCompletion` (NoteAcceptanceTest.kt:90): test bug. `waitText("Note queued")`
+  is an exact match, but the banner reads "Note queued. It is sent to your server as soon as it is reachable." (the semantics
+  dump shows it present). Line 93 already uses `substring = true`.
+- `NotesListAcceptanceTest.offlineDeleteKeepsRows` (NotesListAcceptanceTest.kt:106) and
+  `NoteAcceptanceTest.offlineForgetKeepsEverything` (NoteAcceptanceTest.kt:152): both time out waiting for a "was not forgotten"
+  node. Classified (static diagnosis, see below): test bug in the offline fixture.
+- `NotesListAcceptanceTest.sharedTextOpensTheEditorPrefilledAndSubmitsNothing`, `DeviceAcceptanceTest.shareIntentPrefillsArticleWithoutSubmittingIt`
+  and `persistedQueuedImportResumes...` (DeviceAcceptanceTest.kt:132 `scenario.close()`, then `cleanUp` :56): the activity
+  "never becomes DESTROYED (last transition RESUMED)" on `ActivityScenario.close()`. Classified as a test teardown bug
+  (hypothesis, see below); not an assertion about app behavior.
+
+Test-side fixes after static diagnosis (compile-only, NOT re-run on a device; no app code changed):
+
+- Banner exact match (test bug): `queuedNoticeDisappearsAfterCompletion` now waits with `substring = true`.
+- Offline fixture and pooled connections (test bug): the fixtures' "down" mode returned `DISCONNECT_AT_START` from `dispatch()`
+  only. MockWebServer applies that policy at accept time through `Dispatcher.peek()` (verified: `peek()` exists in
+  mockwebserver 4.12.0; that the policy is applied only there is recalled, not verified), so a pooled keep-alive connection
+  from the earlier GETs ignored it and the DELETE got an empty 200, which `isGone()` counts as success. Both fixtures now
+  override `peek()` and answer `DISCONNECT_AFTER_REQUEST` while down; the DELETE-count-is-0 assertions stay (added to
+  `offlineDeleteKeepsRows`). The 500 variant is unchanged.
+- ActivityScenario teardown after intent replacement (HYPOTHESIS, not verified): `MainActivity` replaces its intent with
+  `ACTION_MAIN` after consuming a share, which may stop `ActivityScenario` matching the activity it launched with
+  `ACTION_SEND`. The three tests and the `@After` of the three classes now use `ScenarioTeardown.kt` (`closeAfterFinish`):
+  finish the activity, bounded wait for DESTROYED, then close, logging instead of throwing.
+
+Still unverified: all fixes above on a device, confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF
+picker via DocumentsUI, offline forget (E2b-3).
