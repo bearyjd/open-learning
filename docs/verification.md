@@ -636,7 +636,7 @@ tests were rewritten for the new behaviour. Their fixtures use the `peek()` / `D
 Behaviours with NO JVM test, because they are bound to Room, WorkManager or Compose and the JVM has none of them:
 the single Room transaction in `forgetNoteOffline` and `confirmed`; the DAO queries (insert-ignore, counts, status updates);
 the combined feed/library filter in `LearningRepository.cached`; `visibleReviews` fallback to the server; worker credential
-lookup and `Result.retry()` for a local cleanup failure; unique-work KEEP and the network constraint; `resumePending` on connect;
+lookup and `Result.retry()` for a local cleanup failure; unique-work KEEP (sweep) and APPEND_OR_REPLACE (resume) and the network constraint; `resumePending` on connect;
 the Compose rows (waiting line, failed row, Retry); and the process-death survival claim. The instrumented tests above check
 these only once someone runs them.
 
@@ -654,7 +654,7 @@ the Stop trying dialog, and the notice banner. Compile-only instrumented additio
 E2b-3 structural fix (durable tombstone, single card writer, derived view): STILL NOT device-verified. JVM tests added or changed:
 `CardWriterTest` (`cardRows`: hidden, blank id, inFeed and saved flags), `ForgetPruneTest` (`confirmedDecisions` TTL edge, incomplete
 page, still listed, request start versus delivery, other scopes; `serverPage`; sweep trigger), `HiddenViewTest` (`withoutHidden` for
-every field, citations, identity), `ForgetStructuralTest` (enqueue policy table with REPLACE and KEEP, enqueue error
+every field, citations, identity), `ForgetStructuralTest` (enqueue policy table with REPLACE and APPEND_OR_REPLACE, enqueue error
 classification, `resolveReviews` with `documentId` and 404, review JSON from an old server, notice computation, and three
 source scans). The source scans are text checks, not behaviour: only `CardWriter.kt` may call `dao.put(`; no `ForgottenNotes`
 marker remains; `confirmed()` calls `confirmForget` and not `deleteForget`; `NotesActions` calls `queue.reconcile(`.

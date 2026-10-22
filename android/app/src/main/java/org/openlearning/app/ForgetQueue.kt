@@ -120,7 +120,7 @@ class ForgetQueue(
     }
 
     /**
-     * Every pending row of the account gets its worker back (KEEP: a running one is left alone). Runs on connect and
+     * Every pending row of the account gets its worker back (APPEND_OR_REPLACE: queued behind a running one, never dropped). Runs on connect and
      * when the notes list opens. A row whose worker cannot be built is marked failed with a fixed error; the app never crashes.
      */
     suspend fun resumePending(scope: String) {

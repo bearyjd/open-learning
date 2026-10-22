@@ -7,16 +7,19 @@ import retrofit2.HttpException
 
 /** Pure decisions behind the forget queue's hardening. Nothing here touches Room or WorkManager. */
 
-/** How a worker is enqueued. REPLACE restarts the unique work, KEEP leaves existing work alone. */
-enum class ForgetEnqueue { KEEP, REPLACE }
+/** How a worker is enqueued. REPLACE restarts the unique work, APPEND_OR_REPLACE queues behind it and keeps its retry count. */
+enum class ForgetEnqueue { REPLACE, APPEND_OR_REPLACE }
 enum class ForgetTrigger { NEW_FORGET, RETRY, RESUME }
 
 /**
  * A new forget or an explicit Retry replaces the unique work, so it is never dropped behind a worker that is finishing.
  * That is safe because the worker re-reads its row at start and exits cleanly when it is not pending, and the server
- * DELETE is idempotent. The resume that runs on every connect and every sweep keeps work that exists, so repeated calls cannot pile up.
+ * DELETE is idempotent. The resume that runs on every connect and every sweep appends instead: KEEP would drop it behind an
+ * account-A worker that is just finishing (it saw account B connected and left the row pending), delaying the delete to the
+ * next sweep, while REPLACE would reset the backoff and the attempt cap of a worker that is retrying. The workers never
+ * return failure, so an appended one always runs, and one that finds its row settled exits at once.
  */
-fun forgetEnqueuePolicy(trigger: ForgetTrigger) = if (trigger == ForgetTrigger.RESUME) ForgetEnqueue.KEEP else ForgetEnqueue.REPLACE
+fun forgetEnqueuePolicy(trigger: ForgetTrigger) = if (trigger == ForgetTrigger.RESUME) ForgetEnqueue.APPEND_OR_REPLACE else ForgetEnqueue.REPLACE
 
 const val FORGET_ID_MAX_LENGTH = 64
 private val FORGET_ID_CHARSET = Regex("[0-9a-fA-F-]+")

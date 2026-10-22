@@ -69,7 +69,7 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, FORGET_BACKOFF_SECONDS, TimeUnit.SECONDS)
                 .addTag("forget").build()
             val operation = WorkManager.getInstance(context).enqueueUniqueWork(forgetWorkName(scope, documentId), when (enqueue) {
-                ForgetEnqueue.KEEP -> ExistingWorkPolicy.KEEP
+                ForgetEnqueue.APPEND_OR_REPLACE -> ExistingWorkPolicy.APPEND_OR_REPLACE
                 ForgetEnqueue.REPLACE -> ExistingWorkPolicy.REPLACE
             }, request)
             try { operation.await() }

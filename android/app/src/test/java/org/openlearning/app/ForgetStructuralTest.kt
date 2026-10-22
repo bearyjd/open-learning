@@ -19,8 +19,9 @@ class ForgetStructuralTest {
     @Test fun enqueuePolicyTable() {
         assertEquals(ForgetEnqueue.REPLACE, forgetEnqueuePolicy(ForgetTrigger.NEW_FORGET))
         assertEquals(ForgetEnqueue.REPLACE, forgetEnqueuePolicy(ForgetTrigger.RETRY))
-        assertEquals(ForgetEnqueue.KEEP, forgetEnqueuePolicy(ForgetTrigger.RESUME))
+        assertEquals(ForgetEnqueue.APPEND_OR_REPLACE, forgetEnqueuePolicy(ForgetTrigger.RESUME))
         assertEquals(2, ForgetEnqueue.values().size)
+        assertFalse(ForgetEnqueue.values().any { it.name == "KEEP" })
     }
     @Test fun onlyBadInputIsAPermanentSchedulingFailure() {
         assertTrue(scheduleFailureIsPermanent(InvalidForgetIdException()))
