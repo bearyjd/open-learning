@@ -53,7 +53,7 @@ class DeviceAcceptanceTest {
 
     @After fun cleanUp() {
         check(app.packageName == "org.openlearning.app.acceptance") { "Refusing to reset a non-acceptance app" }
-        scenario?.close()
+        scenario?.closeAfterFinish()
         work.cancelAllWork().result.get(10, TimeUnit.SECONDS)
         if (::fixture.isInitialized) fixture.close()
     }
@@ -129,7 +129,7 @@ class DeviceAcceptanceTest {
             saved?.jobId == "remote-1" && workInfos(row).any { it.state == WorkInfo.State.ENQUEUED && it.runAttemptCount > 0 }
         }
         val originalWork = workInfos(row).single().id
-        scenario!!.close()
+        scenario!!.closeAfterFinish()
         launch() // ViewModel recovers persisted pending rows and schedules the same unique work.
         waitText("Recent imports")
         IngestWorker.schedule(app, row.scope, row.id)

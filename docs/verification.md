@@ -593,12 +593,25 @@ DatabaseHygieneTest, ConnectAutofillTest; LiveLearningLoopTest skipped): 36 test
   dump shows it present). Line 93 already uses `substring = true`.
 - `NotesListAcceptanceTest.offlineDeleteKeepsRows` (NotesListAcceptanceTest.kt:106) and
   `NoteAcceptanceTest.offlineForgetKeepsEverything` (NoteAcceptanceTest.kt:152): both time out waiting for a "was not forgotten"
-  node. UNCLASSIFIED: the logcat ring buffer had rotated before triage, so no tree dump survived; the sibling
-  `offlineQueuedNotePostsExactlyOnce...` passed.
+  node. Classified (static diagnosis, see below): test bug in the offline fixture.
 - `NotesListAcceptanceTest.sharedTextOpensTheEditorPrefilledAndSubmitsNothing`, `DeviceAcceptanceTest.shareIntentPrefillsArticleWithoutSubmittingIt`
   and `persistedQueuedImportResumes...` (DeviceAcceptanceTest.kt:132 `scenario.close()`, then `cleanUp` :56): the activity
-  "never becomes DESTROYED (last transition RESUMED)" on `ActivityScenario.close()`. UNCLASSIFIED (env or test teardown on
-  the foldable; not an assertion about app behavior).
+  "never becomes DESTROYED (last transition RESUMED)" on `ActivityScenario.close()`. Classified as a test teardown bug
+  (hypothesis, see below); not an assertion about app behavior.
 
-No app code or tests were changed. Still unverified: confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF
-picker via DocumentsUI, offline forget (E2b-3), plus the three unclassified failures above.
+Test-side fixes after static diagnosis (compile-only, NOT re-run on a device; no app code changed):
+
+- Banner exact match (test bug): `queuedNoticeDisappearsAfterCompletion` now waits with `substring = true`.
+- Offline fixture and pooled connections (test bug): the fixtures' "down" mode returned `DISCONNECT_AT_START` from `dispatch()`
+  only. MockWebServer applies that policy at accept time through `Dispatcher.peek()` (verified: `peek()` exists in
+  mockwebserver 4.12.0; that the policy is applied only there is recalled, not verified), so a pooled keep-alive connection
+  from the earlier GETs ignored it and the DELETE got an empty 200, which `isGone()` counts as success. Both fixtures now
+  override `peek()` and answer `DISCONNECT_AFTER_REQUEST` while down; the DELETE-count-is-0 assertions stay (added to
+  `offlineDeleteKeepsRows`). The 500 variant is unchanged.
+- ActivityScenario teardown after intent replacement (HYPOTHESIS, not verified): `MainActivity` replaces its intent with
+  `ACTION_MAIN` after consuming a share, which may stop `ActivityScenario` matching the activity it launched with
+  `ACTION_SEND`. The three tests and the `@After` of the three classes now use `ScenarioTeardown.kt` (`closeAfterFinish`):
+  finish the activity, bounded wait for DESTROYED, then close, logging instead of throwing.
+
+Still unverified: all fixes above on a device, confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF
+picker via DocumentsUI, offline forget (E2b-3).

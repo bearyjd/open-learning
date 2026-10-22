@@ -54,7 +54,7 @@ class NotesListAcceptanceTest {
 
     @After fun cleanUp() {
         check(app.packageName == "org.openlearning.app.acceptance") { "Refusing to reset a non-acceptance app" }
-        scenario?.close()
+        scenario?.closeAfterFinish()
         WorkManager.getInstance(app).cancelAllWork().result.get(10, TimeUnit.SECONDS)
         fixture.server.shutdown()
     }
@@ -104,6 +104,7 @@ class NotesListAcceptanceTest {
         waitText("Forget this note?")
         confirm()
         waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
         assertEquals(2, rows().size)
     }
 
@@ -157,8 +158,10 @@ private class ListFixture {
 
     fun start() {
         server.dispatcher = object : Dispatcher() {
+            // DISCONNECT_AT_START is only honoured at accept time, via peek(); a pooled keep-alive connection never gets there.
+            override fun peek(): MockResponse = if (down.get()) downResponse() else super.peek()
             override fun dispatch(request: RecordedRequest): MockResponse {
-                if (down.get()) return MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
+                if (down.get()) return downResponse()
                 requests += request
                 if (request.getHeader("Authorization") != "Bearer alpha") return MockResponse().setResponseCode(401)
                 val path = request.path.orEmpty().substringBefore('?')
@@ -177,5 +180,7 @@ private class ListFixture {
         server.start()
     }
     private fun json(body: String) = MockResponse().addHeader("Content-Type", "application/json").setBody(body)
+    // DISCONNECT_AFTER_REQUEST drops requests that arrive on an already-open connection; peek() covers new connections.
+    private fun downResponse() = MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
     fun count(method: String, path: String) = requests.count { it.method == method && it.path?.substringBefore('?') == path }
 }

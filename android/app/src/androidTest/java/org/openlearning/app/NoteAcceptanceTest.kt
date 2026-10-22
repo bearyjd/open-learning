@@ -52,7 +52,7 @@ class NoteAcceptanceTest {
 
     @After fun cleanUp() {
         check(app.packageName == "org.openlearning.app.acceptance") { "Refusing to reset a non-acceptance app" }
-        scenario?.close()
+        scenario?.closeAfterFinish()
         work.cancelAllWork().result.get(10, TimeUnit.SECONDS)
         fixture.server.shutdown()
     }
@@ -87,7 +87,7 @@ class NoteAcceptanceTest {
         fixture.down.set(true)
         launchEditor(); submit("Lecture 3", body)
         awaitRow { it.status == "waiting" }
-        waitText("Note queued")
+        waitUntil { compose.onAllNodesWithText("Note queued", substring = true).fetchSemanticsNodes().isNotEmpty() }
         fixture.down.set(false)
         awaitRow(45_000) { it.status == "completed" }
         waitUntil { compose.onAllNodesWithText("Note queued", substring = true).fetchSemanticsNodes().isEmpty() }
@@ -231,8 +231,10 @@ private class NoteFixture {
 
     fun start() {
         server.dispatcher = object : Dispatcher() {
+            // DISCONNECT_AT_START is only honoured at accept time, via peek(); a pooled keep-alive connection never gets there.
+            override fun peek(): MockResponse = if (down.get()) downResponse() else super.peek()
             override fun dispatch(request: RecordedRequest): MockResponse {
-                if (down.get()) return MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)
+                if (down.get()) return downResponse()
                 requests += request
                 if (request.getHeader("Authorization") != "Bearer alpha") return MockResponse().setResponseCode(401)
                 val result: Any = when (request.method to request.path) {
@@ -251,5 +253,7 @@ private class NoteFixture {
         }
         server.start()
     }
+    // DISCONNECT_AFTER_REQUEST drops requests that arrive on an already-open connection; peek() covers new connections.
+    private fun downResponse() = MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
     fun count(method: String, path: String) = requests.count { it.method == method && it.path == path }
 }
