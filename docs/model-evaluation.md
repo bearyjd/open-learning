@@ -158,9 +158,12 @@ Run metadata:
   --host 127.0.0.1 --port 18080` (NVIDIA RTX 4070 Laptop GPU, loopback only).
 - Client: `uv run --frozen python -m open_learning.evaluation run --execute --model
   qwen2.5-7b-instruct-q4_k_m --endpoint http://127.0.0.1:18080/v1 --timeout 180`
-  (`--corpus evaluation/holdout.json` for the holdout), matching the timeout recorded in earlier archived runs.
+  (`--corpus evaluation/holdout.json` for the holdout). The CLI default timeout is 90 s; 180 s was used,
+  as in the earlier baseline and candidate runs but not in the assessment-grounding runs, which used 90 s.
+  Every case finished within the measured inference times below, so the longer timeout did not affect outcomes.
 - Primary corpus SHA256 `71dc220abf40648d6ddd8e67a84bbbc83bfc6ab900a18a1cca059664991c8d74`;
-  holdout corpus SHA256 `5587b0a329574d36f30744b1192c109e2288f9d9737866ce6c1beca48399fe84`.
+  holdout corpus SHA256 `5587b0a329574d36f30744b1192c109e2288f9d9737866ce6c1beca48399fe84`
+  (canonical-JSON digests as scored, not `sha256sum` of the corpus files).
 
 | Run | Contract-valid | Measured inference time | Wall time (incl. startup) |
 | --- | --- | --- | --- |
