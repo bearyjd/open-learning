@@ -730,13 +730,21 @@ Failures, all classified test bug (static diagnosis, no app code changed, not re
   (:95), `a401LeavesAFailedRow...` (:79); NotesListAcceptanceTest `forgetConfirmDeletes...` (:74), `serverErrorHidesTheNoteNow...` (:88),
   `offlineForgetHidesNowAndShowsTheWaitingLine` (:101); NoteAcceptanceTest `forgetConfirmDeletesOnceAndPurgesRoom` (:140).
 - NoteAcceptanceTest `offlineForgetHidesNowThenDeletesOnReconnect` (:147 -> openEditor :194): "No compose hierarchies found", the activity
-  did not launch. Environment or ordering fallout after the previous failures (not diagnosed; it also uses `note-doc`).
+  did not launch. Static diagnosis: it fails in `completeOneNote()` -> `launchEditor()`, before the test touches a forget or `note-doc`, so
+  the id is not the cause. The activity launch itself found no window, which points at ordering or device state left by the previous
+  failed test (activity not torn down, screen or focus), not at app code. Not reproducible without a device; no test change made.
 - ForgetQueueRoomTest `resumeMarksAThrowingRowFailedAndStillSchedulesTheRest` (:140): the test throws `IllegalStateException`, but
-  `scheduleFailureIsPermanent` treats only `IllegalArgumentException` as permanent, so the row correctly stays pending. Stale test.
+  `scheduleFailureIsPermanent` treats only `IllegalArgumentException` as permanent, so the row correctly stays pending. Stale test;
+  now split into two tests (IllegalArgumentException marks the row failed, IllegalStateException leaves it pending). Not re-run on a device.
 
 So the offline forget queue, replay, 401/404/5xx handling and the waiting line have still never passed on a device: every test that
 exercises them failed on fixture ids before reaching the queue. Passing here: the Room guard interleavings, queue DAO behaviour (16 of 17
 ForgetQueueRoomTest cases), migration, hygiene and the autofill exclusion.
+
+The last Codex review pass was NOT re-run after ff78c64 (the purge-floor release and 10-minute backstop). Offline forget has NOT passed
+end to end on a device: the fixture ids are now uuid-shaped (`TestIds`) but the instrumented tests have not been re-run. The offline
+scenario of `android_notes.py` now also writes `dropped-offline-attempts.json` (method and path of requests the mock dropped while
+offline) and `offline_dropped_attempts` in the results; the request log itself stays free of them.
 
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
