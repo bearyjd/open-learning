@@ -136,15 +136,27 @@ class ForgetStructuralTest {
     // A text scan, NOT a runtime guarantee: every PendingForget row delete in the queue is followed by the release hook.
     @Test fun everyPendingForgetDeleteIsFollowedByTheReleaseHook() {
         val main = listOf("src/main/java/org/openlearning/app", "app/src/main/java/org/openlearning/app").first { File(it).isDirectory }
-        val callers = File(main).walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "Data.kt" && Regex("""\.deleteForgets?\(""").containsMatchIn(code(it)) }.toList()
+        val callers = File(main).walkTopDown().filter { it.isFile && it.extension == "kt" && it.name != "Data.kt" && Regex("""\.deleteForget\w*\(""").containsMatchIn(code(it)) }.toList()
         assertEquals(listOf("ForgetQueue.kt"), callers.map { it.name })
         val text = code(callers.single())
-        val calls = Regex("""\.deleteForgets?\(""").findAll(text).toList()
+        val calls = Regex("""\.deleteForget\w*\(""").findAll(text).toList()
         assertEquals(2, calls.size)
         calls.forEach { call ->
             val rest = text.substring(call.range.last)
             val body = rest.substringBefore("\n    suspend fun ").substringBefore("\n    fun ")
             assertTrue("no onReleased after ${call.value}", "onReleased(" in body)
         }
+    }
+
+    // A text scan, NOT a runtime guarantee: the status transitions are decided inside the SQL statement, not by a prior read.
+    @Test fun stopTryingAndMarkFailedAreGuardedByStatusInTheStatement() {
+        val dao = source("Data.kt")
+        assertTrue(Regex("""DELETE FROM PendingForget[^"]*status = 'failed'"[^\n]*\n?\s*suspend fun deleteForgetIfFailed\([^)]*\): Int""").containsMatchIn(dao))
+        assertTrue(Regex("""UPDATE PendingForget SET status = 'failed'[^"]*status = 'pending'"[^\n]*\n?\s*suspend fun failForgetIfPending\([^)]*\): Int""").containsMatchIn(dao))
+        val queue = source("ForgetQueue.kt")
+        val stop = queue.substringAfter("suspend fun stopTrying(").substringBefore("suspend fun resumePending")
+        assertTrue(stop.contains("deleteForgetIfFailed(") && !stop.contains("dao.forget("))
+        val mark = queue.substringAfter("suspend fun markFailed(").substringBefore("suspend fun retryForget")
+        assertTrue(mark.contains("failForgetIfPending(") && !mark.contains("setForgetStatus("))
     }
 }

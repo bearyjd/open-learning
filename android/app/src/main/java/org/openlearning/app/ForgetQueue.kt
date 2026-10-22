@@ -99,7 +99,7 @@ class ForgetQueue(
     /** The background sweep only fetches the list when this is true. */
     suspend fun confirmedNeedReconcile(scope: String): Boolean = sweepNeedsReconcile(dao.confirmedForgets(scope), clock())
 
-    suspend fun markFailed(scope: String, documentId: String, error: String) { dao.setForgetStatus(scope, documentId, FORGET_FAILED, error) }
+    suspend fun markFailed(scope: String, documentId: String, error: String) { dao.failForgetIfPending(scope, documentId, error) }
 
     /** Failed rows only: puts the row back to pending and schedules the worker again (appended, never dropped). */
     suspend fun retryForget(scope: String, documentId: String) {
@@ -111,9 +111,7 @@ class ForgetQueue(
 
     /** Failed rows only: the person gives up. The row goes and the note is shown again (it stays on the server). */
     suspend fun stopTrying(scope: String, documentId: String): Boolean {
-        val row = dao.forget(scope, documentId) ?: return false
-        if (!canStopTrying(row)) return false
-        dao.deleteForget(scope, documentId)
+        if (dao.deleteForgetIfFailed(scope, documentId) == 0) return false
         onReleased(scope, setOf(documentId))
         return true
     }

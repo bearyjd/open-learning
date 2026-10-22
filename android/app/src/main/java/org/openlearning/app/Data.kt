@@ -144,6 +144,11 @@ interface LearningDao {
     @Query("UPDATE PendingForget SET status = :status, error = :error WHERE scope = :scope AND documentId = :documentId")
     suspend fun setForgetStatus(scope: String, documentId: String, status: String, error: String?): Int
     @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun deleteForget(scope: String, documentId: String)
+    // Compare-and-set: the status is checked in the statement itself, so a row that changed since it was read is left alone.
+    @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId = :documentId AND status = 'failed'")
+    suspend fun deleteForgetIfFailed(scope: String, documentId: String): Int
+    @Query("UPDATE PendingForget SET status = 'failed', error = :error WHERE scope = :scope AND documentId = :documentId AND status = 'pending'")
+    suspend fun failForgetIfPending(scope: String, documentId: String, error: String): Int
     @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND documentId = :documentId")
     suspend fun linkedNoteRows(scope: String, documentId: String): List<PendingIngest>
 }
