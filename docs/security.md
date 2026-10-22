@@ -86,10 +86,12 @@ no such lock, so the cap can overshoot slightly under concurrent submissions.
 Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id and
 `char_count`, the number of characters (not bytes) in the stored text; never the text or
 the internal key). `char_count` is computed with `length(documents.text)`, which reads
-the whole stored text of every listed row (on PostgreSQL this detoasts it): up to about
-6 MB per default 100-row page and about 30 MB at the 500-row maximum at the default
-document limit, so keep pages small. There is no stored length column, newest first, with `limit` (1 to 500, default 100) and `offset` (default
-0). `GET /api/v1/jobs?kind=note` (same `limit`/`offset`) lists note jobs as `id`,
+the whole stored text of every listed row (on PostgreSQL this detoasts it). Estimated at
+1 byte per character that is up to about 6 MB per default 100-row page and about 30 MB
+at the 500-row maximum at the default document limit; with multibyte text it can be up
+to about 4 times that, so keep pages small. There is no stored length column. Notes are
+listed newest first, with `limit` (1 to 500, default 100) and `offset` (default 0).
+`GET /api/v1/jobs?kind=note` (same `limit`/`offset`) lists note jobs as `id`,
 `status`, `created_at` and `document_id` only, never text, title, label or error, so a
 failed near-duplicate job can be found and removed. `document_id` is null until a job
 completes (and for jobs completed before migration 0004); `GET /api/v1/jobs/{id}` and
@@ -142,6 +144,14 @@ title and label.
 `GET /api/v1/limits` (authenticated) returns `max_document_chars` (`OL_MAX_DOCUMENT_CHARS`),
 `min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
 validates against. All new response fields are additive and optional.
+
+The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
+On SQLite with the API and the worker as separate processes, a forget can commit between
+the worker's read of the document and its job update and leave a dangling `document_id`
+(pre-existing behaviour; the single-process default is unaffected).
+
+Migration 0004 was amended before release and never shipped in its earlier form, so there
+is no schema drift for released databases.
 
 Downgrading migration 0004: it only drops `jobs.document_id` and
 `jobs.replaces_document_id` (the latter is reserved and unused); notes and jobs survive,

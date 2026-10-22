@@ -1,6 +1,7 @@
 """Job to document link, note char_count, /limits and PATCH /notes (PR E2b-1)."""
 
 import logging
+import re
 import threading
 
 import pytest
@@ -304,7 +305,12 @@ def test_dedupe_job_after_hash_cancel_cannot_link_a_deleted_note(client, factory
 
         def gate(conn, cursor, statement, parameters, *args):
             # forget's linked-job delete runs right after its hash-cancel pass, still holding locks.
-            if "FOR UPDATE" in statement and "jobs.document_id" in statement and not fired:
+            if (
+                "FOR UPDATE" in statement
+                and "jobs.status" in statement
+                and re.search(r"WHERE.*jobs\.document_id = ", statement, re.DOTALL)
+                and not fired
+            ):
                 fired.append(True)
                 paused.set()
                 worker_done.wait(3)
@@ -338,7 +344,8 @@ def test_dedupe_job_after_hash_cancel_cannot_link_a_deleted_note(client, factory
         assert body["status"] == "completed" and body["document_id"] != doc
 
 
-def test_forget_racing_dedupe_completion_has_no_dangling_link_or_deadlock(client, factory, settings):
+def test_forget_vs_dedupe_completion_barrier_forced_interleaving_cancels_job(client, factory, settings):
+    """Deterministic by barrier (not probabilistic): both sides rendezvous, then forget wins."""
     require_postgres(factory)
     from test_review_fixes import run_race
 
@@ -358,7 +365,9 @@ def test_forget_racing_dedupe_completion_has_no_dangling_link_or_deadlock(client
                 "delete": lambda: client.delete(f"{API}/notes/{doc}").status_code,
             },
         )
-        assert results["delete"] == 204 and results["worker"] is True, results
+        # run_once swallows errors and returns True, so assert the job's real end state instead.
+        assert results["delete"] == 204, results
         assert dangling_links(factory) == []
         body = client.get(f"{API}/jobs/{second}").json()
-        assert body["status"] in ("completed", "cancelled")
+        assert body["status"] == "cancelled", body
+        assert body.get("document_id") is None, body
