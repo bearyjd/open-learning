@@ -9,7 +9,7 @@ drives the device only through the Device methods that already throttle input an
 import re
 import time
 
-DOC = "list-doc-b"
+DOC = "5eed0000-0000-4000-8000-0000000000b1"
 TITLE = "Beta list note"
 WAITING = re.compile(r"(\d+) forgotten notes? waiting for the server")
 REPLAY_TIMEOUT = 150  # seconds: the first failed attempt backs off 30 s, the next one may back off 60 s

@@ -44,13 +44,13 @@ NOTE_TITLE = "Acceptance note"
 NOTE = {
     "id": "note-1", "title": "Spacing keeps ideas available", "idea": "Revisit ideas after a delay.",
     "explanation": "Delayed review strengthens recall.", "why_it_matters": "", "source_title": NOTE_TITLE,
-    "source_url": "https://example.invalid/never-linked", "document_id": "note-doc", "evidence": "Spaced practice revisits an idea.",
+    "source_url": "https://example.invalid/never-linked", "document_id": "5eed0000-0000-4000-8000-00000000000c", "evidence": "Spaced practice revisits an idea.",
     "tags": ["memory"], "saved": False, "coverage": "full_source", "source_truncated": False, "model": "mock",
     "source_kind": "note", "source_label": "",
 }
 LIST_NOTES = {  # GET /notes fixture: newest first, as the server answers
-    "list-doc-a": {"document_id": "list-doc-a", "title": "Alpha list note", "label": "Lecture", "created_at": "2026-10-22T09:30:00Z", "char_count": 1234},
-    "list-doc-b": {"document_id": "list-doc-b", "title": "Beta list note", "label": None, "created_at": "2026-10-21T08:00:00Z", "char_count": 456},
+    "5eed0000-0000-4000-8000-0000000000a1": {"document_id": "5eed0000-0000-4000-8000-0000000000a1", "title": "Alpha list note", "label": "Lecture", "created_at": "2026-10-22T09:30:00Z", "char_count": 1234},
+    "5eed0000-0000-4000-8000-0000000000b1": {"document_id": "5eed0000-0000-4000-8000-0000000000b1", "title": "Beta list note", "label": None, "created_at": "2026-10-21T08:00:00Z", "char_count": 456},
 }
 ALLOWED_PACKAGES = {PACKAGE, "com.google.android.inputmethod.latin", "com.android.systemui"}
 FORBIDDEN_TEXT = re.compile(r"bitwarden|save password|autofill|use saved|password manager", re.I)
@@ -177,7 +177,7 @@ def find_last(root, pattern):
     return hits[-1] if hits else None
 
 
-def list_summary(log, texts, forgotten="list-doc-a", kept="list-doc-b", forgotten_title="Alpha list note", kept_title="Beta list note") -> dict:
+def list_summary(log, texts, forgotten="5eed0000-0000-4000-8000-0000000000a1", kept="5eed0000-0000-4000-8000-0000000000b1", forgotten_title="Alpha list note", kept_title="Beta list note") -> dict:
     """Notes-list verdicts from the mock log (counts only) and the final list texts."""
     gone = lambda t: not any(forgotten_title in x for x in t)
     return {"list_forget_deletes": count_requests(log, "DELETE", "/api/v1/notes/" + forgotten),
@@ -267,7 +267,7 @@ def make_handler():
                 with LOCK:
                     STATE["list_deleted"].add(path.rsplit("/", 1)[1])
                 return self._send(None, 204)
-            if method == "DELETE" and path == "/api/v1/notes/note-doc":
+            if method == "DELETE" and path == "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c":
                 return self._send(None, 204)
             return self._send({"detail": "not found"}, 404)
 
@@ -605,12 +605,12 @@ def main():
         results["no_link_nodes_on_detail"] = not link_labels_present(dev.texts(dev.dump("03-detail")))
         dev.tap("Forget this note")
         dev.tap(r"^Cancel\|")
-        results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
+        results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
         dev.tap("Forget this note")
         dev.tap(r"^Forget\|")
         dev.wait_for("Note forgotten")
         dev.dump("04-after-forget")
-        results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
+        results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
 
         run_notes_list(dev, results)
         offline_forget.run_offline_forget(dev, lambda on: urllib_ctl(args.port, "offline", "?on=%d" % on), mock_log, STEP, results)

@@ -231,7 +231,7 @@ class MockServerTests(unittest.TestCase):
         self.assertEqual(b"[]", self.call("GET", "/api/v1/feed/today")[1])
         self.call("POST", "/api/v1/ingest/text", b"{}")
         self.assertEqual("note", json.loads(self.call("GET", "/api/v1/feed/today")[1])[0]["source_kind"])
-        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/note-doc")[0])
+        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")[0])
 
     def test_rate_limit_once_answers_429_with_retry_after_then_202(self):
         self.call("GET", "/__ctl/rate_limit_once")
@@ -259,24 +259,24 @@ class MockServerTests(unittest.TestCase):
     def test_notes_list_mock_drops_only_the_deleted_note_and_logs_no_titles(self):
         titles = [n["title"] for n in json.loads(self.call("GET", "/api/v1/notes")[1])]
         self.assertEqual(["Alpha list note", "Beta list note"], titles)
-        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/list-doc-a")[0])
+        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000a1")[0])
         left = json.loads(self.call("GET", "/api/v1/notes")[1])
-        self.assertEqual(["list-doc-b"], [n["document_id"] for n in left])
+        self.assertEqual(["5eed0000-0000-4000-8000-0000000000b1"], [n["document_id"] for n in left])
         self.assertNotIn("Alpha list note", json.dumps(notes.STATE["log"]))
         self.assertEqual(404, self.call("DELETE", "/api/v1/notes/unknown")[0])
 
     def test_offline_mock_drops_the_connection_unlogged_until_it_is_back_online(self):
         self.call("GET", "/__ctl/offline?on=1")
         with self.assertRaises(Exception):
-            self.call("DELETE", "/api/v1/notes/list-doc-b")
+            self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1")
         self.assertEqual([], notes.STATE["log"])
         self.call("GET", "/__ctl/offline?on=0")
-        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/list-doc-b")[0])
+        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1")[0])
         self.assertEqual(1, forget.deletes_for(notes.STATE["log"]))
 
 
 class OfflineForgetHelperTests(unittest.TestCase):
-    DELETE = {"method": "DELETE", "path": "/api/v1/notes/list-doc-b", "status": 204}
+    DELETE = {"method": "DELETE", "path": "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1", "status": 204}
 
     def test_waiting_count_parses_the_line_and_is_none_when_hidden(self):
         self.assertEqual(1, forget.waiting_count(["Your notes", "1 forgotten note waiting for the server"]))
@@ -290,7 +290,7 @@ class OfflineForgetHelperTests(unittest.TestCase):
         self.assertEqual(1, forget.offline_summary([self.DELETE], [])["offline_deletes"])
 
     def test_online_summary_counts_only_this_documents_deletes(self):
-        other = {**self.DELETE, "path": "/api/v1/notes/list-doc-a"}
+        other = {**self.DELETE, "path": "/api/v1/notes/5eed0000-0000-4000-8000-0000000000a1"}
         self.assertEqual({"online_deletes": 1, "online_waiting_gone": True}, forget.online_summary([self.DELETE, other], ["Your notes"]))
         self.assertFalse(forget.online_summary([self.DELETE], ["1 forgotten note waiting for the server"])["online_waiting_gone"])
 
@@ -307,14 +307,14 @@ class OfflineForgetHelperTests(unittest.TestCase):
 
 
 class NotesListHelperTests(unittest.TestCase):
-    LOG = [{"method": "DELETE", "path": "/api/v1/notes/list-doc-a", "status": 204}]
+    LOG = [{"method": "DELETE", "path": "/api/v1/notes/5eed0000-0000-4000-8000-0000000000a1", "status": 204}]
 
     def test_summary_when_only_the_forgotten_note_is_deleted(self):
         got = notes.list_summary(self.LOG, ["Your notes", "Beta list note"])
         self.assertEqual({"list_forget_deletes": 1, "list_other_deletes": 0, "list_other_row_remains": True, "list_forgotten_row_gone": True}, got)
 
     def test_summary_flags_a_stray_delete_a_missing_row_and_a_lingering_row(self):
-        stray = self.LOG + [{"method": "DELETE", "path": "/api/v1/notes/list-doc-b", "status": 204}]
+        stray = self.LOG + [{"method": "DELETE", "path": "/api/v1/notes/5eed0000-0000-4000-8000-0000000000b1", "status": 204}]
         self.assertEqual(1, notes.list_summary(stray, ["Beta list note"])["list_other_deletes"])
         self.assertFalse(notes.list_summary(self.LOG, ["Your notes"])["list_other_row_remains"])
         self.assertFalse(notes.list_summary(self.LOG, ["Alpha list note", "Beta list note"])["list_forgotten_row_gone"])
