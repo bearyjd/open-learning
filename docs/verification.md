@@ -450,6 +450,16 @@ and the instrumented suites (including `ConnectAutofillTest`) were not run. One 
 evidence, not proof, for the autofill opt-out; the earlier aborted attempts (a save sheet appeared) were on builds without
 the fix. The note-editor field itself was not exercised by autofill beyond the draft typing in this run.
 
+Second supervised device attempt (same device and build, script fix 96ae34b scrolls within the app window, at most 3
+swipes, and taps only fully on-screen nodes): again no Bitwarden or other autofill/save-password sheet appeared at the
+token step or at any dump before the stop. The draft survived process death, and "Add note to learning feed" was now
+reached and tapped once. The app showed "Note queued. It is sent to your server as soon as it is reachable." and a
+"Note: Acceptance note / Completed" row under Recent imports, but the run stopped at the next step because no
+"Your note: Acceptance note" card was in the uiautomator tree (the feed had not shown it within the script's wait). The
+script crashed before printing results or saving the mock request log, so the POST count and hash, no-link, forget
+cancel/confirm and 413 scenarios remain INCONCLUSIVE, and the instrumented suites were not run. Whether the missing card
+is a script gap (a Refresh or tab change may be needed) or an app defect is undetermined. No reruns were made.
+
 Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
 earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
 which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and
