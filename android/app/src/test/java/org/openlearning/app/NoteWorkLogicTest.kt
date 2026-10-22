@@ -81,4 +81,27 @@ class NoteWorkLogicTest {
         assertTrue(awaitSettled(flowOf(emptyList<Boolean>()), 1_000) { it.all { done -> done } })
         assertFalse(awaitSettled(flow { emit(false); delay(5_000) }, 50) { it })
     }
+
+    @Test fun completedNoteStoresDocumentId() {
+        assertEquals("doc-1", noteAfterResponse(fresh, IngestJob("srv", "completed", documentId = "doc-1")).row.documentId)
+        assertEquals("doc-0", noteAfterResponse(fresh.copy(documentId = "doc-0"), IngestJob("srv", "completed")).row.documentId)
+        assertNull(noteAfterResponse(fresh, IngestJob("srv", "completed", documentId = " ")).row.documentId)
+    }
+    @Test fun unfinishedNoteIgnoresDocumentId() {
+        assertNull(noteAfterResponse(fresh, IngestJob("srv", "running", documentId = "doc-1")).row.documentId)
+    }
+    private fun done(id: String, doc: String?) = PendingIngest("s", id, "", kind = "note", status = "completed", documentId = doc)
+    @Test fun purgeTargetsOnlyRowsLinkedToTheDocument() {
+        val rows = listOf(done("a", "doc-1"), done("b", "doc-2"), done("c", null))
+        assertEquals(listOf("a"), noteRowsToPurge(rows, "doc-1").map { it.id })
+    }
+    @Test fun purgeFallsBackToUnlinkedRowsOnlyWhenNothingIsLinked() {
+        val rows = listOf(done("b", "doc-2"), done("c", null), done("d", null))
+        assertEquals(listOf("c", "d"), noteRowsToPurge(rows, "doc-1").map { it.id })
+        assertTrue(noteRowsToPurge(listOf(done("b", "doc-2")), "doc-1").isEmpty())
+    }
+    @Test fun noteBackoffStartsAtServerRetryAfter() {
+        assertEquals(30L, NOTE_BACKOFF_SECONDS)
+        assertEquals(30L, backoffSeconds("note")); assertEquals(10L, backoffSeconds("url"))
+    }
 }

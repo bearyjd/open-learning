@@ -28,5 +28,33 @@ class MigrationTest {
         db.execSQL("INSERT INTO NoteDraft VALUES('s','t','l','body')")
         db.query("SELECT COUNT(*) FROM NoteDraft").use { it.moveToFirst(); assertEquals(1, it.getInt(0)) }
     }
+    @Test fun migrate2To3AddsDocumentIdAndKeepsUnsentNotes() {
+        helper.createDatabase(DB, 2).apply {
+            execSQL("INSERT INTO PendingIngest VALUES('s','n1','','job-1','queued',NULL,'note','T','L','UNSENT-BODY')")
+            execSQL("INSERT INTO PendingIngest VALUES('s','n2','','job-2','completed',NULL,'note','Done',NULL,NULL)")
+            execSQL("INSERT INTO NoteDraft VALUES('s','t','l','draft body')")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(DB, 3, true, MIGRATION_2_3)
+        db.query("SELECT id, text, documentId FROM PendingIngest ORDER BY id").use {
+            assertTrue(it.moveToFirst()); assertEquals("UNSENT-BODY", it.getString(1)); assertTrue(it.isNull(2))
+            assertTrue(it.moveToNext()); assertTrue(it.isNull(1) && it.isNull(2))
+        }
+        db.query("SELECT text FROM NoteDraft").use { assertTrue(it.moveToFirst()); assertEquals("draft body", it.getString(0)) }
+        db.execSQL("INSERT INTO PendingForget VALUES('s','doc-1',1,'pending',NULL)")
+        db.query("SELECT COUNT(*) FROM PendingForget").use { it.moveToFirst(); assertEquals(1, it.getInt(0)) }
+    }
+    @Test fun migrate1To3RunsBothMigrations() {
+        helper.createDatabase(DB, 1).apply {
+            execSQL("INSERT INTO PendingIngest VALUES('s','p1','https://a.example','job-1','completed',NULL)")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(DB, 3, true, MIGRATION_1_2, MIGRATION_2_3)
+        db.query("SELECT kind, documentId FROM PendingIngest").use {
+            assertTrue(it.moveToFirst()); assertEquals("url", it.getString(0)); assertTrue(it.isNull(1))
+        }
+        db.execSQL("INSERT INTO NoteDraft VALUES('s','t','l','body')")
+        db.execSQL("INSERT INTO PendingForget VALUES('s','doc-1',1,'pending',NULL)")
+    }
     private companion object { const val DB = "migration-test.db" }
 }

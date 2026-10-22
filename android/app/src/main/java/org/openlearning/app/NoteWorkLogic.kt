@@ -14,6 +14,21 @@ fun PendingIngest.canRemove() = isNoteJob() && !isCompletedState(status)
 /** After a scope change only completed rows holding no text go; a row with unsent text is kept for its own account. */
 fun PendingIngest.purgeableAfterScopeChange() = text == null && isCompletedState(status)
 
+/**
+ * The completed note rows to delete when forgetting [documentId]: those linked to it. A row with no link (made before
+ * schema v3) cannot be matched, so only when no row is linked to the document are the unlinked rows removed, so no
+ * title outlives the note. Rows linked to other documents are never touched.
+ */
+fun noteRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String): List<PendingIngest> {
+    val linked = completedNoteRows.filter { it.documentId == documentId }
+    return linked.ifEmpty { completedNoteRows.filter { it.documentId == null } }
+}
+
+/** The server answers 429 with Retry-After: 30, so note retries never start sooner than this. */
+const val NOTE_BACKOFF_SECONDS = 30L
+const val URL_BACKOFF_SECONDS = 10L
+fun backoffSeconds(kind: String) = if (kind == "note") NOTE_BACKOFF_SECONDS else URL_BACKOFF_SECONDS
+
 /** A purge belongs to the connection that started it; a later switch (A to B to A) makes it stale. */
 fun shouldRunPurge(activeScope: String?, purgeScope: String) = activeScope == purgeScope
 
@@ -39,7 +54,8 @@ fun noteAfterResponse(row: PendingIngest, job: IngestJob): NoteUpdate {
     val state = job.status.lowercase()
     val completed = state in COMPLETED_STATES
     val finished = completed || state == "cancelled"
-    val next = row.copy(jobId = job.id, status = job.status, error = job.error, text = if (finished) null else row.text)
+    val next = row.copy(jobId = job.id, status = job.status, error = job.error, text = if (finished) null else row.text,
+        documentId = if (completed) job.documentId?.takeIf { it.isNotBlank() } ?: row.documentId else row.documentId)
     val outcome = when {
         completed -> WorkOutcome.SUCCESS
         state == "failed" || state == "error" || state == "cancelled" -> WorkOutcome.FAILURE

@@ -70,7 +70,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                                 // "paused" is excluded here but is not in NoteLogic's TERMINAL set: a paused job needs a manual retry
                                 // so it is not rescheduled, yet it stays in flight and keeps its "Note queued" banner.
                                 jobs.filter { it.status.lowercase() !in setOf("completed", "complete", "succeeded", "success", "done", "failed", "error", "cancelled", "paused") }
-                                    .forEach { IngestWorker.schedule(getApplication(), it.scope, it.id) }
+                                    .forEach { IngestWorker.schedule(getApplication(), it.scope, it.id, kind = it.kind) }
                             }
                         }
                     }
@@ -158,14 +158,14 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             NoteRetry.Requeue -> current.copy(status = "queued", error = null)
             is NoteRetry.ServerRetry -> try {
                 val retry = repository.api.retryJob(plan.jobId)
-                current.copy(jobId = retry.id, status = retry.status, error = null)
+                current.copy(jobId = retry.id, status = retry.status, error = null, documentId = retry.documentId ?: current.documentId)
             } catch (conflict: HttpException) {
                 if (!isJobGone(conflict.code())) throw conflict
                 noteConflictPlan(current) ?: expired
             }
         }
         // @Update, not REPLACE: a row the user removed meanwhile must stay removed.
-        if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true)
+        if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true, kind = "note")
     }
     private suspend fun loadDraft(repository: LearningRepository) {
         val saved = container.database.dao().draft(repository.config.scope)
@@ -202,7 +202,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch {
             try {
                 val row = draftLock.withLock { repository.queueNote(note) }
-                IngestWorker.schedule(getApplication(), row.scope, row.id)
+                IngestWorker.schedule(getApplication(), row.scope, row.id, kind = "note")
                 val queued = Notice("Note queued. It is sent to your server as soon as it is reachable.", jobId = row.id)
                 // The jobs flow may already have reported this note finished; a row not listed yet is not "removed".
                 mutable.update { it.copy(notice = if (it.jobs.any { job -> job.id == row.id }) noticeAfterJobUpdate(queued, it.jobs) else queued) }
