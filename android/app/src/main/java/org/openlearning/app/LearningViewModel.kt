@@ -30,14 +30,15 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var forgetFlow: Job? = null
     private val mutable = MutableStateFlow(ScreenState())
     private var elsewhereNoticeShown = false
+    /** The durable forget set of the account in [mutable], tagged with that account so a switch in flight never mixes sets. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val hiddenByScope: Flow<Pair<String, Set<String>>> = mutable.map { it.scope }.distinctUntilChanged()
+        .flatMapLatest { scope -> (if (scope.isEmpty()) flowOf(emptySet()) else container.forgetQueue.hiddenIds(scope)).map { scope to it } }
     /**
      * What the screen sees: [mutable] with every document of the durable forget set scrubbed out, on every emission. A response
      * that lands late is therefore hidden when it publishes. Internal logic reads [mutable], never this.
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val state: StateFlow<ScreenState> = mutable.map { it.scope }.distinctUntilChanged()
-        .flatMapLatest { scope -> if (scope.isEmpty()) flowOf(emptySet()) else container.forgetQueue.hiddenIds(scope) }
-        .let { hidden -> combine(mutable, hidden) { screen, ids -> screen.withoutHidden(ids) } }
+    val state: StateFlow<ScreenState> = combine(mutable, hiddenByScope) { screen, (scope, ids) -> screen.viewFor(scope, ids) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ScreenState())
     private var cached: List<CachedInsight> = emptyList()
     private var activeOperations = 0
@@ -59,6 +60,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     var pendingFromShare by mutableStateOf(false); private set
     private val draftLock = Mutex()
     init {
+        // The hidden set also purges the retained state, so content cannot reappear when a confirmed row is pruned later.
+        viewModelScope.launch { hiddenByScope.collect { (scope, ids) -> mutable.update { it.purgedFor(scope, ids) } } }
         viewModelScope.launch { snapshotFlow { draft }.debounce(400).collect { saveDraft(it) } }
         viewModelScope.launch {
             connection.collect { config ->
