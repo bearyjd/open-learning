@@ -122,6 +122,14 @@ class ScrollHelperTests(unittest.TestCase):
         self.assertNotIn("tap", [c[1] for c in dev.calls])
 
 
+class ReverseSwipeTests(unittest.TestCase):
+    def test_reverse_swipe_mirrors_forward_inside_viewport(self):
+        vp = (0, 100, 1080, 2300)
+        sx, sy, ex, ey = notes.swipe_points(vp)
+        self.assertEqual((sx, ey, ex, sy), notes.swipe_points_down(vp))
+        self.assertLess(notes.swipe_points_down(vp)[1], notes.swipe_points_down(vp)[3])
+
+
 class EvidenceTests(unittest.TestCase):
     def test_scenarios_pass_requires_every_result(self):
         good = {"draft_survives_process_death": True, "posts": 1, "submit_shows_note_card": True,

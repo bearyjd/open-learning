@@ -89,6 +89,12 @@ def swipe_points(viewport):
     return (x1 + x2) // 2, y1 + h * 75 // 100, (x1 + x2) // 2, y1 + h * 35 // 100
 
 
+def swipe_points_down(viewport):
+    """Reverse gesture (finger moves down, content scrolls back toward the top), strictly inside the viewport."""
+    sx, sy, ex, ey = swipe_points(viewport)
+    return sx, ey, ex, sy
+
+
 LINK_LABELS = ("Open original source", "Check source", "Open source article")
 # Characters `adb shell input text` types verbatim and the device shell never reinterprets. ':', '/', '-', '_', '=',
 # '@' and '+' cover the loopback URL and token; '%' is excluded because `input text` reads "%s" as a space.
@@ -261,8 +267,13 @@ class Device:
         raise RuntimeError("UI element not found: " + pattern)
 
     def tap_scrolling(self, pattern, max_scrolls=MAX_SCROLLS):
-        """Tap a node only when fully on screen; otherwise swipe inside the app window, at most max_scrolls times."""
-        for attempt in range(max_scrolls + 1):
+        """Tap a node only when fully on screen; otherwise swipe inside the app window.
+
+        Bounded: max_scrolls swipes toward the end of the list, then 2*max_scrolls back toward the top
+        (the list can already be scrolled past the control, e.g. after opening and closing a detail view).
+        """
+        gestures = [swipe_points] * max_scrolls + [swipe_points_down] * (2 * max_scrolls)
+        for attempt in range(len(gestures) + 1):
             root = self.dump()
             node = self.find(pattern, root)
             viewport = app_viewport(root)
@@ -271,12 +282,12 @@ class Device:
                 self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                 time.sleep(0.8)
                 return
-            if attempt == max_scrolls:
+            if attempt == len(gestures):
                 break
-            sx, sy, ex, ey = swipe_points(viewport)
+            sx, sy, ex, ey = gestures[attempt](viewport)
             self.shell("input", "swipe", str(sx), str(sy), str(ex), str(ey), "400")
             time.sleep(0.8)
-        raise RuntimeError("UI element not reachable after %d scrolls: %s" % (max_scrolls, pattern))
+        raise RuntimeError("UI element not reachable after %d scrolls: %s" % (len(gestures), pattern))
 
     def visible_scrolling(self, pattern, max_scrolls=MAX_SCROLLS):
         """True when a node matching pattern is fully on screen, swiping inside the app at most max_scrolls times.
@@ -451,8 +462,9 @@ def main():
         dev.dump("04-after-forget")
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
 
+        STEP["name"] = "413:open editor"
         urllib_set_status(args.port, 413)
-        dev.tap("Write or import a note")
+        dev.tap_scrolling("Write or import a note")
         fill_editor(dev)
         dev.tap_scrolling("Add note to learning feed")
         results["413_message"] = dev.wait_for("larger than your server accepts", timeout=40)
