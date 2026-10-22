@@ -6,9 +6,27 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class TextInputPrivacyTest {
-    @Test fun autofillModeExcludesHostAndDescendants() {
-        // View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS == 8
-        assertEquals(8, TextInputPrivacy.AUTOFILL_MODE)
+    private class FakeTarget(override var importance: Int) : AutofillTarget
+
+    @Test fun optOutSetsExcludeModeOnEveryTargetAndRestoresEachPreviousValue() {
+        val a = FakeTarget(1)
+        val b = FakeTarget(4)
+        val restore = optOutOfAutofill(listOf(a, b))
+        assertEquals(TextInputPrivacy.AUTOFILL_MODE, a.importance)
+        assertEquals(TextInputPrivacy.AUTOFILL_MODE, b.importance)
+        restore()
+        assertEquals(1, a.importance)
+        assertEquals(4, b.importance)
+    }
+
+    @Test fun optOutRestoresOriginalEvenWhenTargetIsListedTwice() {
+        val a = FakeTarget(2)
+        optOutOfAutofill(listOf(a, a))()
+        assertEquals(2, a.importance)
+    }
+
+    @Test fun optOutWithNoTargetsIsANoOp() {
+        optOutOfAutofill(emptyList())()
     }
 
     @Test fun credentialKeyboardKeepsRequestedTypeAndDisablesAutoCorrect() {

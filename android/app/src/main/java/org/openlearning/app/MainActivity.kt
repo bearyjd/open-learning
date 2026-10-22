@@ -289,9 +289,8 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     var token by remember(connection?.scope) { mutableStateOf(connection?.token.orEmpty()) }
     var http by remember(connection?.scope) { mutableStateOf(connection?.server?.startsWith("http://") == true) }
     var error by remember { mutableStateOf<String?>(null) }
-    ExcludeFromAutofill()
     AlertDialog(onDismissRequest = { if (connection != null) onDismiss() }, title = { Text("Connect your server", fontFamily = FontFamily.Serif) },
-        text = { InterceptPlatformTextInput(NoPersonalizedLearning) { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        text = { ExcludeDialogFromAutofill(); InterceptPlatformTextInput(NoPersonalizedLearning) { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Use your self-hosted Open Learning server and its access token. Your saved library stays on this device.")
             OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("Server URL") }, placeholder = { Text("https://learning.example.com") }, singleLine = true, keyboardOptions = TextInputPrivacy.credentialKeyboard(KeyboardType.Uri))
             OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Access token") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = TextInputPrivacy.credentialKeyboard(KeyboardType.Password))

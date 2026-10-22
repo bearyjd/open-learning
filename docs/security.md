@@ -133,13 +133,20 @@ editor is on screen the window is `FLAG_SECURE` (blank recents thumbnail, no scr
 host view is excluded from autofill, and the keyboard is asked not to learn from the fields
 (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off); a keyboard may ignore that request.
 
-Connect dialog and autofill: while the connect dialog is shown, its host view is set to
-`IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` (previous value restored on dismissal), the server
-URL and access token fields ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`,
-autocorrect off), and the token stays masked. This asks autofill services not to offer to save the
-bearer token. Trade-off: the token cannot be filled from a password manager. Limits: this is an
-opt-out request, not enforcement; a third-party manager may ignore it or fall back to
-accessibility-based detection, and the app cannot force it to stop.
+Connect dialog and autofill: a Compose `AlertDialog` runs in its own window, so the activity's
+`LocalView` is not the dialog's. `ExcludeDialogFromAutofill()` is therefore called inside the dialog's
+`text` slot, where `LocalView.current` is the dialog's `DialogLayout`. While the dialog is composed it
+sets `IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` on two views: that `DialogLayout` and the dialog
+window's decor view (`DialogWindowProvider.window.decorView`). On dismissal it restores both previous
+values and calls `AutofillManager.cancel()` (Compose `LocalAutofillManager`) to drop any pending,
+unsaved autofill context. The activity's own view is not touched. The server URL and access token
+fields also ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off), and
+the token stays masked. The pinned Compose version has no `ContentType.None`, so no per-field
+`contentType` semantics are set. Trade-off: the token cannot be filled from a password manager.
+Limits: this is an opt-out request, not enforcement. `importantForAutofill` is honoured by
+framework-autofill services only; accessibility-based managers (some third-party password managers)
+read the view tree through accessibility and ignore it, and the app cannot force them to stop.
+Whether the save sheet is suppressed on a real device has not been observed.
 
 Disk hygiene: Room runs with `PRAGMA secure_delete=ON`, which overwrites freed pages with zeros
 on a best-effort basis. After clearing note text the app runs `wal_checkpoint(TRUNCATE)` and reads

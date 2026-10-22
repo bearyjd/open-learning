@@ -441,5 +441,6 @@ generation have not been independently validated. This milestone does not
 complete the entire requested platform or an Android-to-live-model acceptance run.
 
 Connect-dialog autofill opt-out (`fix/android-token-no-autofill`) is NOT device-verified. JVM tests cover the
-policy constants and the instrumented `ConnectAutofillTest` is compile-checked only; whether Bitwarden's save
+opt-out/restore logic against fakes (not real views) and the instrumented `ConnectAutofillTest`
+(dialog DialogLayout and decor view) is compile-checked only; whether Bitwarden's save
 sheet is suppressed on a real device has not been observed.
