@@ -440,7 +440,9 @@ General live model quality, misconception detection, and opposing-viewpoint
 generation have not been independently validated. This milestone does not
 complete the entire requested platform or an Android-to-live-model acceptance run.
 
-Connect-dialog autofill opt-out (`fix/android-token-no-autofill`) is NOT device-verified. JVM tests cover the
-opt-out/restore logic against fakes (not real views) and the instrumented `ConnectAutofillTest`
-(dialog DialogLayout and decor view) is compile-checked only; whether Bitwarden's save
+Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is NOT device-verified. The
+earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
+which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and
+fail-loudly logic against fakes (not real views); the instrumented `ConnectAutofillTest` and
+`NoteAcceptanceTest.noteEditorAncestorIsExcludedFromAutofill` are compile-checked only. Whether Bitwarden's save
 sheet is suppressed on a real device has not been observed.

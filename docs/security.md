@@ -130,23 +130,26 @@ WorkManager input data, logs, `toString()` output (all types that carry it redac
 saved instance state, or uiautomator evidence kept in the repository. The job row's text is
 cleared when the job completes or is cancelled, and the draft is deleted on submit. While the
 editor is on screen the window is `FLAG_SECURE` (blank recents thumbnail, no screenshots), the
-host view is excluded from autofill, and the keyboard is asked not to learn from the fields
+editor is excluded from autofill (see the corrected mechanism below), and the keyboard is asked not to learn from the fields
 (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off); a keyboard may ignore that request.
 
-Connect dialog and autofill: a Compose `AlertDialog` runs in its own window, so the activity's
-`LocalView` is not the dialog's. `ExcludeDialogFromAutofill()` is therefore called inside the dialog's
-`text` slot, where `LocalView.current` is the dialog's `DialogLayout`. While the dialog is composed it
-sets `IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` on two views: that `DialogLayout` and the dialog
-window's decor view (`DialogWindowProvider.window.decorView`). On dismissal it restores both previous
-values and calls `AutofillManager.cancel()` (Compose `LocalAutofillManager`) to drop any pending,
-unsaved autofill context. The activity's own view is not touched. The server URL and access token
-fields also ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off), and
-the token stays masked. The pinned Compose version has no `ContentType.None`, so no per-field
-`contentType` semantics are set. Trade-off: the token cannot be filled from a password manager.
-Limits: this is an opt-out request, not enforcement. `importantForAutofill` is honoured by
-framework-autofill services only; accessibility-based managers (some third-party password managers)
-read the view tree through accessibility and ignore it, and the app cannot force them to stop.
-Whether the save sheet is suppressed on a real device has not been observed.
+Autofill opt-out mechanism (corrected): `LocalView.current` is the AndroidComposeView, not the `DialogLayout`
+(inside a Dialog the `DialogLayout` is its parent). AndroidComposeView overrides `getImportantForAutofill()` and
+returns `IMPORTANT_FOR_AUTOFILL_YES`, so flagging it has no effect. `View.isImportantForAutofill()` instead walks
+the ancestors and stops at one marked `NO_EXCLUDE_DESCENDANTS`. `ExcludeFromAutofill()` therefore flags
+ANCESTORS only, never the compose view: in a dialog the `DialogLayout` (the `DialogWindowProvider`) and its
+window's decor view; in the activity (note editor) only the nearest ancestor. Previous values are restored on
+dispose (reverse order). If no ancestor exists it throws a fixed-message `IllegalStateException` instead of
+silently doing nothing. The Connect dialog also calls `AutofillManager.cancel()` on dismissal (best effort) to
+drop any pending, unsaved autofill context. The original note-editor opt-out shipped in E2a flagged the
+AndroidComposeView itself and was ineffective; it is corrected by this change. The server URL and token fields
+also ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off), and the token stays
+masked. The pinned Compose version has no `ContentType.None`, so no per-field `contentType` is set. Trade-off:
+the token cannot be filled from a password manager.
+Limits: this is an opt-out request, not enforcement. `importantForAutofill` is honoured by framework-autofill
+services only; accessibility-based managers (some third-party password managers) read the view tree through
+accessibility and ignore it. It affects autofill requests only. Whether the save sheet is suppressed on a real
+device has not been observed.
 
 Disk hygiene: Room runs with `PRAGMA secure_delete=ON`, which overwrites freed pages with zeros
 on a best-effort basis. After clearing note text the app runs `wal_checkpoint(TRUNCATE)` and reads

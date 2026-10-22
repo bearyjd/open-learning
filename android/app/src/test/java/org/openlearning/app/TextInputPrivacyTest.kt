@@ -3,10 +3,63 @@ package org.openlearning.app
 import androidx.compose.ui.text.input.KeyboardType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class TextInputPrivacyTest {
-    private class FakeTarget(override var importance: Int) : AutofillTarget
+    private inner class FakeTarget(
+        override var importance: Int,
+        override val isDialogRoot: Boolean = false,
+        override val dialogDecor: AutofillTarget? = null,
+        val name: String = "",
+    ) : AutofillTarget
+
+    @Test fun dialogChainTargetsDialogLayoutAndDecorOnly() {
+        val decor = FakeTarget(0, name = "decor")
+        val layout = FakeTarget(0, isDialogRoot = true, dialogDecor = decor)
+        val content = FakeTarget(0)
+        val picked = autofillTargetsFor(listOf(content, layout, decor))
+        assertEquals(listOf<AutofillTarget>(layout, decor), picked)
+    }
+
+    @Test fun activityChainTargetsOnlyNearestAncestor() {
+        val near = FakeTarget(0)
+        val far = FakeTarget(0)
+        assertEquals(listOf<AutofillTarget>(near), autofillTargetsFor(listOf(near, far)))
+    }
+
+    @Test fun noAncestorFailsLoudly() {
+        val e = assertThrows(IllegalStateException::class.java) { autofillTargetsFor(emptyList()) }
+        assertEquals(NO_AUTOFILL_ANCESTOR, e.message)
+    }
+
+    @Test fun composeViewItselfIsNeverFlaggedWhenOnlyAncestorsAreProvided() {
+        val composeView = FakeTarget(1)
+        val parent = FakeTarget(0)
+        optOutOfAutofill(autofillTargetsFor(listOf(parent)))
+        assertEquals(1, composeView.importance)
+        assertEquals(TextInputPrivacy.AUTOFILL_MODE, parent.importance)
+    }
+
+    @Test fun duplicateDialogTargetsAreCollapsed() {
+        val layout = FakeTarget(0, isDialogRoot = true)
+        val picked = autofillTargetsFor(listOf(layout))
+        assertEquals(1, picked.size)
+    }
+
+    @Test fun restoreRunsInReverseOrder() {
+        val order = mutableListOf<String>()
+        class Rec(val n: String) : AutofillTarget {
+            override var importance: Int = 0
+                set(v) { field = v; order += "$n=$v" }
+        }
+        val a = Rec("a"); val b = Rec("b")
+        order.clear()
+        val restore = optOutOfAutofill(listOf(a, b))
+        order.clear()
+        restore()
+        assertEquals(listOf("b=0", "a=0"), order)
+    }
 
     @Test fun optOutSetsExcludeModeOnEveryTargetAndRestoresEachPreviousValue() {
         val a = FakeTarget(1)

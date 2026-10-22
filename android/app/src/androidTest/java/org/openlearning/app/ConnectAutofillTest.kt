@@ -9,6 +9,8 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -18,10 +20,12 @@ import org.junit.runner.RunWith
 /**
  * Compiled in CI; run on the acceptance app later (NOT device-verified).
  *
- * Asserts, for the open connect dialog, that the dialog's own views carry NO_EXCLUDE_DESCENDANTS:
- * the DialogLayout that hosts the "Access token" field's ComposeView (the DialogWindowProvider ancestor,
- * NOT the activity's ComposeView or any other ancestor) and that dialog window's decor view. It does not
- * assert that an autofill service actually stays silent; that needs a real password manager on a device.
+ * LocalView inside a Dialog is the dialog's AndroidComposeView, which itself reports IMPORTANT_FOR_AUTOFILL_YES,
+ * so the flag must sit on its ANCESTORS. This asserts, for the "Access token" field's AndroidComposeView, that
+ * (1) its ancestor DialogLayout (the DialogWindowProvider) and that window's decor view carry NO_EXCLUDE_DESCENDANTS,
+ * (2) the framework's own View.isImportantForAutofill() therefore reports false for the compose view, and
+ * (3) the compose view itself was not the thing flagged. It does not assert that an autofill service stays
+ * silent; that needs a real password manager on a device.
  */
 @RunWith(AndroidJUnit4::class)
 class ConnectAutofillTest {
@@ -41,8 +45,13 @@ class ConnectAutofillTest {
             val dialog = generateSequence(host as View?) { it.parent as? View }.filterIsInstance<DialogWindowProvider>().firstOrNull()
             assertNotNull("token field must be hosted by a dialog window, not the activity", dialog)
             val dialogLayout = dialog as View
+            // (1) ancestors carry the flag
             assertEquals("DialogLayout", View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, dialogLayout.importantForAutofill)
             assertEquals("dialog decor view", View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, dialog.window.decorView.importantForAutofill)
+            // (2) the framework walks ancestors and so treats the field's compose view as not autofillable
+            assertFalse("compose view must not be important for autofill", host.isImportantForAutofill)
+            // (3) the compose view's own flag is untouched (it reports YES on its own, which is why ancestors are used)
+            assertNotEquals("compose view itself must not be flagged", View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, host.importantForAutofill)
         }
     }
 }

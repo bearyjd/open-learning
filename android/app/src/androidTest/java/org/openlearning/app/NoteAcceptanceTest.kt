@@ -1,5 +1,8 @@
 package org.openlearning.app
 
+import android.view.View
+import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -64,6 +67,18 @@ class NoteAcceptanceTest {
         fixture.down.set(false)
         awaitRow(45_000) { it.status == "completed" }
         assertEquals(1, fixture.count("POST", "/api/v1/ingest/text"))
+    }
+
+    // NOT device-verified. Asserts the note editor's compose view sits under an ancestor flagged NO_EXCLUDE_DESCENDANTS,
+    // so View.isImportantForAutofill() is false for it; the compose view's own flag is not what is checked.
+    @OptIn(InternalComposeUiApi::class)
+    @Test fun noteEditorAncestorIsExcludedFromAutofill() {
+        launchEditor(); waitText("Add note to learning feed")
+        val host = (compose.onNodeWithText("Note text").fetchSemanticsNode().root as ViewRootForTest).view
+        val flagged = generateSequence(host.parent) { it.parent }.filterIsInstance<View>()
+            .any { it.importantForAutofill == View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS }
+        assertTrue("an ancestor of the editor's compose view must be NO_EXCLUDE_DESCENDANTS", flagged)
+        assertFalse("compose view must not be important for autofill", host.isImportantForAutofill)
     }
 
     @Test fun textIsClearedFromRoomAfterCompletion() {
