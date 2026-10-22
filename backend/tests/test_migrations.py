@@ -92,7 +92,8 @@ def test_upgrade_downgrade_roundtrip(database_url):
     assert refused.returncode != 0
     assert "note jobs" in refused.stdout + refused.stderr
     # PostgreSQL rolls the whole run back (still 0004); SQLite keeps the completed 0004 downgrade.
-    assert ok(database_url, "current").stdout.split()[0] in ("0003", "0004")
+    expected = "0004" if database_url.startswith("postgresql") else "0003"
+    assert ok(database_url, "current").stdout.split()[0] == expected
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
 
     run(engine, "UPDATE jobs SET status = 'failed' WHERE id = 'jq'")
@@ -141,6 +142,8 @@ def test_0004_job_document_link_roundtrip(database_url):
     ok(database_url, "upgrade", "head")
     columns = {column["name"] for column in inspect(engine).get_columns("jobs")}
     assert {"document_id", "replaces_document_id"} <= columns
+    names = {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    assert {"ix_jobs_status", "ix_jobs_document_id"} <= names
     assert run(engine, "SELECT document_id, replaces_document_id FROM jobs WHERE id = 'jc'").one() == (None, None)
     run(engine, "UPDATE jobs SET document_id = 'doc-1', replaces_document_id = 'doc-0' WHERE id = 'jc'")
     ok(database_url, "check")
@@ -149,9 +152,11 @@ def test_0004_job_document_link_roundtrip(database_url):
     columns = {column["name"] for column in inspect(engine).get_columns("jobs")}
     assert columns.isdisjoint({"document_id", "replaces_document_id"})
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
-    assert "ix_jobs_status" in {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    names = {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    assert "ix_jobs_status" in names and "ix_jobs_document_id" not in names
 
     ok(database_url, "upgrade", "head")
+    assert "ix_jobs_document_id" in {index["name"] for index in inspect(engine).get_indexes("jobs")}
     assert run(engine, "SELECT document_id FROM jobs WHERE id = 'jc'").scalar() is None
     ok(database_url, "check")
     engine.dispose()

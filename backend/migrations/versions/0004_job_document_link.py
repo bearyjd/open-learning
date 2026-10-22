@@ -17,6 +17,8 @@ def upgrade():
     # document and its linked jobs together, and pre-migration jobs stay unlinked (NULL).
     op.add_column("jobs", sa.Column("document_id", sa.String(36), nullable=True))
     op.add_column("jobs", sa.Column("replaces_document_id", sa.String(36), nullable=True))
+    # Forgetting a note looks up its linked jobs by document.
+    op.create_index("ix_jobs_document_id", "jobs", ["document_id"])
 
 
 def downgrade():
@@ -25,6 +27,7 @@ def downgrade():
         # Same lock as 0003 so no job write races the column drop.
         bind.execute(sa.text("LOCK TABLE jobs IN SHARE ROW EXCLUSIVE MODE"))
     # Dropping the columns discards the job-to-document links; jobs and notes are unaffected.
+    op.drop_index("ix_jobs_document_id", table_name="jobs")
     with op.batch_alter_table("jobs") as batch:
         batch.drop_column("replaces_document_id")
         batch.drop_column("document_id")

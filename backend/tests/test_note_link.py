@@ -141,6 +141,8 @@ def test_patch_updates_title_and_label_without_new_version(client, factory, sett
     assert count(factory, Document) == 1
     with factory() as db:
         assert db.scalar(select(Source.label).join(Document).where(Document.id == doc)) == "Bio"
+        assert db.scalar(select(Source.title).join(Document).where(Document.id == doc)) == "New title"
+        assert db.scalar(select(Document.title).where(Document.id == doc)) == "New title"
 
 
 def test_patch_partial_keeps_other_field(client, factory, settings):
@@ -256,3 +258,107 @@ def test_concurrent_patch_and_forget_never_500(factory, settings):
             with factory.begin() as db:
                 for job in db.scalars(select(Job)):
                     db.delete(job)
+
+
+def dangling_links(factory):
+    with factory() as db:
+        linked = db.scalars(select(Job.document_id).where(Job.document_id.is_not(None))).all()
+        alive = set(db.scalars(select(Document.id)))
+    return [link for link in linked if link not in alive]
+
+
+def test_patch_when_document_vanishes_after_locked_select_is_404(client, factory, settings, monkeypatch):
+    # SQLite has no row locks, so simulate a forget committing between the select and the load.
+    doc = imported(client, factory, settings)
+    from sqlalchemy.orm import Session
+
+    real_get = Session.get
+
+    def vanished(self, entity, *args, **kwargs):
+        return None if entity is Document else real_get(self, entity, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", vanished)
+    response = client.patch(f"{API}/notes/{doc}", json={"title": "Racy"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Note not found"
+    monkeypatch.undo()
+    with factory() as db:
+        assert db.scalar(select(Source.title).join(Document).where(Document.id == doc)) == "My note"
+
+
+def require_postgres(factory):
+    if factory.kw["bind"].dialect.name != "postgresql":
+        pytest.skip("Lock-order races require OL_TEST_DATABASE_URL PostgreSQL")
+
+
+def test_dedupe_job_after_hash_cancel_cannot_link_a_deleted_note(client, factory, settings):
+    """A duplicate submitted after forget's hash-cancel pass must not link the doomed document."""
+    require_postgres(factory)
+    from sqlalchemy import event
+
+    engine = factory.kw["bind"]
+    for round_ in range(5):
+        text = f"{NOTE} round {round_}"
+        doc = import_note(client, factory, settings, text=text)
+        paused, worker_done, fired = threading.Event(), threading.Event(), []
+
+        def gate(conn, cursor, statement, parameters, *args):
+            # forget's linked-job delete runs right after its hash-cancel pass, still holding locks.
+            if "FOR UPDATE" in statement and "jobs.document_id" in statement and not fired:
+                fired.append(True)
+                paused.set()
+                worker_done.wait(3)
+
+        event.listen(engine, "after_cursor_execute", gate)
+        codes, errors = [], []
+        forget = threading.Thread(target=lambda: codes.append(client.delete(f"{API}/notes/{doc}").status_code))
+        try:
+            forget.start()
+            assert paused.wait(5)
+            second = queue_note(client, text=text, title="Again")
+
+            def work():
+                try:
+                    run_job(factory, settings)
+                except Exception as error:  # surfaced below
+                    errors.append(error)
+
+            worker = threading.Thread(target=work)
+            worker.start()
+            worker.join(2)  # With the fix the worker waits on the document lock here.
+            worker_done.set()
+            worker.join(10)
+            forget.join(10)
+        finally:
+            worker_done.set()
+            event.remove(engine, "after_cursor_execute", gate)
+        assert not errors and codes == [204], (errors, codes)
+        assert dangling_links(factory) == []
+        body = client.get(f"{API}/jobs/{second}").json()
+        assert body["status"] == "completed" and body["document_id"] != doc
+
+
+def test_forget_racing_dedupe_completion_has_no_dangling_link_or_deadlock(client, factory, settings):
+    require_postgres(factory)
+    from test_review_fixes import run_race
+
+    for round_ in range(6):
+        text = f"{NOTE} race {round_}"
+        doc = import_note(client, factory, settings, text=text)
+        second = queue_note(client, text=text, title="Again")
+        results = run_race(
+            factory,
+            {
+                # The worker has seen the document; forget already holds its lock.
+                "worker": lambda s, p: "JOIN sources" in s and "FOR" not in s and "note:" in str(p),
+                "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
+            },
+            {
+                "worker": lambda: run_once(factory, settings, model=FixtureModel()),
+                "delete": lambda: client.delete(f"{API}/notes/{doc}").status_code,
+            },
+        )
+        assert results["delete"] == 204 and results["worker"] is True, results
+        assert dangling_links(factory) == []
+        body = client.get(f"{API}/jobs/{second}").json()
+        assert body["status"] in ("completed", "cancelled")

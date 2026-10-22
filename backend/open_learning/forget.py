@@ -1,7 +1,27 @@
 """Forgetting notes: listing, hard deletion, and bounded retention of note text in jobs.
 
-Lock order (every writer must follow it): note jobs by id, the document, its insights by id,
-then their review items by id. Responses and logs never carry note text.
+Global lock order (every transaction that takes more than one of these must follow it):
+
+    1. the Document row (forget and PATCH exclusive, the worker's dedupe path shared)
+    2. note Job rows, by id
+    3. the Source row (PATCH locks it right after the document; forget deletes it last; the
+       worker's fresh import takes it after its own job, which is safe because nothing that
+       holds a Source row waits for a document or job)
+    4. Insight rows, by id
+    5. ReviewItem rows, by id
+
+Per path: forget = 1,2,4,5 then deletes (including the Source); PATCH edit_note = 1,3; worker
+dedupe = 1,2; worker fresh import = 2,3 and never waits for a document (if an identical document
+appears it rolls back and restarts through the dedupe path); retry and ingest take one job (or
+none) then a transaction-scoped advisory lock that nothing else holds while waiting for rows;
+review_answer, save, feedback and tutor take 4,5 only. No path acquires an earlier-numbered
+lock while holding a later one, so there is no cycle.
+
+The dedupe-job versus forget race is closed in two halves: jobs that exist when forget runs are
+cancelled by the hash pass (forget holds the document, so that pass cannot be overtaken), and a
+job that appears later can only link the document by share-locking it first, which waits for
+forget's commit and then finds the document gone (a fresh import). Responses and logs never
+carry note text.
 """
 
 import hashlib
@@ -77,7 +97,7 @@ def edit_note(db: Session, document_id: str, changes: dict) -> dict:
         raise HTTPException(404, "Note not found")
     document = db.get(Document, document_id)
     source = db.scalar(select(Source).where(Source.id == locked[0]).with_for_update())
-    if source is None:
+    if document is None or source is None:  # Forgotten between the lock and the load (SQLite).
         db.rollback()
         raise HTTPException(404, "Note not found")
     if "title" in changes:
@@ -173,17 +193,8 @@ def _delete_graph(db: Session, document_id: str, source_id: str) -> None:
 
 def forget_note(db: Session, document_id: str) -> None:
     """Hard-delete a note document and everything derived from it in one transaction."""
-    found = db.execute(
-        select(Document.content_hash)
-        .join(Source, Source.id == Document.source_id)
-        .where(Document.id == document_id, Source.kind == "note")
-    ).first()
-    if found is None:
-        raise HTTPException(404, "Note not found")
-    _cancel_matching_jobs(db, found[0])
-    _delete_linked_jobs(db, document_id)
     locked = db.execute(
-        select(Document.source_id)
+        select(Document.source_id, Document.content_hash)
         .join(Source, Source.id == Document.source_id)
         .where(Document.id == document_id, Source.kind == "note")
         .with_for_update(of=Document)
@@ -191,8 +202,11 @@ def forget_note(db: Session, document_id: str) -> None:
     if locked is None:
         db.rollback()
         raise HTTPException(404, "Note not found")
+    source_id, content_hash = locked
+    _cancel_matching_jobs(db, content_hash)
+    _delete_linked_jobs(db, document_id)
     _lock_graph(db, document_id)
-    _delete_graph(db, document_id, locked[0])
+    _delete_graph(db, document_id, source_id)
     db.commit()
 
 
