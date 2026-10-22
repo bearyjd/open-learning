@@ -29,3 +29,6 @@ fun ScreenState.withoutHidden(hidden: Set<String>): ScreenState {
         notes = if (notes.items.any { goneId(it.documentId) }) notes.copy(items = notes.items.filterNot { goneId(it.documentId) }) else notes,
     )
 }
+
+/** Whether [review] is the review the screen currently shows first: the head of the visible list, not of the raw one. */
+fun ScreenState.canReveal(review: Review, hidden: Set<String>): Boolean = withoutHidden(hidden).reviews.firstOrNull()?.id == review.id

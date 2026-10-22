@@ -67,3 +67,25 @@ class HiddenViewTest {
         assertEquals("s", next.scope); assertTrue(next.busy); assertEquals("e", next.error); assertEquals(Notice("n"), next.notice); assertEquals(3, next.forgetWaiting)
     }
 }
+
+/** Reveal is judged against what the screen shows, so a hidden review at the head of the raw list cannot block the next one. */
+class CanRevealTest {
+    private fun review(id: String, insight: String, doc: String = "") = Review(id, insight, "q", "d", 1.0, documentId = doc)
+
+    @Test fun hiddenHeadDoesNotBlockTheVisibleHead() {
+        val state = ScreenState(reviews = listOf(review("r1", "i1", "d1"), review("r2", "i2", "d2")))
+        assertTrue(state.canReveal(review("r2", "i2", "d2"), setOf("d1")))
+    }
+    @Test fun aHiddenReviewCannotBeRevealed() {
+        val state = ScreenState(reviews = listOf(review("r1", "i1", "d1"), review("r2", "i2", "d2")))
+        assertFalse(state.canReveal(review("r1", "i1", "d1"), setOf("d1")))
+    }
+    @Test fun onlyTheHeadCanBeRevealed() {
+        val state = ScreenState(reviews = listOf(review("r1", "i1", "d1"), review("r2", "i2", "d2")))
+        assertTrue(state.canReveal(review("r1", "i1", "d1"), emptySet())); assertFalse(state.canReveal(review("r2", "i2", "d2"), emptySet()))
+    }
+    @Test fun recordedDocumentsHideTheHeadToo() {
+        val state = ScreenState(reviews = listOf(review("r1", "i1"), review("r2", "i2")), reviewDocs = mapOf("i1" to "d1", "i2" to "d2"))
+        assertTrue(state.canReveal(review("r2", "i2"), setOf("d1")))
+    }
+}

@@ -348,7 +348,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         request { repository ->
             val cached = container.database.dao().get(repository.config.scope, review.insightId)?.let(repository::decode)
             val item = cached ?: repository.api.insight(review.insightId)
-            if (repo !== repository || mutable.value.reviews.firstOrNull()?.id != review.id) return@request
+            if (repo !== repository || !mutable.value.canReveal(review, container.forgetQueue.hidden(repository.config.scope))) return@request
             // A document forgotten meanwhile is scrubbed by the derived view, with the review that names it.
             mutable.update { it.copy(revealed = true, reviewSource = item, reviewDocs = it.reviewDocs + (review.insightId to item.documentId)) }
         }
