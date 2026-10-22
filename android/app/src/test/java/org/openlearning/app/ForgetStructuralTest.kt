@@ -145,6 +145,9 @@ class ForgetStructuralTest {
             val rest = text.substring(call.range.last)
             val body = rest.substringBefore("\n    suspend fun ").substringBefore("\n    fun ")
             assertTrue("no onReleased after ${call.value}", "onReleased(" in body)
+            val hook = body.substring(body.indexOf("onReleased("))
+            assertFalse("the release hook sits under a dead branch", Regex("""if\s*\(\s*false\s*\)""").containsMatchIn(body.substringBefore("onReleased(")))
+            assertTrue("the release hook is not a call", hook.startsWith("onReleased(scope"))
         }
     }
 
