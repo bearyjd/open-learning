@@ -28,12 +28,14 @@ class JobOutput(BaseModel):
     id: str
     status: str
     error: str | None
+    document_id: str | None = None
 
 
 class JobListItem(BaseModel):
     id: str
     status: str
     created_at: datetime
+    document_id: str | None = None
 
 
 class NoteOutput(BaseModel):
@@ -41,6 +43,14 @@ class NoteOutput(BaseModel):
     title: str
     label: str | None
     created_at: datetime
+    char_count: int
+
+
+class LimitsOutput(BaseModel):
+    max_document_chars: int
+    min_text_chars: int
+    max_title_chars: int
+    max_label_chars: int
 
 
 class ReviewOutput(BaseModel):

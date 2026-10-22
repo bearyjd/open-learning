@@ -83,7 +83,7 @@ def test_list_notes_shape_and_no_internal_key(client, factory, settings):
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 1
-    assert set(body[0]) == {"document_id", "title", "label", "created_at"}
+    assert set(body[0]) == {"document_id", "title", "label", "created_at", "char_count"}
     assert body[0]["document_id"] == doc and body[0]["label"] == "cls"
     assert "note:" not in response.text and NOTE[:40] not in response.text
 

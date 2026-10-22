@@ -73,7 +73,7 @@ def test_note_happy_path(client, factory, settings):
     response = post_note(client)
     assert response.status_code == 202
     job = response.json()
-    assert set(job) == {"id", "status", "error"}
+    assert set(job) == {"id", "status", "error", "document_id"}
     assert job["status"] == "queued"
     assert run_note_job(factory, settings)
     assert client.get(API + "/jobs/" + job["id"]).json()["status"] == "completed"

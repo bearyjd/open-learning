@@ -277,7 +277,7 @@ def test_jobs_listing_exposes_only_safe_fields(client, factory):
     body = response.json()
     assert {j["id"] for j in body} == {"j1", "j2"}
     for job in body:
-        assert set(job) == {"id", "status", "created_at"}
+        assert set(job) == {"id", "status", "created_at", "document_id"}
     assert MARKER not in response.text and "https://a.example" not in response.text
     assert [
         j["id"] for j in client.get(API + "/jobs", params={"kind": "note", "limit": 1}).json()

@@ -275,12 +275,13 @@ def _upsert_source(db: Session, key: str, **fields) -> Source:
 
 def _publish(
     db: Session, settings: Settings, source: Source, *, title, text, digest, texts, batch, truncated
-) -> None:
+) -> str:
+    """Store the document and its insights; return the document id (existing one on a race)."""
     existing = db.scalar(
-        select(Document).where(Document.source_id == source.id, Document.content_hash == digest)
+        select(Document.id).where(Document.source_id == source.id, Document.content_hash == digest)
     )
     if existing is not None:
-        return
+        return existing
     document = Document(
         source_id=source.id,
         title=title,
@@ -309,6 +310,7 @@ def _publish(
                 model_endpoint=settings.effective_ai_endpoint,
             )
         )
+    return document.id
 
 
 def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] | None:
@@ -321,14 +323,11 @@ def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] 
         return job.payload_title, job.payload_text, job.payload_label
 
 
-def _note_imported(db: Session, key: str, digest: str) -> bool:
-    return (
-        db.scalar(
-            select(Document.id)
-            .join(Source, Source.id == Document.source_id)
-            .where(Source.url == key, Document.content_hash == digest)
-        )
-        is not None
+def _note_imported(db: Session, key: str, digest: str) -> str | None:
+    return db.scalar(
+        select(Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(Source.url == key, Document.content_hash == digest)
     )
 
 
@@ -341,9 +340,11 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
     digest = hashlib.sha256(text.encode()).hexdigest()
     key = NOTE_KEY_PREFIX + digest
     with factory.begin() as db:
-        if _note_imported(db, key, digest):  # Same content: first import wins, no model call.
+        if (existing := _note_imported(db, key, digest)) is not None:
+            # Same content: first import wins, no model call.
             if (job := _lease_holder(db, job_id, token)) is not None:
                 _complete(job)
+                job.document_id = existing
             return
     texts = chunk_text(text)
     batch = (model or ModelClient(settings, factory)).insights(texts[:8])
@@ -352,7 +353,7 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
         if job is None:
             return
         source = _upsert_source(db, key, kind="note", title=title, label=label)
-        _publish(
+        job.document_id = _publish(
             db, settings, source, title=title, text=text, digest=digest, texts=texts,
             batch=batch, truncated=False,
         )
