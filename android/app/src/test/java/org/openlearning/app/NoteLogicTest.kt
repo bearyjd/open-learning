@@ -95,4 +95,36 @@ class NoteLogicTest {
         assertFalse(secret in NoteDraft("s", "t", "l", secret).toString())
         assertFalse(secret in NoteDraftFields("t", "l", secret).copy(title = "x").toString())
     }
+
+    private val queued = Notice("Note queued.", jobId = "j1")
+    private fun job(id: String, status: String, kind: String = "note") = PendingIngest("s", id, "", kind = kind, status = status)
+
+    @Test fun queuedNoticeClearsWhenItsJobReachesATerminalState() {
+        for (status in listOf("completed", "Complete", "succeeded", "done", "failed", "error", "cancelled"))
+            assertNull(status, noticeAfterJobUpdate(queued, listOf(job("j1", status))))
+    }
+    @Test fun queuedNoticeClearsWhenItsJobRowIsRemoved() {
+        assertNull(noticeAfterJobUpdate(queued, emptyList()))
+        assertNull(noticeAfterJobUpdate(queued, listOf(job("other", "queued"))))
+    }
+    @Test fun queuedNoticeStaysWhileTheJobIsStillInFlight() {
+        for (status in listOf("queued", "running", "waiting", "paused", "pending"))
+            assertSame(status, queued, noticeAfterJobUpdate(queued, listOf(job("j1", status))))
+    }
+    @Test fun otherNoticesAreNeverClearedByJobUpdates() {
+        val forgotten = Notice("Note forgotten.")
+        assertSame(forgotten, noticeAfterJobUpdate(forgotten, emptyList()))
+        assertSame(forgotten, noticeAfterJobUpdate(forgotten, listOf(job("j1", "completed"))))
+        assertNull(noticeAfterJobUpdate(null, listOf(job("j1", "completed"))))
+    }
+    @Test fun aSecondNotesNoticeIsIndependentOfTheFirstNotesCompletion() {
+        val second = Notice("Note queued.", jobId = "j2")
+        val jobs = listOf(job("j1", "completed"), job("j2", "waiting"))
+        assertSame(second, noticeAfterJobUpdate(second, jobs))
+        assertNull(noticeAfterJobUpdate(queued, jobs))
+    }
+    @Test fun urlImportsDoNotAffectNotices() {
+        assertSame(queued, noticeAfterJobUpdate(queued, listOf(job("j1", "queued"), job("u1", "completed", kind = "url"))))
+        assertEquals("Note queued.", queued.text)
+    }
 }
