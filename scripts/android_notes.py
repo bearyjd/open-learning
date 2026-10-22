@@ -106,6 +106,28 @@ def body_digest(raw: bytes) -> dict:
     return {"len": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+def expected_submit_bodies(title=NOTE_TITLE, text=NOTE_TEXT):
+    """Candidate request bodies the app's Gson/Retrofit client should send, keyed by label variant.
+
+    Gson (apiGson) writes compact JSON in field order title,text,label, omits a null label and UTF-8 encodes it. The
+    fixture text has no characters Gson HTML-escapes (< > & = '), so these bytes are exact unless the app's label
+    handling differs; both an omitted and an empty label are therefore accepted.
+    """
+    variants = {"label_omitted": {"title": title, "text": text}, "label_empty": {"title": title, "text": text, "label": ""}}
+    return {k: json.dumps(v, separators=(",", ":"), ensure_ascii=False).encode() for k, v in variants.items()}
+
+
+def check_submit_digest(entry) -> dict:
+    """Compare a logged POST digest (len + sha256) with the expected bodies; report which variant matched, if any."""
+    for name, raw in expected_submit_bodies().items():
+        d = body_digest(raw)
+        if entry["len"] == d["len"] and entry["sha256"] == d["sha256"]:
+            return {"submit_hash_match": True, "submit_hash_variant": name, "submit_len": entry["len"], "submit_sha256": entry["sha256"]}
+    lens = {k: len(v) for k, v in expected_submit_bodies().items()}
+    return {"submit_hash_match": False, "submit_len": entry["len"], "submit_sha256": entry["sha256"],
+            "submit_len_matches_a_variant": entry["len"] in lens.values()}
+
+
 def adb_text(text: str) -> str:
     """Encode text for `adb shell input text`; refuse anything the shell (or `input`) could reinterpret."""
     if not SAFE_TEXT.match(text):
@@ -360,8 +382,10 @@ def connect(dev, port, results):
         raise RuntimeError("Discover never appeared; connection failed")
 
 
-def fill_editor(dev):
-    dev.tap("Write or import a note")
+def fill_editor(dev, open_editor=True):
+    """Type the fixture note; open_editor=False when the caller already opened it (bounded scrolling)."""
+    if open_editor:
+        dev.tap("Write or import a note")
     dev.tap("Title")
     dev.type(NOTE_TITLE)
     dev.shell("input", "keyevent", "KEYCODE_BACK")
@@ -394,7 +418,7 @@ def mock_log():
 
 
 def scenarios_pass(results) -> bool:
-    return bool(results.get("draft_survives_process_death") and results.get("posts") == 1
+    return bool(results.get("draft_survives_process_death") and results.get("posts") == 1 and results.get("submit_hash_match") is not False
                 and results.get("submit_shows_note_card") and results.get("no_link_nodes_on_list")
                 and results.get("no_link_nodes_on_detail") and results.get("forget_cancel_deletes") == 0
                 and results.get("forget_confirm_deletes") == 1 and results.get("413_message")
@@ -448,6 +472,8 @@ def main():
         log = mock_log()
         post = [e for e in log if e["method"] == "POST" and e["path"] == "/api/v1/ingest/text"]
         results["posts"] = len(post)
+        if post:
+            results.update(check_submit_digest(post[0]))
         results["no_link_nodes_on_list"] = not link_labels_present(texts)
 
         dev.tap_scrolling("Your note: " + NOTE_TITLE)
@@ -465,7 +491,7 @@ def main():
         STEP["name"] = "413:open editor"
         urllib_set_status(args.port, 413)
         dev.tap_scrolling("Write or import a note")
-        fill_editor(dev)
+        fill_editor(dev, open_editor=False)
         dev.tap_scrolling("Add note to learning feed")
         results["413_message"] = dev.wait_for("larger than your server accepts", timeout=40)
         dev.dump("05-413")

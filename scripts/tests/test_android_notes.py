@@ -122,6 +122,28 @@ class ScrollHelperTests(unittest.TestCase):
         self.assertNotIn("tap", [c[1] for c in dev.calls])
 
 
+class SubmitHashTests(unittest.TestCase):
+    def test_expected_body_is_compact_gson_shape(self):
+        raw = notes.expected_submit_bodies()["label_omitted"]
+        self.assertEqual({"title": notes.NOTE_TITLE, "text": notes.NOTE_TEXT}, json.loads(raw))
+        self.assertTrue(raw.startswith(b'{"title":"Acceptance note","text":"'))
+
+    def test_matching_digest_reports_variant(self):
+        raw = notes.expected_submit_bodies()["label_omitted"]
+        r = notes.check_submit_digest(notes.body_digest(raw))
+        self.assertTrue(r["submit_hash_match"])
+        self.assertEqual("label_omitted", r["submit_hash_variant"])
+
+    def test_mismatch_is_flagged_and_blocks_pass(self):
+        r = notes.check_submit_digest({"len": 5, "sha256": "0" * 64})
+        self.assertFalse(r["submit_hash_match"])
+        good = {"draft_survives_process_death": True, "posts": 1, "submit_shows_note_card": True,
+                "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
+                "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False}
+        self.assertFalse(notes.scenarios_pass({**good, **r}))
+        self.assertTrue(notes.scenarios_pass({**good, "submit_hash_match": True}))
+
+
 class ReverseSwipeTests(unittest.TestCase):
     def test_reverse_swipe_mirrors_forward_inside_viewport(self):
         vp = (0, 100, 1080, 2300)
