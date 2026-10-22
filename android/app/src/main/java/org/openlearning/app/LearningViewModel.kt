@@ -29,13 +29,22 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var jobsFlow: Job? = null
     private var forgetFlow: Job? = null
     private val mutable = MutableStateFlow(ScreenState())
-    val state = mutable.asStateFlow()
+    private var elsewhereNoticeShown = false
+    /**
+     * What the screen sees: [mutable] with every document of the durable forget set scrubbed out, on every emission. A response
+     * that lands late is therefore hidden when it publishes. Internal logic reads [mutable], never this.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val state: StateFlow<ScreenState> = mutable.map { it.scope }.distinctUntilChanged()
+        .flatMapLatest { scope -> if (scope.isEmpty()) flowOf(emptySet()) else container.forgetQueue.hiddenIds(scope) }
+        .let { hidden -> combine(mutable, hidden) { screen, ids -> screen.withoutHidden(ids) } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ScreenState())
     private var cached: List<CachedInsight> = emptyList()
     private var activeOperations = 0
     private var requestGeneration = 0
     private var chatGeneration = 0
     private var detailJob: Job? = null
-    private val notesActions = NotesActions(viewModelScope, container.forgotten, container.forgetQueue, { repo }, mutable) { memory.clear(); detailJob?.cancel(); chatGeneration++ }
+    private val notesActions = NotesActions(viewModelScope, container.forgetQueue, { repo }, mutable, { memory.clear(); detailJob?.cancel(); chatGeneration++ }, ::resumeForgets)
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
@@ -53,7 +62,6 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch { snapshotFlow { draft }.debounce(400).collect { saveDraft(it) } }
         viewModelScope.launch {
             connection.collect { config ->
-                val previousServer = if (config != null) container.credentials.takePreviousServer() else null
                 val step = connectionStep(restorePending, config != null)
                 val restore = step.restore
                 restorePending = step.restorePending
@@ -66,10 +74,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
-                    launch { container.forgetQueue.resumePending(repository.config.scope) }
+                    launch { resumeForgets(repository.config.scope) }
+                    try { ForgetSweepWorker.schedule(getApplication()) } catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not schedule the forget sweep") }
                     launch {
                         val rows = try { container.forgetQueue.otherScopeRows(repository.config.scope) } catch (error: Exception) { if (error is CancellationException) throw error; emptyList() }
-                        tokenRotationNotice(previousServer, repository.config.server, rows)?.let { text -> if (repo === repository) mutable.update { it.copy(notice = Notice(text)) } }
+                        val text = forgetElsewhereNotice(rows, repository.config.scope)
+                        if (text != null && !elsewhereNoticeShown && repo === repository) { elsewhereNoticeShown = true; mutable.update { it.copy(notice = Notice(text)) } }
                     }
                     forgetFlow = launch {
                         val queue = container.forgetQueue
@@ -100,6 +110,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             }
         }
     }
+    /** A failure here (a scheduling error, a Room error) must never take the app down: the next resume tries again. */
+    private suspend fun resumeForgets(scope: String) {
+        try { container.forgetQueue.resumePending(scope) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not resume queued forgets") }
+    }
     /** Another server or token was connected: delete the old cards and completed imports, never unsent note text or drafts. */
     private suspend fun purgeInactiveScopes(repository: LearningRepository) {
         try {
@@ -113,7 +129,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             val item = resolveInsight(saved.insightId,
                 { id -> container.database.dao().get(saved.scope, id)?.let(repository::decode) }, repository.api::insight)
             val hidden = container.forgetQueue.hidden(repository.config.scope)
-            when (val decision = decideRestore(saved, repository.config.scope, repo === repository, state.value.selected?.id, memory.recall(saved.scope), item, hidden)) {
+            when (val decision = decideRestore(saved, repository.config.scope, repo === repository, mutable.value.selected?.id, memory.recall(saved.scope), item, hidden)) {
                 is RestoreDecision.Restore -> { select(decision.insight); if (saved.learning) markLearning(decision.insight) }
                 RestoreDecision.Clear -> memory.clear()
                 RestoreDecision.Skip -> Unit
@@ -289,7 +305,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     }
     fun save(item: Insight) = request { repository ->
         repository.save(item)
-        if (repo === repository && state.value.selected?.id == item.id) mutable.update { it.copy(selected = it.selected?.copy(saved = true)) }
+        if (repo === repository && mutable.value.selected?.id == item.id) mutable.update { it.copy(selected = it.selected?.copy(saved = true)) }
     }
     fun dismiss(item: Insight) = request { it.dismiss(item) }
     fun select(item: Insight) {
@@ -302,7 +318,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             try {
                 val fresh = repository.api.insight(item.id)
                 repository.remember(fresh)
-                if (repo === repository && state.value.selected?.id == item.id) mutable.update { it.copy(selected = fresh) }
+                if (repo === repository && mutable.value.selected?.id == item.id) mutable.update { it.copy(selected = fresh) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Cached detail remains readable offline. */ }
         }
@@ -310,8 +326,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun closeDetail() { memory.clear(); detailJob?.cancel(); chatGeneration++; mutable.update { it.copy(selected = null, chat = emptyList(), chatBusy = false, learning = false) } }
     fun learn(item: Insight) { select(item); markLearning(item); chat("") }
     fun chat(message: String) {
-        val selected = state.value.selected ?: return
-        if (state.value.chatBusy) return
+        val selected = mutable.value.selected ?: return
+        if (mutable.value.chatBusy) return
         val repository = repo ?: return
         val generation = chatGeneration
         mutable.update { it.copy(chatBusy = true, error = null, chat = if (message.isBlank()) it.chat else it.chat + ChatLine("You", message)) }
@@ -330,14 +346,11 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     }
     fun revealReview(review: Review) {
         request { repository ->
-            val hidden = container.forgetQueue.hidden(repository.config.scope)
             val cached = container.database.dao().get(repository.config.scope, review.insightId)?.let(repository::decode)
             val item = cached ?: repository.api.insight(review.insightId)
-            // Checked after the fetch and again from Room: a forget queued meanwhile hides it like a missing insight.
-            val nowHidden = hidden + container.forgetQueue.hidden(repository.config.scope)
-            if (repo !== repository || state.value.reviews.firstOrNull()?.id != review.id) return@request
-            if (item.isHiddenBy(nowHidden)) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null) }
-            else mutable.update { it.copy(revealed = true, reviewSource = item, reviewDocs = it.reviewDocs + (review.insightId to item.documentId)) }
+            if (repo !== repository || mutable.value.reviews.firstOrNull()?.id != review.id) return@request
+            // A document forgotten meanwhile is scrubbed by the derived view, with the review that names it.
+            mutable.update { it.copy(revealed = true, reviewSource = item, reviewDocs = it.reviewDocs + (review.insightId to item.documentId)) }
         }
     }
     fun rate(review: Review, rating: String) = request { repository ->
@@ -345,7 +358,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         if (repo === repository) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null, notice = Notice("Next review: ${next.dueAt}")) }
     }
     fun search(query: String) = request { repository ->
-        val results = container.forgetQueue.visibleInsights(repository.config.scope, container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim())))
+        val results = repository.api.search(query.trim())
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
     fun loadNotes() = notesActions.load()

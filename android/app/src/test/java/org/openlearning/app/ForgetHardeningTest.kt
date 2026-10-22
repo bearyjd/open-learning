@@ -9,35 +9,6 @@ import org.junit.Test
 class ForgetHardeningTest {
     private fun row(id: String, status: String = FORGET_PENDING) = PendingForget("s", id, 1, status)
 
-    // 1. A late response after the server confirmed must stay hidden until a fresh answer lacks the note.
-    @Test fun confirmedMarkerStillBlocksLateResponses() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "d1"); forgotten.confirmed("s", "d1")
-        assertTrue(forgotten.blocks("s", Insight(documentId = "d1")))
-    }
-    @Test fun markerClearsOnlyWhenAFreshAnswerLacksTheNote() {
-        val forgotten = ForgottenNotes()
-        forgotten.confirmed("s", "d1")
-        forgotten.settle("s", setOf("d1", "d2"))
-        assertTrue(forgotten.blocks("s", Insight(documentId = "d1")))
-        forgotten.settle("s", setOf("d2"))
-        assertFalse(forgotten.blocks("s", Insight(documentId = "d1")))
-    }
-    @Test fun settleNeverClearsAnUnconfirmedMarkerOrAnotherScope() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "d1"); forgotten.confirmed("other", "d1")
-        forgotten.settle("s", emptySet())
-        assertTrue(forgotten.blocks("s", Insight(documentId = "d1")))
-        assertTrue(forgotten.blocks("other", Insight(documentId = "d1")))
-    }
-
-    // 2. Enqueue policy: an enqueue during a finishing worker must not be lost; the idempotent resume never piles up.
-    @Test fun enqueuePolicyByTrigger() {
-        assertEquals(ForgetEnqueue.APPEND_OR_REPLACE, forgetEnqueuePolicy(ForgetTrigger.NEW_FORGET))
-        assertEquals(ForgetEnqueue.APPEND_OR_REPLACE, forgetEnqueuePolicy(ForgetTrigger.RETRY))
-        assertEquals(ForgetEnqueue.KEEP, forgetEnqueuePolicy(ForgetTrigger.RESUME))
-    }
-
     // 3. Document ids are checked before commit; one bad row never stops the others.
     @Test fun documentIdValidation() {
         assertTrue(validForgetDocumentId("123e4567-e89b-12d3-a456-426614174000"))
@@ -57,7 +28,7 @@ class ForgetHardeningTest {
     @Test fun oneThrowingRowIsMarkedFailedAndTheRestAreScheduled() = runBlocking {
         val scheduled = mutableListOf<String>(); val failed = mutableListOf<String>()
         val count = scheduleEach(listOf(row("a"), row("bad"), row("c")), ForgetTrigger.RESUME,
-            { _, id, _ -> if (id == "bad") throw IllegalStateException("too big") else scheduled += id }, { failed += it.documentId })
+            { _, id, _ -> if (id == "bad") throw IllegalArgumentException("too big") else scheduled += id }, { failed += it.documentId })
         assertEquals(1, count)
         assertEquals(listOf("a", "c"), scheduled)
         assertEquals(listOf("bad"), failed)
@@ -105,14 +76,6 @@ class ForgetHardeningTest {
         assertFalse(Insight(id = "i", documentId = "d2").isHiddenBy(setOf("d1")))
         assertFalse(Insight(id = "i", documentId = "").isHiddenBy(setOf("")))
     }
-    @Test fun forgettingDropsReviewsByRecordedDocumentAndReviewSource() {
-        val state = ScreenState(reviews = listOf(review("r1", "i1"), review("r2", "i2"), review("r3", "i3")),
-            reviewDocs = mapOf("i1" to "d1", "i2" to "d2"), reviewSource = Insight(id = "i3", documentId = "d1"), revealed = true)
-        val next = state.withoutDocument("d1", emptyList())
-        assertEquals(listOf("r2"), next.reviews.map { it.id })
-        assertNull(next.reviewSource); assertFalse(next.revealed)
-    }
-
     // 6. A saved tutor selection of a hidden document is cleared, not restored.
     @Test fun restoreOfAHiddenDocumentClears() {
         val saved = SavedTutor("s", "i1", false)
@@ -121,45 +84,20 @@ class ForgetHardeningTest {
         assertEquals(RestoreDecision.Restore(found.insight), decideRestore(saved, "s", true, null, saved, found, setOf("d2")))
     }
 
-    // 7. The marker exists only while the commit can still succeed.
-    @Test fun markerIsRemovedWhenTheCommitFailsOrIsCancelled() = runBlocking {
-        val events = mutableListOf<String>()
-        markedUntilCommit({ events += "mark" }, { events += "unmark" }) { events += "commit" }
-        assertEquals(listOf("mark", "commit"), events)
-        events.clear()
-        runCatching { markedUntilCommit({ events += "mark" }, { events += "unmark" }) { throw CancellationException("x") } }
-        assertEquals(listOf("mark", "unmark"), events)
-        events.clear()
-        runCatching { markedUntilCommit({ events += "mark" }, { events += "unmark" }) { throw IllegalStateException("x") } }
-        assertEquals(listOf("mark", "unmark"), events)
-    }
-
     // 8. After the commit nothing may undo the forget: every step runs, failures are counted.
-    @Test fun afterCommitStepsAllRunAndFailuresAreCounted() {
+    @Test fun afterCommitStepsAllRunAndFailuresAreCounted() = runBlocking {
         val ran = mutableListOf<Int>()
         val failures = runBestEffort({ ran += 1; throw IllegalStateException("x") }, { ran += 2 })
         assertEquals(1, failures); assertEquals(listOf(1, 2), ran)
-        assertThrows(CancellationException::class.java) { runBestEffort({ throw CancellationException("x") }) }
-    }
-
-    // 9. Token rotation.
-    @Test fun rotationNoticeOnlyForTheSameServerWithOtherScopesWaiting() {
-        val others = listOf(PendingForget("old", "d1", 1, FORGET_PENDING))
-        assertEquals(FORGET_TOKEN_ROTATION_NOTICE, tokenRotationNotice("https://a/", "https://a/", others))
-        assertNull(tokenRotationNotice("https://a/", "https://b/", others))
-        assertNull(tokenRotationNotice(null, "https://a/", others))
-        assertNull(tokenRotationNotice("https://a/", "https://a/", emptyList()))
-        assertFalse(FORGET_TOKEN_ROTATION_NOTICE.contains("http"))
-        assertEquals("Notes you forgot while signed in with the previous token are still waiting to be deleted from the server. " +
-            "Reconnect with that token to finish.", FORGET_TOKEN_ROTATION_NOTICE)
+        assertThrows(CancellationException::class.java) { runBlocking { runBestEffort({ throw CancellationException("x") }) } }
+        Unit
     }
 
     // 10. A rejected forget can be abandoned; failed rows say what failed in fixed words.
     @Test fun stopTryingOnlyForFailedRowsAndUnhidesInTheList() {
         assertTrue(canStopTrying(row("a", FORGET_FAILED)))
         assertFalse(canStopTrying(row("a", FORGET_PENDING)))
-        val state = NotesListState().refreshed(listOf(NoteSummary("a", "T", null, "d", 1))).forgetSucceeded("a").stoppedTrying("a")
-        assertFalse("a" in state.gone)
+        val state = NotesListState().refreshed(listOf(NoteSummary("a", "T", null, "d", 1))).forgetSucceeded("a")
         assertEquals(listOf("a"), state.refreshed(listOf(NoteSummary("a", "T", null, "d", 1))).items.map { it.documentId })
         assertTrue(FORGET_STOP_MESSAGE.contains("stays on the server"))
         assertTrue(FORGET_STOP_MESSAGE.contains("reappear"))

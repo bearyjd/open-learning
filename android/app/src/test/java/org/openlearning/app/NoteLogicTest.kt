@@ -6,21 +6,6 @@ import org.junit.Test
 class NoteLogicTest {
     private val note = PendingIngest("s", "j1", "", kind = "note", title = "Lecture", text = "body")
 
-    @Test fun tombstoneBlocksOnlyThatScopeAndDocument() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "d1")
-        assertTrue(forgotten.blocks("s", Insight(documentId = "d1")))
-        assertFalse(forgotten.blocks("other", Insight(documentId = "d1")))
-        assertFalse(forgotten.blocks("s", Insight(documentId = "d2")))
-        assertEquals(listOf("b"), forgotten.allowed("s", listOf(Insight(id = "a", documentId = "d1"), Insight(id = "b", documentId = "d2"))).map { it.id })
-    }
-    @Test fun tombstoneIgnoresBlankDocumentIdsAndCanBeRemoved() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "")
-        assertFalse(forgotten.blocks("s", Insight(documentId = "")))
-        forgotten.add("s", "d1"); forgotten.remove("s", "d1")
-        assertFalse(forgotten.blocks("s", Insight(documentId = "d1")))
-    }
     @Test fun counterCountsCodePointsWithThousandsSeparators() {
         assertEquals("0 / 60,000", noteCounter(""))
         assertEquals("1 / 60,000", noteCounter("😀"))
@@ -46,15 +31,6 @@ class NoteLogicTest {
         val next = noteConflictPlan(note.copy(jobId = "srv", status = "failed", error = "x"))!!
         assertNull(next.jobId); assertEquals("queued", next.status); assertNull(next.error); assertEquals("body", next.text)
         assertNull(noteConflictPlan(note.copy(jobId = "srv", text = null)))
-    }
-    @Test fun forgetDropsDocumentEverywhere() {
-        val gone = Insight(id = "a", documentId = "d1"); val keep = Insight(id = "b", documentId = "d2")
-        val state = ScreenState(feed = listOf(gone, keep), library = listOf(gone), results = listOf(keep, gone), selected = gone, learning = true,
-            reviews = listOf(Review("r1", "a", "q", "t", 1.0), Review("r2", "b", "q", "t", 1.0)), reviewSource = gone, revealed = true)
-        val next = state.withoutDocument("d1", listOf("a", "extra"))
-        assertEquals(listOf(keep), next.feed); assertEquals(emptyList<Insight>(), next.library); assertEquals(listOf(keep), next.results)
-        assertEquals(listOf("r2"), next.reviews.map { it.id })
-        assertNull(next.selected); assertNull(next.reviewSource); assertFalse(next.revealed); assertFalse(next.learning)
     }
     @Test fun forgetFailureNeverEchoesErrorText() {
         val offline = forgetFailureMessage(java.io.IOException("SECRET-BODY"), "the note was not forgotten")

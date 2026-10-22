@@ -1,26 +1,5 @@
 package org.openlearning.app
 
-import java.util.concurrent.ConcurrentHashMap
-
-/** In-memory cache of documents being forgotten, so an in-flight refresh cannot write cards back. The PendingForget table is the durable source. */
-class ForgottenNotes {
-    private val keys = ConcurrentHashMap.newKeySet<String>()
-    /** Markers whose server delete succeeded. They keep blocking late responses until a fresh answer lacks the note. */
-    private val deleted = ConcurrentHashMap.newKeySet<String>()
-    private fun key(scope: String, documentId: String) = "$scope\u0000$documentId"
-    fun add(scope: String, documentId: String) { if (documentId.isNotBlank()) keys.add(key(scope, documentId)) }
-    fun remove(scope: String, documentId: String) { keys.remove(key(scope, documentId)); deleted.remove(key(scope, documentId)) }
-    /** The server deleted the note: keep hiding it from responses that were already in flight. */
-    fun confirmed(scope: String, documentId: String) { if (documentId.isNotBlank()) { keys.add(key(scope, documentId)); deleted.add(key(scope, documentId)) } }
-    /** A server list answered with [serverIds]: confirmed markers of [scope] for notes it no longer holds are dropped. */
-    fun settle(scope: String, serverIds: Set<String>) {
-        val prefix = "$scope\u0000"
-        deleted.filter { it.startsWith(prefix) && it.removePrefix(prefix) !in serverIds }.forEach { keys.remove(it); deleted.remove(it) }
-    }
-    fun blocks(scope: String, insight: Insight) = insight.documentId.isNotBlank() && key(scope, insight.documentId) in keys
-    fun allowed(scope: String, items: List<Insight>) = items.filterNot { blocks(scope, it) }
-}
-
 /** The editable note fields. Immutable: every edit is a new value. */
 data class NoteDraftFields(val title: String = "", val label: String = "", val text: String = "") {
     val isEmpty get() = title.isEmpty() && label.isEmpty() && text.isEmpty()
@@ -79,19 +58,6 @@ fun noteRetryPlan(job: PendingIngest): NoteRetry = when {
 /** The server no longer has the job (404/409): resubmit from local text as a fresh job, if the text still exists. */
 fun noteConflictPlan(job: PendingIngest): PendingIngest? =
     if (job.text == null) null else job.copy(jobId = null, status = "queued", error = null)
-
-/** Drops a forgotten document from everything the screen still holds. [insightIds] are the purged cache rows. */
-fun ScreenState.withoutDocument(documentId: String, insightIds: Collection<String>): ScreenState {
-    fun gone(item: Insight) = item.documentId == documentId || item.id in insightIds
-    return copy(
-        feed = feed.filterNot(::gone), library = library.filterNot(::gone), results = results.filterNot(::gone),
-        reviews = reviews.filterNot { it.insightId in insightIds || reviewDocs[it.insightId] == documentId || (reviewSource != null && it.insightId == reviewSource.id && gone(reviewSource)) },
-        reviewDocs = reviewDocs.filterValues { it != documentId },
-        reviewSource = reviewSource?.takeUnless(::gone),
-        revealed = if (reviewSource != null && gone(reviewSource)) false else revealed,
-        selected = null, chat = emptyList(), chatBusy = false, learning = false,
-    )
-}
 
 /** [outcome] completes "so ...", e.g. "the job was not removed". */
 fun forgetFailureMessage(error: Throwable, outcome: String): String = when (error) {

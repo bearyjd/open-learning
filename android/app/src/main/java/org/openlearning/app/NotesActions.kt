@@ -10,15 +10,17 @@ import kotlinx.coroutines.launch
 /**
  * The notes list and server limits, split out of the view model. The list is held in [state] (memory only) and
  * every transition goes through the pure reducers in NotesListState.kt.
- * [onForgotten] drops the tutor memory and open detail of a document that was just forgotten.
+ * [onForgotten] drops the tutor memory and open detail of a document that was just forgotten. Hidden documents are
+ * scrubbed from the published state by the view model's derived view, so nothing here checks the queue before publishing.
  */
 internal class NotesActions(
     private val scope: CoroutineScope,
-    private val forgotten: ForgottenNotes,
     private val queue: ForgetQueue,
     private val repo: () -> LearningRepository?,
     private val state: MutableStateFlow<ScreenState>,
     private val onForgotten: () -> Unit,
+    private val resume: suspend (scope: String) -> Unit,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     /** Best-effort: a failed or malformed answer yields the defaults, never an error. */
     suspend fun fetchLimits(repository: LearningRepository): EffectiveLimits {
@@ -32,12 +34,16 @@ internal class NotesActions(
         val generation = state.value.notes.generation
         scope.launch {
             try {
-                val answer = repository.api.notes().toSummaries()
-                // A fresh server answer: markers of notes it no longer holds can go; the idempotent resume re-checks the queue.
-                forgotten.settle(repository.config.scope, answer.mapTo(HashSet()) { it.documentId })
-                launch { try { queue.resumePending(repository.config.scope) } catch (error: Exception) { if (error is CancellationException) throw error } }
-                val fetched = queue.visibleNotes(repository.config.scope, answer)
-                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
+                // The clock is read before the request: a row confirmed while it is in flight is never judged by its answer.
+                val startedAt = clock()
+                val raw = repository.api.notes()
+                val page = serverPage(raw)
+                // Hidden notes are scrubbed by the derived view; the answer only settles confirmed rows and resumes pending ones.
+                launch { resume(repository.config.scope) }
+                try { queue.reconcile(repository.config.scope, page.ids, page.complete, startedAt) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not settle confirmed forgets") }
+                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(raw.toSummaries(), generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
         }
@@ -70,7 +76,7 @@ internal class NotesActions(
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.update { it.withoutDocument(note.documentId, result.purged).copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
+                    state.update { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
         }
@@ -88,7 +94,7 @@ internal class NotesActions(
                 is ForgetResult.Done -> {
                     onForgotten()
                     val banner = banner(repository, result)
-                    state.update { it.withoutDocument(item.documentId, result.purged + item.id).copy(notice = Notice(banner)) }
+                    state.update { it.copy(notice = Notice(banner)) }
                 }
             }
         }
@@ -105,7 +111,6 @@ internal class NotesActions(
         val repository = repo() ?: return
         scope.launch {
             if (queue.stopTrying(repository.config.scope, documentId) && repo() === repository) {
-                state.update { it.copy(notes = it.notes.stoppedTrying(documentId)) }
                 load()
             }
         }

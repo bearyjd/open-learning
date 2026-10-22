@@ -2,19 +2,20 @@ package org.openlearning.app
 
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.CancellationException
+import retrofit2.HttpException
 
 /** Pure decisions behind the forget queue's hardening. Nothing here touches Room or WorkManager. */
 
-/** How a worker is enqueued. KEEP is only safe for the idempotent resume: it can lose to a worker that is finishing. */
-enum class ForgetEnqueue { KEEP, APPEND_OR_REPLACE }
+/** How a worker is enqueued. REPLACE restarts the unique work, KEEP leaves existing work alone. */
+enum class ForgetEnqueue { KEEP, REPLACE }
 enum class ForgetTrigger { NEW_FORGET, RETRY, RESUME }
 
 /**
- * A new forget or an explicit Retry must never be dropped because a previous worker is still finishing (it may have
- * published its outcome before WorkManager recorded it), so they append. The resume that runs on every connect and
- * every time the notes list opens keeps a running worker instead, so repeated calls cannot pile up a chain.
+ * A new forget or an explicit Retry replaces the unique work, so it is never dropped behind a worker that is finishing.
+ * That is safe because the worker re-reads its row at start and exits cleanly when it is not pending, and the server
+ * DELETE is idempotent. The resume that runs on every connect and every sweep keeps work that exists, so repeated calls cannot pile up.
  */
-fun forgetEnqueuePolicy(trigger: ForgetTrigger) = if (trigger == ForgetTrigger.RESUME) ForgetEnqueue.KEEP else ForgetEnqueue.APPEND_OR_REPLACE
+fun forgetEnqueuePolicy(trigger: ForgetTrigger) = if (trigger == ForgetTrigger.RESUME) ForgetEnqueue.KEEP else ForgetEnqueue.REPLACE
 
 const val FORGET_ID_MAX_LENGTH = 64
 private val FORGET_ID_CHARSET = Regex("[0-9a-fA-F-]+")
@@ -27,30 +28,31 @@ class InvalidForgetIdException : IllegalArgumentException("Invalid document id")
 const val FORGET_INVALID_ID_MESSAGE =
     "This note has an id the server does not issue, so nothing was queued or hidden. Refresh Your notes and try again."
 
+/** WorkManager accepted the request but its operation failed: a later resume can still succeed. */
+class ForgetScheduleTransientException(cause: Throwable) : Exception("Scheduling the forget failed", cause)
+
+/** Only bad input is permanent (an id that cannot be queued). Anything else may succeed later, so the row stays pending. */
+fun scheduleFailureIsPermanent(error: Throwable) = error is IllegalArgumentException
+
 /**
- * Schedules each row on its own: a row whose worker cannot be built (for example an id too large for WorkManager input)
- * is passed to [onFailed] and the others still run. Returns the number of rows that failed. Cancellation propagates.
+ * Schedules each row on its own. A permanent failure (see [scheduleFailureIsPermanent]) goes to [onFailed] and the others
+ * still run; a transient one leaves the row pending for the next resume. Returns the number of permanent failures.
+ * Cancellation propagates.
  */
 suspend fun scheduleEach(
-    rows: List<PendingForget>, trigger: ForgetTrigger, schedule: (String, String, ForgetEnqueue) -> Unit, onFailed: suspend (PendingForget) -> Unit,
+    rows: List<PendingForget>, trigger: ForgetTrigger, schedule: suspend (String, String, ForgetEnqueue) -> Unit, onFailed: suspend (PendingForget) -> Unit,
 ): Int {
     var failed = 0
     for (row in rows) {
         try { schedule(row.scope, row.documentId, forgetEnqueuePolicy(trigger)) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { failed++; onFailed(row) }
+        catch (error: Exception) { if (scheduleFailureIsPermanent(error)) { failed++; onFailed(row) } }
     }
     return failed
 }
 
-/** The marker hides the note from in-flight refreshes only while the commit can still succeed; any failure removes it. */
-suspend fun <T> markedUntilCommit(mark: () -> Unit, unmark: () -> Unit, commit: suspend () -> T): T {
-    mark()
-    try { return commit() } catch (error: Throwable) { unmark(); throw error }
-}
-
 /** Runs every step after the commit. A failure is counted, never raised: the commit is the success point and resume recovers the rest. */
-fun runBestEffort(vararg steps: () -> Unit): Int {
+suspend fun runBestEffort(vararg steps: suspend () -> Unit): Int {
     var failed = 0
     for (step in steps) {
         try { step() } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { failed++ }
@@ -69,13 +71,17 @@ fun Insight.isHiddenBy(hidden: Set<String>) = documentId.isNotBlank() && documen
 
 const val REVIEW_FETCH_CAP = 20
 
+/** The document of a review; Gson leaves it null when an older server does not send it. */
+fun Review.docId(): String { val id: String? = documentId; return id.orEmpty() }
+
 /** Reviews that may be shown, and the document id learned for each (insight id to document id). */
 data class ReviewView(val reviews: List<Review>, val documents: Map<String, String>)
 
 /**
- * Reviews carry only an insight id. With a forget queued, a review whose document cannot be resolved is hidden rather
- * than risk showing it. [cached] is free; [fetch] is a network call, made for at most [cap] reviews and not at all after
- * the first failure (offline). Nothing is looked up when nothing is hidden.
+ * A review names its document itself (older servers send nothing: blank). While anything is hidden, a blank one fails
+ * closed: its document is looked up through [cached] (free) or [fetch] (network, at most [cap] reviews, none after the
+ * first non-404 failure) and a review that cannot be resolved is dropped. A 404 drops only that review. Nothing is
+ * looked up when nothing is hidden.
  */
 suspend fun resolveReviews(
     reviews: List<Review>, hidden: Set<String>, cached: suspend (Review) -> String?, fetch: suspend (Review) -> String, cap: Int = REVIEW_FETCH_CAP,
@@ -84,9 +90,12 @@ suspend fun resolveReviews(
     var fetched = 0; var networkDown = false
     val documents = LinkedHashMap<String, String>()
     val shown = reviews.filter { review ->
-        val documentId = cached(review) ?: if (fetched < cap && !networkDown) {
+        val documentId = review.docId().ifBlank { null } ?: cached(review) ?: if (fetched < cap && !networkDown) {
             fetched++
-            try { fetch(review) } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { networkDown = true; null }
+            try { fetch(review) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: HttpException) { if (error.code() != 404) networkDown = true; null }
+            catch (error: Exception) { networkDown = true; null }
         } else null
         if (documentId != null) documents[review.insightId] = documentId
         documentId != null && (documentId.isBlank() || documentId !in hidden)
@@ -94,13 +103,12 @@ suspend fun resolveReviews(
     return ReviewView(shown, documents.filterKeys { key -> shown.any { it.insightId == key } })
 }
 
-const val FORGET_TOKEN_ROTATION_NOTICE =
-    "Notes you forgot while signed in with the previous token are still waiting to be deleted from the server. " +
-        "Reconnect with that token to finish."
+const val FORGET_ELSEWHERE_NOTICE =
+    "Some notes you forgot while connected to another server or token are still waiting to be deleted."
 
-/** One-time notice: the server is unchanged but queued forgets belong to another token's scope. Never names the server. */
-fun tokenRotationNotice(previousServer: String?, server: String, otherScopeRows: List<PendingForget>): String? =
-    if (previousServer == server && otherScopeRows.isNotEmpty()) FORGET_TOKEN_ROTATION_NOTICE else null
+/** Shown once per app start. Rows of another scope that still wait or failed; never names a server. */
+fun forgetElsewhereNotice(rows: List<PendingForget>, activeScope: String): String? =
+    if (rows.any { it.scope != activeScope && (it.status == FORGET_PENDING || it.status == FORGET_FAILED) }) FORGET_ELSEWHERE_NOTICE else null
 
 const val FORGET_STOP_MESSAGE =
     "The note stays on the server and will reappear here on the next refresh. This only stops this device from trying to delete it."

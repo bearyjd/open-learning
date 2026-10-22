@@ -12,6 +12,10 @@ const val FORGET_MAX_ATTEMPTS = 20
 
 const val FORGET_PENDING = "pending"
 const val FORGET_FAILED = "failed"
+/** The server deleted the note. The row stays as a durable tombstone (it keeps hiding the note) until a list answer settles it. */
+const val FORGET_CONFIRMED = "confirmed"
+/** A confirmed row is kept this long (measured from the start of the list request) before a list answer may delete it. */
+const val FORGET_CONFIRMED_TTL_MS = 7L * 24 * 60 * 60 * 1000
 
 /** Matches note ingest: the server answers 429 with Retry-After: 30. */
 const val FORGET_BACKOFF_SECONDS = NOTE_BACKOFF_SECONDS
@@ -43,7 +47,7 @@ fun forgetReplay(code: Int?, attempt: Int = 0): ForgetReplay {
     return if (replay == ForgetReplay.Retry && attempt + 1 >= FORGET_MAX_ATTEMPTS) ForgetReplay.Failed(FORGET_GAVE_UP_ERROR) else replay
 }
 
-/** Every queued row of the scope hides its note, pending or failed. */
+/** Every row of the scope hides its note: pending, failed or confirmed. */
 fun hiddenIds(rows: List<PendingForget>, scope: String): Set<String> = rows.filter { it.scope == scope }.mapTo(HashSet()) { it.documentId }
 
 /** The read-time filter shared by feed, library, search, review and the notes list. Blank ids are never hidden. */

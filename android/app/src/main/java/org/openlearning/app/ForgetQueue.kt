@@ -12,34 +12,31 @@ import kotlinx.coroutines.flow.map
  */
 class ForgetQueue(
     private val database: LearningDatabase,
-    private val forgotten: ForgottenNotes,
-    private val schedule: (scope: String, documentId: String, enqueue: ForgetEnqueue) -> Unit,
+    private val schedule: suspend (scope: String, documentId: String, enqueue: ForgetEnqueue) -> Unit,
     private val cancelIngest: (scope: String, id: String) -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val dao = database.dao()
 
     /**
-     * Validates the id first (a bad one is never queued). The in-memory marker is set only while the commit can still
-     * succeed. One transaction: queue the forget (idempotent), purge cached cards of the document, the completed import
-     * rows linked to it ([noteRowsToPurge]) and the queued, running or failed import rows linked to it. The commit is the
-     * success point: cancelling the ingest, the checkpoint and the scheduling are best effort afterwards, because
-     * [resumePending] recovers an unscheduled row. Returns the purged card ids. An unsent draft or an unlinked queued
-     * note has no document id, so it cannot be matched and is left alone.
+     * Validates the id first (a bad one is never queued). One transaction: queue the forget (idempotent), purge cached cards
+     * of the document, the completed import rows linked to it ([noteRowsToPurge]) and the queued, running or failed import
+     * rows linked to it. The commit is the success point, and from then on [LearningRepository.writeCards] keeps any late
+     * response from writing the cards back. Cancelling the ingest, the checkpoint and the scheduling are best effort
+     * afterwards, because [resumePending] recovers an unscheduled row. Returns the purged card ids. An unsent draft or an
+     * unlinked queued note has no document id, so it cannot be matched and is left alone.
      */
     suspend fun forgetNoteOffline(scope: String, documentId: String, title: String? = null): List<String> {
         if (documentId.isBlank()) return emptyList()
         if (!validForgetDocumentId(documentId)) throw InvalidForgetIdException()
         val active = mutableListOf<PendingIngest>()
-        val purged = markedUntilCommit({ forgotten.add(scope, documentId) }, { forgotten.remove(scope, documentId) }) {
-            database.withTransaction {
-                dao.putForget(PendingForget(scope, documentId, clock(), FORGET_PENDING))
-                active += activeRowsToCancel(dao.linkedNoteRows(scope, documentId), documentId)
-                active.forEach { dao.deleteJob(it.scope, it.id) }
-                purgeLocal(scope, documentId, title)
-            }
+        val purged = database.withTransaction {
+            dao.putForget(PendingForget(scope, documentId, clock(), FORGET_PENDING))
+            active += activeRowsToCancel(dao.linkedNoteRows(scope, documentId), documentId)
+            active.forEach { dao.deleteJob(it.scope, it.id) }
+            purgeLocal(scope, documentId, title)
         }
-        val cancels = active.map { { cancelIngest(it.scope, it.id) } }
+        val cancels = active.map { suspend { cancelIngest(it.scope, it.id) } }
         runBestEffort(*cancels.toTypedArray(), { schedule(scope, documentId, forgetEnqueuePolicy(ForgetTrigger.NEW_FORGET)) })
         database.checkpointBestEffort()
         return purged
@@ -54,20 +51,37 @@ class ForgetQueue(
     }
 
     /**
-     * The server confirmed (or had nothing to delete): drop the queue row and repeat the local purge, linked rows only
-     * (the title fallback ran once at forget time and must not widen). The in-memory marker stays until a fresh server
-     * list no longer contains the note, so a response already in flight cannot write its cards back.
+     * The server confirmed (or had nothing to delete). One transaction: the row becomes a durable "confirmed" tombstone
+     * (upserted, so a row that went missing or failed is recorded too), then the cards and the linked completed import
+     * rows are purged (linked rows only: the title fallback ran once at forget time and must not widen). The tombstone keeps
+     * hiding the note, and [LearningRepository.writeCards] keeps refusing its cards, until [reconcile] settles it.
      */
     suspend fun confirmed(scope: String, documentId: String) {
         database.withTransaction {
-            dao.deleteForget(scope, documentId)
+            dao.confirmForget(PendingForget(scope, documentId, clock(), FORGET_CONFIRMED))
             val ids = dao.allInsights(scope).filter { documentIdOfPayload(it.payload) == documentId }.map { it.id }
             if (ids.isNotEmpty()) dao.deleteInsights(scope, ids)
             linkedRowsToPurge(dao.completedNoteRows(scope, COMPLETED_STATES), documentId).forEach { dao.deleteJob(it.scope, it.id) }
         }
-        forgotten.confirmed(scope, documentId)
         database.checkpointBestEffort()
     }
+
+    /**
+     * Settles confirmed rows against a server list answer ([serverIds], [complete], and [requestStartedAt], the clock when the
+     * request began). See [confirmedDecisions]. One transaction, no network inside. A revived row (the server still lists
+     * the note after the TTL) goes back to pending and its worker is enqueued again; the DELETE is idempotent.
+     */
+    suspend fun reconcile(scope: String, serverIds: Set<String>, complete: Boolean, requestStartedAt: Long) {
+        val revived = database.withTransaction {
+            val decisions = confirmedDecisions(scope, dao.confirmedForgets(scope), serverIds, complete, requestStartedAt)
+            if (decisions.delete.isNotEmpty()) dao.deleteForgets(scope, decisions.delete)
+            decisions.revive.map { id -> PendingForget(scope, id, clock(), FORGET_PENDING).also { dao.confirmForget(it) } }
+        }
+        if (revived.isNotEmpty()) scheduleEach(revived, ForgetTrigger.RETRY, schedule) { markFailed(it.scope, it.documentId, FORGET_SCHEDULE_ERROR) }
+    }
+
+    /** The background sweep only fetches the list when this is true. */
+    suspend fun confirmedNeedReconcile(scope: String): Boolean = sweepNeedsReconcile(dao.confirmedForgets(scope), clock())
 
     suspend fun markFailed(scope: String, documentId: String, error: String) { dao.setForgetStatus(scope, documentId, FORGET_FAILED, error) }
 
@@ -84,7 +98,6 @@ class ForgetQueue(
         val row = dao.forget(scope, documentId) ?: return false
         if (!canStopTrying(row)) return false
         dao.deleteForget(scope, documentId)
-        forgotten.remove(scope, documentId)
         return true
     }
 
@@ -103,9 +116,6 @@ class ForgetQueue(
     fun failedForgets(scope: String): Flow<List<PendingForget>> = dao.failedForgets(scope)
     fun hiddenIds(scope: String): Flow<Set<String>> = dao.observeForgets(scope).map { hiddenIds(it, scope) }
     suspend fun hidden(scope: String): Set<String> = dao.hiddenIds(scope).toSet()
-
-    suspend fun visibleNotes(scope: String, notes: List<NoteSummary>) = notes.hideForgotten(hidden(scope)) { it.documentId }
-    suspend fun visibleInsights(scope: String, items: List<Insight>) = items.hideForgotten(hidden(scope)) { it.documentId }
 
     /** Reviews carry only an insight id: see [resolveReviews]. The document ids learned are returned for later hiding. */
     suspend fun visibleReviews(repository: LearningRepository, reviews: List<Review>): ReviewView {
