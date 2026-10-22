@@ -166,7 +166,11 @@ class NoteAcceptanceTest {
     private fun completeOneNote() {
         launchEditor(); submit("Lecture 3", body, label = "Lecture 3")
         awaitRow { it.status == "completed" }
-        waitUntil { compose.onAllNodesWithText("Your note: Lecture 3").fetchSemanticsNodes().isNotEmpty() }
+        // The feed is a lazy list: the card is not in the semantics tree until scrolled into the window.
+        waitUntil {
+            runCatching { compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Your note: Lecture 3")) }
+            compose.onAllNodesWithText("Your note: Lecture 3").fetchSemanticsNodes().isNotEmpty()
+        }
     }
     private fun launchEditor() { scenario = ActivityScenario.launch(MainActivity::class.java); openEditor() }
     private fun openEditor() { waitText("Write or import a note"); scrollTo("Write or import a note").performClick() }

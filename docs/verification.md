@@ -515,8 +515,11 @@ no sentinel body in the UI, and the new 429 scenario PASS (fixed busy/retrying m
 POST, the job row completed ("Note: Lecture 3 / Completed") and the feed list showing "Today's ideas" with the note card
 not in the semantics tree; the card sits in the lazy feed below the visible window, and the wait does a plain
 `onAllNodesWithText` without scrolling. Classification: test bug (the wait must scroll to the card, as `scrollTo` does
-afterwards), not an app bug, which the adb script corroborates (it scrolls and finds the card). Not fixed or re-run here.
-Observation, not diagnosed: the "Note queued..." banner was still showing after the job completed. `LiveLearningLoopTest`
+afterwards), not an app bug, which the adb script corroborates (it scrolls and finds the card). Fixed afterwards,
+compile-only and NOT re-run on a device: the `completeOneNote` wait now scrolls to the card (bounded by the 15 s
+`waitUntil`, no sleeps). The three tests remain unverified on device until re-run.
+Observation: the "Note queued..." banner was still showing after the job completed. Nothing clears it on completion:
+`LearningViewModel.kt:204` sets `notice` and only `clearError()` (line 344, user dismiss) or another notice replaces it. `LiveLearningLoopTest`
 was not run.
 
 Still unverified on device: the SAF file picker through DocumentsUI, the remove-job race (cancel versus a submitting
