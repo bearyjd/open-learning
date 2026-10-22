@@ -47,6 +47,9 @@ fun forgetReplay(code: Int?, attempt: Int = 0): ForgetReplay {
     return if (replay == ForgetReplay.Retry && attempt + 1 >= FORGET_MAX_ATTEMPTS) ForgetReplay.Failed(FORGET_GAVE_UP_ERROR) else replay
 }
 
+/** Server confirmed but the local cleanup threw: retried like any other failure, and capped by the same attempt limit. */
+fun forgetCleanupFailed(attempt: Int): ForgetReplay = forgetReplay(null, attempt)
+
 /** Every row of the scope hides its note: pending, failed or confirmed. */
 fun hiddenIds(rows: List<PendingForget>, scope: String): Set<String> = rows.filter { it.scope == scope }.mapTo(HashSet()) { it.documentId }
 

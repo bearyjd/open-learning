@@ -29,7 +29,13 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // The DELETE is idempotent (404 is Done), so a failed local cleanup is repeated by retrying the whole job.
             ForgetReplay.Done -> try { queue.confirmed(scope, documentId); Result.success() }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (error: Exception) { android.util.Log.w("OpenLearning", "Cleaning up a forgotten note failed, retrying"); Result.retry() }
+                catch (error: Exception) {
+                    android.util.Log.w("OpenLearning", "Cleaning up a forgotten note failed")
+                    when (val capped = forgetCleanupFailed(runAttemptCount)) {
+                        is ForgetReplay.Failed -> { queue.markFailed(scope, documentId, capped.error); Result.success() }
+                        else -> Result.retry()
+                    }
+                }
             is ForgetReplay.Failed -> { queue.markFailed(scope, documentId, replay.error); Result.success() }
             ForgetReplay.Retry -> Result.retry()
         }

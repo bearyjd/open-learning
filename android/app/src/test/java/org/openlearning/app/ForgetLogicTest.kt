@@ -49,4 +49,9 @@ class ForgetLogicTest {
         assertEquals(ForgetStart.LEAVE_PENDING, forgetStart("b", "a"))
         assertEquals(ForgetStart.LEAVE_PENDING, forgetStart(null, "a"))
     }
+    @Test fun failedCleanupAfterAConfirmedDeleteRetriesOnlyUpToTheCap() {
+        assertEquals(ForgetReplay.Retry, forgetCleanupFailed(0))
+        assertEquals(ForgetReplay.Retry, forgetCleanupFailed(FORGET_MAX_ATTEMPTS - 2))
+        assertEquals(ForgetReplay.Failed(FORGET_GAVE_UP_ERROR), forgetCleanupFailed(FORGET_MAX_ATTEMPTS - 1))
+    }
 }
