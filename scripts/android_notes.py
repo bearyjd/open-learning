@@ -42,6 +42,17 @@ NOTE = {
     "tags": ["memory"], "saved": False, "coverage": "full_source", "source_truncated": False, "model": "mock",
     "source_kind": "note", "source_label": "",
 }
+ALLOWED_PACKAGES = {PACKAGE, "com.google.android.inputmethod.latin", "com.android.systemui"}
+FORBIDDEN_TEXT = re.compile(r"bitwarden|save password|autofill|use saved|password manager", re.I)
+MIN_INPUT_GAP = 2.0  # seconds between any two input actions
+MIN_POLL_GAP = 3.0   # seconds between uiautomator dumps
+STEP = {"name": "start", "last_input": 0.0, "last_dump": 0.0}
+
+
+class SupervisedAbort(RuntimeError):
+    """An unexpected overlay or foreground change: stop touching the device immediately."""
+
+
 LINK_LABELS = ("Open original source", "Check source", "Open source article")
 # Characters `adb shell input text` types verbatim and the device shell never reinterprets. ':', '/', '-', '_', '=',
 # '@' and '+' cover the loopback URL and token; '%' is excluded because `input text` reads "%s" as a space.
@@ -161,17 +172,31 @@ class Device:
         return result.stdout
 
     def shell(self, *args, check=True):
+        if args and args[0] in ("input", "am", "pm"):
+            wait = STEP["last_input"] + MIN_INPUT_GAP - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            STEP["last_input"] = time.time()
         return self.run("shell", *args, check=check)
 
     def pid(self):
         return self.shell("pidof", PACKAGE, check=False).strip()
 
     def dump(self, name=None):
+        wait = STEP["last_dump"] + MIN_POLL_GAP - time.time()
+        if wait > 0:
+            time.sleep(wait)
         raw = self.run("exec-out", "uiautomator", "dump", "/dev/tty")
+        STEP["last_dump"] = time.time()
         raw = raw[raw.index("<?xml"): raw.rindex("</hierarchy>") + len("</hierarchy>")]
         root = ET.fromstring(raw)
-        if not any(n.get("package") == PACKAGE for n in root.iter("node")):
-            raise RuntimeError("acceptance app is not in the foreground; aborting")
+        pkgs = {n.get("package") for n in root.iter("node")}
+        if PACKAGE not in pkgs:
+            raise SupervisedAbort("step %r: acceptance app not in foreground (packages %s)" % (STEP["name"], sorted(p for p in pkgs if p)))
+        extra = {p for p in pkgs if p} - ALLOWED_PACKAGES
+        hits = [t for n in root.iter("node") for t in (n.get("text"), n.get("content-desc")) if t and FORBIDDEN_TEXT.search(t)]
+        if extra or hits:
+            raise SupervisedAbort("step %r: unexpected overlay packages=%s texts=%s" % (STEP["name"], sorted(extra), hits[:3]))
         if name:  # XML only. The dump holds field text, so it stays in the git-ignored evidence directory.
             (self.out / (name + ".xml")).write_text(raw)
         return root
@@ -196,7 +221,7 @@ class Device:
                 self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                 time.sleep(0.8)
                 return
-            time.sleep(0.7)
+            time.sleep(MIN_POLL_GAP)
         raise RuntimeError("UI element not found: " + pattern)
 
     def type(self, text):
@@ -208,7 +233,7 @@ class Device:
         while time.time() < end:
             if self.find(pattern):
                 return True
-            time.sleep(0.7)
+            time.sleep(MIN_POLL_GAP)
         return False
 
     def kill_and_relaunch(self):
@@ -225,14 +250,21 @@ class Device:
         return before, after
 
 
-def connect(dev, port):
+def connect(dev, port, results):
+    STEP["name"] = "connect:clear+launch"
     dev.shell("pm", "clear", PACKAGE)
     dev.shell("am", "start", "-n", ACTIVITY)
     dev.wait_for("Connect your server")
     dev.tap("Server URL")
     dev.type("http://127.0.0.1:%d" % port)
+    STEP["name"] = "connect:tap Access token"
     dev.tap("Access token")
+    STEP["name"] = "connect:type token"
     dev.type(TOKEN)
+    time.sleep(4)
+    STEP["name"] = "connect:post-token autofill check"
+    dev.dump("00-after-token")  # raises SupervisedAbort if a Bitwarden/autofill sheet or foreign window is present
+    results["bitwarden_prompt_at_token_step"] = False
     dev.shell("input", "keyevent", "KEYCODE_BACK")
     time.sleep(1)
     box = dev.find("Allow HTTP")
@@ -284,7 +316,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         dev.run("reverse", "--no-rebind", remote, remote)
         owns_reverse = True
-        connect(dev, args.port)
+        connect(dev, args.port, results)
 
         fill_editor(dev)
         expected = len(NOTE_TEXT)
@@ -329,6 +361,11 @@ def main():
               and results["forget_cancel_deletes"] == 0 and results["forget_confirm_deletes"] == 1
               and results["413_message"] and not results["sentinel_body_in_ui"])
         return 0 if ok else 1
+    except SupervisedAbort as exc:
+        results["ABORTED"] = str(exc)
+        results.setdefault("bitwarden_prompt_at_token_step", "token" in STEP["name"] or None)
+        print(json.dumps(results, indent=1))
+        return 2
     finally:
         if owns_reverse:
             dev.run("reverse", "--remove", remote, check=False)
