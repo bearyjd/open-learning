@@ -1,5 +1,6 @@
 package org.openlearning.app
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -90,5 +91,22 @@ class ForgetPruneTest {
             PendingForget("t", "abc", 3, FORGET_FAILED, FORGET_REJECTED_ERROR),
         ), merged)
         assertEquals(merged, mergeForgetRowsByLowerId(rows.reversed()).sortedWith(compareBy({ it.scope }, { it.documentId })))
+    }
+
+    private fun notes(n: Int) = (0 until n).map { NoteListItem(documentId = "ID-$it") }
+    private suspend fun scan(all: List<NoteListItem>, limit: Int = 5, maxPages: Int = 4) =
+        scanNotes(limit, maxPages) { l, o -> all.drop(o).take(l) }
+
+    @Test fun aScanPagesPastTheFirstPageAndEndsOnAShortPage() = runBlocking {
+        val result = scan(notes(12))
+        assertTrue(result.complete)
+        assertEquals((0 until 12).mapTo(HashSet()) { "id-$it" }, result.ids)
+    }
+    @Test fun aScanOfAnEmptyListIsComplete() = runBlocking { assertTrue(scan(emptyList()).complete) }
+    @Test fun aScanThatEndsExactlyOnAFullPageIsNotComplete() = runBlocking { assertFalse(scan(notes(20)).complete) }
+    @Test fun aScanOverThePageBudgetIsNotCompleteAndKeepsWhatItRead() = runBlocking {
+        val result = scan(notes(30))
+        assertFalse(result.complete)
+        assertEquals(20, result.ids.size)
     }
 }

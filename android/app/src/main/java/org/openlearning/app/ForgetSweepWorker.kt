@@ -17,8 +17,9 @@ class ForgetSweepWorker(context: Context, params: WorkerParameters) : CoroutineW
             queue.resumePending(config.scope)
             if (queue.confirmedNeedReconcile(config.scope)) {
                 val startedAt = System.currentTimeMillis()
-                val page = serverPage(container.repository(config).api.notes())
-                queue.reconcile(config.scope, page.ids, page.complete, startedAt)
+                val api = container.repository(config).api
+                val scan = scanNotes { limit, offset -> api.notes(limit, offset) }
+                queue.reconcile(config.scope, scan.ids, scan.complete, startedAt)
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (error: Exception) { android.util.Log.w("OpenLearning", "Forget sweep did not finish") }
