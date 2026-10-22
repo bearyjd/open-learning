@@ -78,15 +78,14 @@ fun Review.docId(): String { val id: String? = documentId; return id.orEmpty() }
 data class ReviewView(val reviews: List<Review>, val documents: Map<String, String>)
 
 /**
- * A review names its document itself (older servers send nothing: blank). While anything is hidden, a blank one fails
- * closed: its document is looked up through [cached] (free) or [fetch] (network, at most [cap] reviews, none after the
- * first non-404 failure) and a review that cannot be resolved is dropped. A 404 drops only that review. Nothing is
- * looked up when nothing is hidden.
+ * A review names its document itself (older servers send nothing: blank). A blank one fails closed, always (also when
+ * nothing is hidden yet, so a forget that starts later can still scrub it): its document is looked up through [cached]
+ * (free) or [fetch] (network, at most [cap] reviews, none after the first non-404 failure) and a review that cannot be
+ * resolved is dropped. A 404 drops only that review. Reviews that name their document need no lookup.
  */
 suspend fun resolveReviews(
     reviews: List<Review>, hidden: Set<String>, cached: suspend (Review) -> String?, fetch: suspend (Review) -> String, cap: Int = REVIEW_FETCH_CAP,
 ): ReviewView {
-    if (hidden.isEmpty()) return ReviewView(reviews, emptyMap())
     var fetched = 0; var networkDown = false
     val documents = LinkedHashMap<String, String>()
     val shown = reviews.filter { review ->

@@ -57,8 +57,8 @@ class ForgetHardeningTest {
         assertEquals(listOf("r2"), view.reviews.map { it.id })
         assertEquals(mapOf("i2" to "d2"), view.documents)
     }
-    @Test fun noLookupsWhenNothingIsHidden() = runBlocking {
-        val reviews = listOf(review("r1", "i1"))
+    @Test fun noLookupsWhenTheReviewNamesItsDocument() = runBlocking {
+        val reviews = listOf(Review("r1", "i1", "q", "2026-01-01", 1.0, documentId = "d1"))
         val view = resolveReviews(reviews, emptySet(), { error("cache") }, { error("network") })
         assertEquals(reviews, view.reviews)
     }

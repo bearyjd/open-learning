@@ -70,8 +70,8 @@ class ForgetStructuralTest {
         val view = resolveReviews(listOf(review("r1", "i1"), review("r2", "i2")), setOf("d1"), { null }, { calls++; throw http(500) })
         assertEquals(1, calls); assertTrue(view.reviews.isEmpty())
     }
-    @Test fun nothingHiddenMeansNothingLooked() = runBlocking {
-        val reviews = listOf(review("r1", "i1"))
+    @Test fun nothingHiddenAndIdsKnownMeansNothingLooked() = runBlocking {
+        val reviews = listOf(review("r1", "i1", "d1"))
         assertEquals(reviews, resolveReviews(reviews, emptySet(), { error("c") }, { error("n") }).reviews)
     }
     @Test fun reviewDocumentIdSurvivesAnOldServerAnswer() {
