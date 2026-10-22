@@ -128,6 +128,9 @@ class ForgetStructuralTest {
         val text = source("LearningViewModel.kt")
         assertTrue("onHidden is not wired", Regex("""onHidden\s*=\s*publisher::purgeNow""").containsMatchIn(text))
         assertTrue("onReleased is not wired", Regex("""onReleased\s*=\s*publisher::release""").containsMatchIn(text))
+        val cleared = text.substringAfter("override fun onCleared(", "").substringBefore("super.onCleared()")
+        assertTrue("onHidden is not reset in onCleared", Regex("""onHidden\s*=\s*\{\s*_\s*,\s*_\s*->\s*\}""").containsMatchIn(cleared))
+        assertTrue("onReleased is not reset in onCleared", Regex("""onReleased\s*=\s*\{\s*_\s*,\s*_\s*->\s*\}""").containsMatchIn(cleared))
     }
 
     // A text scan, NOT a runtime guarantee: every PendingForget row delete in the queue is followed by the release hook.

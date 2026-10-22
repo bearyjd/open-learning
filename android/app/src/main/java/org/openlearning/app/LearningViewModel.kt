@@ -31,6 +31,11 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private val publisher: ScreenPublisher = ScreenPublisher(container.forgetQueue::hidden, container.forgetQueue::hiddenIds) { memory.clear(); chatSession.reset() }
     private val chatSession = ChatSession(publisher)
     init { container.forgetQueue.apply { onHidden = publisher::purgeNow; onReleased = publisher::release } }
+    /** The queue is app-scoped and outlives this view model: it must not keep calling a publisher nobody reads. */
+    override fun onCleared() {
+        container.forgetQueue.apply { onHidden = { _, _ -> }; onReleased = { _, _ -> } }
+        super.onCleared()
+    }
     private var elsewhereNoticeShown = false
     /**
      * What the screen sees: the retained state with every document of the durable forget set scrubbed out, on every emission
