@@ -242,28 +242,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             }
         }
     }
-    /** Online-only: nothing is cleared locally unless the server confirms the note is gone. */
-    fun forgetNote(item: Insight) {
-        val repository = repo ?: return
-        val scope = repository.config.scope
-        if (!item.isNote() || item.documentId.isBlank()) return
-        viewModelScope.launch {
-            container.forgotten.add(scope, item.documentId)
-            try {
-                val response = repository.api.forgetNote(item.documentId)
-                if (!response.isGone()) throw HttpException(response)
-                val purged = repository.purgeDocument(item.documentId)
-                if (repo === repository) {
-                    memory.clear(); detailJob?.cancel(); chatGeneration++
-                    mutable.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice("Note forgotten.")) }
-                }
-            } catch (cancelled: CancellationException) { container.forgotten.remove(scope, item.documentId); throw cancelled }
-            catch (error: Exception) {
-                container.forgotten.remove(scope, item.documentId)
-                if (repo === repository) mutable.update { it.copy(error = forgetFailureMessage(error)) }
-            }
-        }
-    }
+    fun forgetNote(item: Insight) = notesActions.forgetInsight(item)
     /**
      * Cancels the worker and waits (bounded) for it to stop, re-reads the row (it may have just submitted), drops the
      * server job unless another row shares it, then the row. Completed notes are removed by forgetting instead.

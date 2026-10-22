@@ -127,4 +127,12 @@ class NoteLogicTest {
         assertSame(queued, noticeAfterJobUpdate(queued, listOf(job("j1", "queued"), job("u1", "completed", kind = "url"))))
         assertEquals("Note queued.", queued.text)
     }
+    @Test fun forgetOutcomeMapsToMessages() {
+        assertNull(ForgetResult.Done(listOf("x")).message())
+        assertEquals(FORGET_PARTIAL_MESSAGE, ForgetResult.PurgeFailed.message())
+        assertTrue(FORGET_PARTIAL_MESSAGE.startsWith("Deleted on the server") && "hidden" in FORGET_PARTIAL_MESSAGE)
+        val failed = ForgetResult.Failed(java.io.IOException("SECRET-BODY")).message()!!
+        assertEquals(forgetFailureMessage(java.io.IOException("x")), failed)
+        assertFalse("SECRET" in failed)
+    }
 }

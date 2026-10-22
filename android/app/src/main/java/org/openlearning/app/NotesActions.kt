@@ -38,26 +38,56 @@ internal class NotesActions(
         }
     }
 
-    /** Online-only: nothing is cleared locally unless the server confirms the note is gone (204 or 404). */
+    /**
+     * Online-only: nothing is cleared locally unless the server confirms the note is gone (204 or 404, so a retry after a
+     * lost answer succeeds). The tombstone is set first so an in-flight refresh cannot write cards back; it is dropped only
+     * when the server did not delete. A cleanup error after the server delete keeps it (the note stays hidden).
+     */
+    private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult {
+        val scopeKey = repository.config.scope
+        forgotten.add(scopeKey, documentId)
+        try {
+            val response = repository.api.forgetNote(documentId)
+            if (!response.isGone()) throw HttpException(response)
+        } catch (cancelled: CancellationException) { forgotten.remove(scopeKey, documentId); throw cancelled }
+        catch (error: Exception) { forgotten.remove(scopeKey, documentId); return ForgetResult.Failed(error) }
+        return try { ForgetResult.Done(repository.purgeDocument(documentId, title)) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not clean up a forgotten note on this device"); ForgetResult.PurgeFailed }
+    }
+
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
-        val scopeKey = repository.config.scope
         if (note.documentId in state.value.notes.forgetting) return
         state.update { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
         scope.launch {
-            forgotten.add(scopeKey, note.documentId)
-            try {
-                val response = repository.api.forgetNote(note.documentId)
-                if (!response.isGone()) throw HttpException(response)
-                val purged = repository.purgeDocument(note.documentId)
-                if (repo() === repository) {
+            val result = deleteAndPurge(repository, note.documentId, note.title)
+            if (repo() !== repository) return@launch
+            when (result) {
+                is ForgetResult.Failed -> state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message().orEmpty())) }
+                else -> {
                     onForgotten()
-                    state.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId)) }
+                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
+                    state.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId, result.message() ?: "Note forgotten.")) }
                 }
-            } catch (cancelled: CancellationException) { forgotten.remove(scopeKey, note.documentId); throw cancelled }
-            catch (error: Exception) {
-                forgotten.remove(scopeKey, note.documentId)
-                if (repo() === repository) state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, forgetFailureMessage(error))) }
+            }
+        }
+    }
+
+    /** Forget from a note's detail screen; same rules as [forget]. */
+    fun forgetInsight(item: Insight) {
+        val repository = repo() ?: return
+        if (!item.isNote() || item.documentId.isBlank()) return
+        scope.launch {
+            val result = deleteAndPurge(repository, item.documentId, item.title)
+            if (repo() !== repository) return@launch
+            when (result) {
+                is ForgetResult.Failed -> state.update { it.copy(error = result.message()) }
+                else -> {
+                    onForgotten()
+                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
+                    state.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice(result.message() ?: "Note forgotten.")) }
+                }
             }
         }
     }

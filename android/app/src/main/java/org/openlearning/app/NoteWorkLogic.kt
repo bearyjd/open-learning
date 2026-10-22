@@ -15,14 +15,26 @@ fun PendingIngest.canRemove() = isNoteJob() && !isCompletedState(status)
 fun PendingIngest.purgeableAfterScopeChange() = text == null && isCompletedState(status)
 
 /**
- * The completed note rows to delete when forgetting [documentId]: those linked to it. A row with no link (made before
- * schema v3) cannot be matched, so only when no row is linked to the document are the unlinked rows removed, so no
- * title outlives the note. Rows linked to other documents are never touched.
+ * The completed note rows to delete when forgetting [documentId] (whose title was [title]): those linked to it, plus
+ * unlinked rows (made before schema v3, so they cannot be matched by id):
+ * - once any completed row anywhere carries a document id, unlinked rows go only when their title equals [title];
+ * - in a purely pre-migration state (no row has an id) the unlinked rows whose title matches go, and when none match
+ *   every unlinked row goes, so no title outlives the note.
+ * Rows linked to other documents are never touched. Residual: an unlinked row with the same title as the forgotten
+ * note is removed even if it belonged to a different note, and in the pure pre-migration state with no title match
+ * other notes' unlinked rows are removed too. Those rows are only completed history; the server keeps the notes.
  */
-fun noteRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String): List<PendingIngest> {
+fun noteRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String, title: String? = null): List<PendingIngest> {
     val linked = completedNoteRows.filter { it.documentId == documentId }
-    return linked.ifEmpty { completedNoteRows.filter { it.documentId == null } }
+    val unlinked = completedNoteRows.filter { it.documentId == null }
+    val wanted = title?.let(::normalizedNoteTitle)
+    val titled = if (wanted == null) emptyList() else unlinked.filter { normalizedNoteTitle(it.title) == wanted }
+    val pureLegacy = completedNoteRows.none { it.documentId != null }
+    return linked + if (pureLegacy && titled.isEmpty()) unlinked else titled
 }
+
+/** The list shows a blank title as "Untitled", so rows compare the same way. */
+private fun normalizedNoteTitle(title: String?) = title.orEmpty().trim().ifBlank { "Untitled" }
 
 /** The server answers 429 with Retry-After: 30, so note retries never start sooner than this. */
 const val NOTE_BACKOFF_SECONDS = 30L

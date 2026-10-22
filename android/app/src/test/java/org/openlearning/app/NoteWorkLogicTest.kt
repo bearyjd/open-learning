@@ -95,10 +95,26 @@ class NoteWorkLogicTest {
         val rows = listOf(done("a", "doc-1"), done("b", "doc-2"), done("c", null))
         assertEquals(listOf("a"), noteRowsToPurge(rows, "doc-1").map { it.id })
     }
-    @Test fun purgeFallsBackToUnlinkedRowsOnlyWhenNothingIsLinked() {
-        val rows = listOf(done("b", "doc-2"), done("c", null), done("d", null))
+    private fun legacy(id: String, title: String?) = done(id, null).copy(title = title)
+    @Test fun mixedStateNeverDeletesUnlinkedRowsWithoutATitleMatch() {
+        val rows = listOf(done("b", "doc-2"), legacy("c", "Other"), legacy("d", "Another"))
+        assertTrue(noteRowsToPurge(rows, "doc-1").isEmpty())
+        assertTrue(noteRowsToPurge(rows, "doc-1", "Mine").isEmpty())
+    }
+    @Test fun mixedStateDeletesUnlinkedRowsWithTheSameTitle() {
+        val rows = listOf(done("a", "doc-1"), done("b", "doc-2"), legacy("c", "Mine"), legacy("d", " Mine "), legacy("e", "Other"))
+        assertEquals(listOf("a", "c", "d"), noteRowsToPurge(rows, "doc-1", "Mine").map { it.id })
+    }
+    @Test fun blankRowTitleMatchesUntitled() {
+        val rows = listOf(done("b", "doc-2"), legacy("c", null), legacy("d", "Other"))
+        assertEquals(listOf("c"), noteRowsToPurge(rows, "doc-1", "Untitled").map { it.id })
+    }
+    @Test fun pureLegacyStateDeletesTitleMatchesElseAllUnlinked() {
+        val rows = listOf(legacy("c", "Mine"), legacy("d", "Other"))
+        assertEquals(listOf("c"), noteRowsToPurge(rows, "doc-1", "Mine").map { it.id })
+        assertEquals(listOf("c", "d"), noteRowsToPurge(rows, "doc-1", "Gone title").map { it.id })
         assertEquals(listOf("c", "d"), noteRowsToPurge(rows, "doc-1").map { it.id })
-        assertTrue(noteRowsToPurge(listOf(done("b", "doc-2")), "doc-1").isEmpty())
+        assertTrue(noteRowsToPurge(emptyList(), "doc-1", "Mine").isEmpty())
     }
     @Test fun noteBackoffStartsAtServerRetryAfter() {
         assertEquals(30L, NOTE_BACKOFF_SECONDS)

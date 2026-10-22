@@ -193,24 +193,24 @@ class LearningRepository(val config: Connection, private val database: LearningD
      * Deletes every cached card of this scope that belongs to the document, scanning all rows (not the feed/library
      * filter), and only the completed, text-free import rows linked to that document ([purgeNoteLinkedRows]).
      */
-    suspend fun purgeDocument(documentId: String): List<String> {
+    suspend fun purgeDocument(documentId: String, title: String? = null): List<String> {
         val ids = database.withTransaction {
             val found = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
             if (found.isNotEmpty()) dao.deleteInsights(config.scope, found)
-            deleteNoteRows(documentId)
+            deleteNoteRows(documentId, title)
             found
         }
         database.checkpointBestEffort()
         return ids
     }
     /** Targeted purge of the completed import rows of one note; see [noteRowsToPurge] for the pre-migration fallback. */
-    suspend fun purgeNoteLinkedRows(documentId: String): Int {
-        val removed = database.withTransaction { deleteNoteRows(documentId) }
+    suspend fun purgeNoteLinkedRows(documentId: String, title: String? = null): Int {
+        val removed = database.withTransaction { deleteNoteRows(documentId, title) }
         database.checkpointBestEffort()
         return removed
     }
-    private suspend fun deleteNoteRows(documentId: String): Int {
-        val rows = noteRowsToPurge(dao.completedNoteRows(config.scope, COMPLETED_STATES), documentId)
+    private suspend fun deleteNoteRows(documentId: String, title: String?): Int {
+        val rows = noteRowsToPurge(dao.completedNoteRows(config.scope, COMPLETED_STATES), documentId, title)
         rows.forEach { dao.deleteJob(it.scope, it.id) }
         return rows.size
     }

@@ -88,3 +88,20 @@ fun forgetFailureMessage(error: Throwable, outcome: String = "the note was not f
     is java.io.IOException -> "Can't reach your server, so $outcome. Try again when you're online."
     else -> "The server could not complete that, so $outcome. Try again."
 }
+
+/** How forgetting a note ended. The server DELETE decides success; a local cleanup failure afterwards is only partial. */
+sealed interface ForgetResult {
+    data class Done(val purged: List<String>) : ForgetResult
+    /** The server deleted it but this device's cleanup threw: the tombstone stays so the note remains hidden. */
+    data object PurgeFailed : ForgetResult
+    data class Failed(val error: Throwable) : ForgetResult
+}
+
+const val FORGET_PARTIAL_MESSAGE = "Deleted on the server; cleaning up this device failed. It will be hidden."
+
+/** The banner for a finished forget, or null when it simply worked. */
+fun ForgetResult.message(): String? = when (this) {
+    is ForgetResult.Done -> null
+    ForgetResult.PurgeFailed -> FORGET_PARTIAL_MESSAGE
+    is ForgetResult.Failed -> forgetFailureMessage(error)
+}
