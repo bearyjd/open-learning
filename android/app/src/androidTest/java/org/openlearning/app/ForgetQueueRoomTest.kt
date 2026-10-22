@@ -27,7 +27,7 @@ class ForgetQueueRoomTest {
         context.deleteDatabase(NAME)
         db = Room.databaseBuilder(context, LearningDatabase::class.java, NAME)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING).addCallback(SecureDeleteCallback).build()
-        queue = ForgetQueue(db, ForgottenNotes(), { scope, id, _ -> scheduled += scope to id }, { scope, id -> cancelled += scope to id }, clock = { 42L })
+        queue = ForgetQueue(db, { scope, id, _ -> scheduled += scope to id }, { scope, id -> cancelled += scope to id }, clock = { 42L })
     }
     @After fun close() { db.close(); context.deleteDatabase(NAME) }
 
@@ -79,10 +79,10 @@ class ForgetQueueRoomTest {
         assertEquals(1, dao.forgets(other).size); assertEquals(1, dao.forgets(mine.scope).size)
     }
 
-    @Test fun confirmedDropsTheRowAndOtherAccountsRowsSurvive() = runBlocking {
+    @Test fun confirmedKeepsADurableRowAndOtherAccountsRowsSurvive() = runBlocking {
         dao.putForget(PendingForget("s", "d1", 1, FORGET_PENDING)); dao.putForget(PendingForget("t", "d1", 1, FORGET_PENDING))
         queue.confirmed("s", "d1")
-        assertTrue(dao.forgets("s").isEmpty()); assertEquals(1, dao.forgets("t").size)
+        assertEquals(listOf(PendingForget("s", "d1", 42, FORGET_CONFIRMED)), dao.forgets("s")); assertEquals(FORGET_PENDING, dao.forget("t", "d1")?.status)
     }
 
     @Test fun retryReschedulesOnlyFailedRows() = runBlocking {
@@ -105,9 +105,10 @@ class ForgetQueueRoomTest {
         // A fresh queue and repository read only Room, as after process death.
         dao.putForget(PendingForget(scope, "d1", 1, FORGET_PENDING))
         assertEquals(listOf("feed-kept"), repo.cached.first().map { it.id })
-        val fresh = ForgetQueue(db, ForgottenNotes(), { _, _, _ -> }, { _, _ -> })
-        assertEquals(listOf("b"), fresh.visibleInsights(scope, listOf(Insight(id = "a", documentId = "d1"), Insight(id = "b", documentId = "d2"))).map { it.id })
-        assertEquals(listOf("d2"), fresh.visibleNotes(scope, listOf(NoteSummary("d1", "t", null, "", 1), NoteSummary("d2", "t", null, "", 1))).map { it.documentId })
+        val fresh = ForgetQueue(db, { _, _, _ -> }, { _, _ -> })
+        val hidden = fresh.hidden(scope)
+        assertEquals(setOf("d1"), hidden)
+        assertEquals(listOf("b"), listOf(Insight(id = "a", documentId = "d1"), Insight(id = "b", documentId = "d2")).hideForgotten(hidden) { it.documentId }.map { it.id })
         assertEquals(emptySet<String>(), fresh.hiddenIds("other").first())
     }
 
@@ -125,7 +126,7 @@ class ForgetQueueRoomTest {
     }
 
     @Test fun resumeMarksAThrowingRowFailedAndStillSchedulesTheRest() = runBlocking {
-        val throwing = ForgetQueue(db, ForgottenNotes(), { scope, id, _ -> if (id == "bad") throw IllegalStateException("too big") else scheduled += scope to id }, { _, _ -> })
+        val throwing = ForgetQueue(db, { scope, id, _ -> if (id == "bad") throw IllegalStateException("too big") else scheduled += scope to id }, { _, _ -> })
         dao.putForget(PendingForget("s", "bad", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "ok", 1, FORGET_PENDING))
         throwing.resumePending("s")
         assertEquals(listOf("s" to "ok"), scheduled)
@@ -133,7 +134,7 @@ class ForgetQueueRoomTest {
     }
 
     @Test fun aSchedulingFailureAfterTheCommitStillCountsAsForgotten() = runBlocking {
-        val throwing = ForgetQueue(db, ForgottenNotes(), { _, _, _ -> throw IllegalStateException("x") }, { _, _ -> })
+        val throwing = ForgetQueue(db, { _, _, _ -> throw IllegalStateException("x") }, { _, _ -> })
         dao.put(listOf(cached("s", "c1", "d1")))
         assertEquals(listOf("c1"), throwing.forgetNoteOffline("s", "d1"))
         assertEquals(FORGET_PENDING, dao.forget("s", "d1")?.status)
