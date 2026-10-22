@@ -133,6 +133,14 @@ editor is on screen the window is `FLAG_SECURE` (blank recents thumbnail, no scr
 host view is excluded from autofill, and the keyboard is asked not to learn from the fields
 (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off); a keyboard may ignore that request.
 
+Connect dialog and autofill: while the connect dialog is shown, its host view is set to
+`IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS` (previous value restored on dismissal), the server
+URL and access token fields ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`,
+autocorrect off), and the token stays masked. This asks autofill services not to offer to save the
+bearer token. Trade-off: the token cannot be filled from a password manager. Limits: this is an
+opt-out request, not enforcement; a third-party manager may ignore it or fall back to
+accessibility-based detection, and the app cannot force it to stop.
+
 Disk hygiene: Room runs with `PRAGMA secure_delete=ON`, which overwrites freed pages with zeros
 on a best-effort basis. After clearing note text the app runs `wal_checkpoint(TRUNCATE)` and reads
 its result: the call shortens the write-ahead log to zero bytes, it does not overwrite the old
