@@ -47,3 +47,6 @@ fun ScreenState.viewFor(hiddenScope: String, hidden: Set<String>): ScreenState =
 /** The retained state is purged only with the hidden set of its own account. */
 fun ScreenState.purgedFor(hiddenScope: String, hidden: Set<String>): ScreenState =
     if (scope == hiddenScope) purgedOf(hidden) else this
+
+/** TEMP stub. */
+fun ScreenState.published(sets: List<Pair<String, Set<String>>>, transform: (ScreenState) -> ScreenState): ScreenState = transform(this)

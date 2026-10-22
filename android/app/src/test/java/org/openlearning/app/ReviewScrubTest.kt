@@ -37,5 +37,30 @@ class ReviewScrubTest {
         val afterForget = loaded.withoutHidden(setOf("d1"))
         assertEquals(listOf("r2"), afterForget.reviews.map { it.id })
     }
+    @Test fun aBlankCachedDocumentIdIsUnresolvedAndFallsThroughToTheNetwork() = runBlocking {
+        val view = resolveReviews(listOf(review("r1", "i1")), emptySet(), { "" }, { "d9" })
+        assertEquals(mapOf("i1" to "d9"), view.documents)
+    }
+    @Test fun aBlankCachedIdWithAFailedLookupIsDroppedAndNeverMapped() = runBlocking {
+        val view = resolveReviews(listOf(review("r1", "i1")), emptySet(), { "" }, { throw java.io.IOException() })
+        assertTrue(view.reviews.isEmpty()); assertTrue(view.documents.isEmpty())
+    }
+    @Test fun aBlankIdFromTheNetworkIsDroppedAndNeverMapped() = runBlocking {
+        val view = resolveReviews(listOf(review("r1", "i1"), review("r2", "i2")), emptySet(), { null }, { if (it.insightId == "i1") "" else "d2" })
+        assertEquals(listOf("r2"), view.reviews.map { it.id }); assertEquals(mapOf("i2" to "d2"), view.documents)
+    }
+    @Test fun aBlankIdFromTheNetworkIsDroppedEvenWithNothingHiddenAndDoesNotStopLaterLookups() = runBlocking {
+        var calls = 0
+        val view = resolveReviews(listOf(review("r1", "i1"), review("r2", "i2")), emptySet(), { null }, { calls++; if (calls == 1) "" else "d2" })
+        assertEquals(2, calls); assertEquals(listOf("r2"), view.reviews.map { it.id })
+    }
+    @Test fun aBlankIdInThePayloadIsTreatedAsUnresolved() = runBlocking {
+        val view = resolveReviews(listOf(review("r1", "i1", "")), emptySet(), { null }, { "" })
+        assertTrue(view.reviews.isEmpty()); assertTrue(view.documents.isEmpty())
+    }
+    @Test fun aNonBlankResolutionStillWorks() = runBlocking {
+        val view = resolveReviews(listOf(review("r1", "i1")), setOf("dx"), { "d1" }, { error("network") })
+        assertEquals(mapOf("i1" to "d1"), view.documents)
+    }
     private fun http404() = retrofit2.HttpException(retrofit2.Response.error<Any>(404, "".toResponseBody()))
 }

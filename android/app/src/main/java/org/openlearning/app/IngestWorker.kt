@@ -62,7 +62,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 submitOrPoll(repository, attempt)
             }
             val update = noteAfterResponse(attempt, job)
-            val changed = dao.updateJobUnlessHidden(update.row, container.forgetQueue.hidden(attempt.scope))
+            val changed = container.database.updateJobUnlessHidden(update.row)
             val followUp = afterSave(changed, createdServerJob = attempt.jobId == null)
             if (followUp != SaveFollowUp.CONTINUE) {
                 // Non-cancellable so a concurrent cancel cannot skip removing the job this run just created.

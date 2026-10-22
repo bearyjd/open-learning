@@ -2,6 +2,7 @@ package org.openlearning.app
 
 import com.google.gson.JsonParseException
 import kotlinx.coroutines.CancellationException
+import androidx.room.withTransaction
 import retrofit2.HttpException
 
 /** Pure decisions behind the forget queue's hardening. Nothing here touches Room or WorkManager. */
@@ -73,11 +74,22 @@ fun Insight.isHiddenBy(hidden: Set<String>) = documentId.isNotBlank() && documen
 fun PendingIngest.isHiddenBy(hidden: Set<String>) = !documentId.isNullOrBlank() && documentId in hidden
 
 /**
- * Saves a worker's update of an import row unless its document is hidden: such a row is deleted instead (and 0 is returned,
- * as for a row the user removed), so a delayed import cannot put a forgotten note's title back in Recent imports.
+ * Saves a worker's update of an import row unless its document is hidden, in ONE transaction: the hidden set is read and the
+ * row written (or deleted, returning 0 as for a row the user removed) under the same lock, so a forget that commits in between
+ * cannot be missed. A delayed import therefore never puts a forgotten note's title back in Recent imports.
  */
-suspend fun LearningDao.updateJobUnlessHidden(row: PendingIngest, hidden: Set<String>): Int =
-    if (row.isHiddenBy(hidden)) { deleteJob(row.scope, row.id); 0 } else updateJob(row)
+suspend fun LearningDatabase.updateJobUnlessHidden(row: PendingIngest): Int = withTransaction {
+    val dao = dao()
+    when (jobWriteDecision(row, dao.hiddenIds(row.scope).toSet())) {
+        JobWrite.DELETE -> { dao.deleteJob(row.scope, row.id); 0 }
+        JobWrite.UPDATE -> dao.updateJob(row)
+    }
+}
+
+enum class JobWrite { UPDATE, DELETE }
+
+/** A row whose document is hidden is deleted, anything else is updated. Decided on a hidden set read in the same transaction as the write. */
+fun jobWriteDecision(row: PendingIngest, hidden: Set<String>) = if (row.isHiddenBy(hidden)) JobWrite.DELETE else JobWrite.UPDATE
 
 const val REVIEW_FETCH_CAP = 20
 
@@ -91,7 +103,8 @@ data class ReviewView(val reviews: List<Review>, val documents: Map<String, Stri
  * A review names its document itself (older servers send nothing: blank). A blank one fails closed, always (also when
  * nothing is hidden yet, so a forget that starts later can still scrub it): its document is looked up through [cached]
  * (free) or [fetch] (network, at most [cap] reviews, none after the first non-404 failure) and a review that cannot be
- * resolved is dropped. A 404 drops only that review. Reviews that name their document need no lookup.
+ * resolved is dropped. A blank id from any source (payload, cache, network) is unresolved, exactly like a failed lookup:
+ * a blank cached value falls through to the network, and a blank mapping is never recorded. A 404 drops only that review. Reviews that name their document need no lookup.
  */
 suspend fun resolveReviews(
     reviews: List<Review>, hidden: Set<String>, cached: suspend (Review) -> String?, fetch: suspend (Review) -> String, cap: Int = REVIEW_FETCH_CAP,
@@ -99,15 +112,15 @@ suspend fun resolveReviews(
     var fetched = 0; var networkDown = false
     val documents = LinkedHashMap<String, String>()
     val shown = reviews.filter { review ->
-        val documentId = review.docId().ifBlank { null } ?: cached(review) ?: if (fetched < cap && !networkDown) {
+        val documentId = review.docId().ifBlank { null } ?: cached(review)?.ifBlank { null } ?: if (fetched < cap && !networkDown) {
             fetched++
-            try { fetch(review) }
+            try { fetch(review).ifBlank { null } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: HttpException) { if (error.code() != 404) networkDown = true; null }
             catch (error: Exception) { networkDown = true; null }
         } else null
         if (documentId != null) documents[review.insightId] = documentId
-        documentId != null && (documentId.isBlank() || documentId !in hidden)
+        documentId != null && documentId !in hidden
     }
     return ReviewView(shown, documents.filterKeys { key -> shown.any { it.insightId == key } })
 }

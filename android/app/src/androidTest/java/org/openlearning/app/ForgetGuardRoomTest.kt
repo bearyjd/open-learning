@@ -117,12 +117,24 @@ class ForgetGuardRoomTest {
         val running = PendingIngest(scope, "j1", "", kind = "note", status = "running", title = "Secret title")
         dao.putJob(running)
         queue.forgetNoteOffline(scope, "d1")
-        val changed = dao.updateJobUnlessHidden(running.copy(status = "completed", documentId = "d1"), queue.hidden(scope))
+        val changed = db.updateJobUnlessHidden(running.copy(status = "completed", documentId = "d1"))
         assertEquals(0, changed); assertNull(dao.job(scope, "j1"))
         val other = PendingIngest(scope, "j2", "", kind = "note", status = "running")
         dao.putJob(other)
-        assertEquals(1, dao.updateJobUnlessHidden(other.copy(status = "completed", documentId = "d2"), queue.hidden(scope)))
+        assertEquals(1, db.updateJobUnlessHidden(other.copy(status = "completed", documentId = "d2")))
         assertEquals("completed", dao.job(scope, "j2")?.status)
+    }
+
+    // The response identified d1 while the stored row was still unlinked; the forget commits after that and misses the row. The
+    // hidden read and the write share one transaction, so the late update still sees the forget. Compile-checked, not run.
+    @Test fun forgetCommittingBetweenTheResponseAndTheUpdateStillDeletesTheRow() = runBlocking {
+        val processing = PendingIngest(scope, "j3", "", kind = "note", status = "processing", title = "Secret title")
+        dao.putJob(processing)
+        val completed = processing.copy(status = "completed", documentId = "d1")
+        queue.forgetNoteOffline(scope, "d1")
+        assertNotNull(dao.job(scope, "j3"))
+        assertEquals(0, db.updateJobUnlessHidden(completed))
+        assertNull(dao.job(scope, "j3"))
     }
 
     @Test fun cardFlagsProjectsOnlyTheFeedFlag() = runBlocking {
