@@ -704,3 +704,39 @@ and floor entries also expire after 10 minutes (`PURGE_FLOOR_TTL_MS`, injected c
 out of the floor, the unreleased sequence stays hidden, fake-clock TTL, still-pending forget stays hidden via the Room set),
 `ScreenPublisherTest` (release shows the note again; clock TTL), `ForgetStructuralTest` (TEXT scan: every deleteForget(s) call in
 `ForgetQueue` is followed by `onReleased`). NOT tested: Room flows and delivery order, the view model wiring at runtime.
+
+### E2b-2 + E2b-3 device run (Pixel 10 Pro Fold, one run each, no retries, 2026-10-22)
+
+Supervised, ff78c64 (PR #22). No Bitwarden, autofill or save-password sheet, system dialog or foreign window appeared at any point
+(the script's overlay guard never fired; `ConnectAutofillTest` passed). The device never left the launcher or the acceptance app.
+
+`scripts/android_notes.py` CRASHED (exit 3) at step `list:forget one`; the offline-forget scenario was NOT reached (INCONCLUSIVE, still
+never run). PASS before the crash: draft survives process death (counter 145), submit posts once with the expected hash and no source
+link, forget Cancel sends 0 DELETEs. Not asserted: forget Confirm from the detail screen read 0 DELETEs and "list_rows_shown" was false,
+because the mock's document ids (`note-doc`, `list-doc-a`, `list-doc-b`) are not hex. E2b-3 rejects an id outside `[0-9a-fA-F-]` before
+queuing anything (`validForgetDocumentId`) and shows "This note has an id the server does not issue, so nothing was queued or hidden"
+(seen in the dumps). Script bug, not an app bug. Fixed in the mock (hex-uuid ids, JVM script tests pass) but NOT re-run on the device.
+The 429 and 413 scenarios did not run. The script's immediate-DELETE assertion after a detail forget may also be stale, because E2b-3
+sends the DELETE from a worker.
+
+Instrumented run (`am instrument --user 0`; ForgetQueueRoomTest, ForgetGuardRoomTest, ForgetQueueAcceptanceTest, NotesListAcceptanceTest,
+NoteAcceptanceTest, DeviceAcceptanceTest, MigrationTest, DatabaseHygieneTest, ConnectAutofillTest; LiveLearningLoopTest skipped): 70 run, 10
+failed, 60 passed. Full pass: ForgetGuardRoomTest 12/12, DeviceAcceptanceTest 6/6, MigrationTest 3/3, DatabaseHygieneTest 9/9,
+ConnectAutofillTest 1/1. ForgetQueueRoomTest 16/17, ForgetQueueAcceptanceTest 1/5, NotesListAcceptanceTest 4/7, NoteAcceptanceTest 8/10.
+Failures, all classified test bug (static diagnosis, no app code changed, not re-run):
+
+- Non-hex fixture ids (`doc-a`, `doc-b`, `doc-other`, `note-doc`) are refused by the forget id check, so nothing is hidden or queued:
+  ForgetQueueAcceptanceTest `offlineForgetSurvivesARestart...` (:51), `a404CountsAsSuccess` (:71), `aServerErrorKeepsTheRowPendingAndIsRetried`
+  (:95), `a401LeavesAFailedRow...` (:79); NotesListAcceptanceTest `forgetConfirmDeletes...` (:74), `serverErrorHidesTheNoteNow...` (:88),
+  `offlineForgetHidesNowAndShowsTheWaitingLine` (:101); NoteAcceptanceTest `forgetConfirmDeletesOnceAndPurgesRoom` (:140).
+- NoteAcceptanceTest `offlineForgetHidesNowThenDeletesOnReconnect` (:147 -> openEditor :194): "No compose hierarchies found", the activity
+  did not launch. Environment or ordering fallout after the previous failures (not diagnosed; it also uses `note-doc`).
+- ForgetQueueRoomTest `resumeMarksAThrowingRowFailedAndStillSchedulesTheRest` (:140): the test throws `IllegalStateException`, but
+  `scheduleFailureIsPermanent` treats only `IllegalArgumentException` as permanent, so the row correctly stays pending. Stale test.
+
+So the offline forget queue, replay, 401/404/5xx handling and the waiting line have still never passed on a device: every test that
+exercises them failed on fixture ids before reaching the queue. Passing here: the Room guard interleavings, queue DAO behaviour (16 of 17
+ForgetQueueRoomTest cases), migration, hygiene and the autofill exclusion.
+
+Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
+with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
