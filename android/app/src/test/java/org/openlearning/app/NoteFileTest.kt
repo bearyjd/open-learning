@@ -12,7 +12,7 @@ class NoteFileTest {
 
     @Test fun oversizeIsRejectedWithoutOpening() {
         var opened = false
-        val result = readNoteFile("a.txt", NOTE_FILE_MAX_BYTES + 1L) { opened = true; ByteArrayInputStream(ByteArray(0)) }
+        val result = readNoteFile("a.txt", noteFileMaxBytes(DEFAULT_LIMITS) + 1L) { opened = true; ByteArrayInputStream(ByteArray(0)) }
         assertTrue(result is NoteFileResult.Rejected)
         assertFalse(opened)
     }
@@ -22,7 +22,7 @@ class NoteFileTest {
             override fun read(b: ByteArray, off: Int, len: Int): Int { java.util.Arrays.fill(b, off, off + len, 'a'.code.toByte()); served += len; return len } }
         val result = readNoteFile("a.txt", null) { endless }
         assertTrue(result is NoteFileResult.Rejected)
-        assertEquals(NOTE_FILE_MAX_BYTES + 1, served)
+        assertEquals(noteFileMaxBytes(DEFAULT_LIMITS) + 1, served)
     }
     @Test fun exactlyAtCodePointCapIsAccepted() = assertEquals(NOTE_MAX_CHARS, loaded(read("a.txt", "a".repeat(NOTE_MAX_CHARS).toByteArray())).text.length)
     @Test fun oneOverCodePointCapIsRejected() =

@@ -146,7 +146,8 @@ class SubmitHashTests(unittest.TestCase):
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
                 "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
                 "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
-                "429_sentinel_in_ui": False}
+                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forget_deletes": 1, "list_other_deletes": 0,
+                "list_other_row_remains": True, "list_forgotten_row_gone": True}
         self.assertFalse(notes.scenarios_pass({**good, **r}))
         self.assertTrue(notes.scenarios_pass({**good, "submit_hash_match": True}))
 
@@ -165,10 +166,12 @@ class EvidenceTests(unittest.TestCase):
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
                 "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
                 "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
-                "429_sentinel_in_ui": False}
+                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forget_deletes": 1, "list_other_deletes": 0,
+                "list_other_row_remains": True, "list_forgotten_row_gone": True}
         self.assertTrue(notes.scenarios_pass(good))
         for key, bad in (("429_message", False), ("429_posts", 1), ("429_posts", 3), ("429_same_body_hash", False),
-                         ("429_completed", False), ("429_sentinel_in_ui", True)):
+                         ("429_completed", False), ("429_sentinel_in_ui", True), ("list_forget_deletes", 0),
+                         ("list_other_deletes", 1), ("list_other_row_remains", False), ("list_forgotten_row_gone", False)):
             self.assertFalse(notes.scenarios_pass({**good, key: bad}), key)
         self.assertFalse(notes.scenarios_pass({}))
         self.assertFalse(notes.scenarios_pass({**good, "posts": 2}))
@@ -185,7 +188,7 @@ class EvidenceTests(unittest.TestCase):
 
 class MockServerTests(unittest.TestCase):
     def setUp(self):
-        notes.STATE.update(log=[], text_status=200, done=False, rate_limit_once=False, retried=False)
+        notes.STATE.update(log=[], text_status=200, done=False, rate_limit_once=False, retried=False, list_deleted=set())
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), notes.make_handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.server.server_port
@@ -246,6 +249,35 @@ class MockServerTests(unittest.TestCase):
         self.assertFalse(notes.rate_limit_summary(other, baseline=1)["429_same_body_hash"])
         self.assertEqual(0, notes.rate_limit_summary(log[:1], baseline=1)["429_posts"])
         self.assertFalse(notes.rate_limit_summary(log[:1], baseline=1)["429_same_body_hash"])
+
+    def test_notes_list_mock_drops_only_the_deleted_note_and_logs_no_titles(self):
+        titles = [n["title"] for n in json.loads(self.call("GET", "/api/v1/notes")[1])]
+        self.assertEqual(["Alpha list note", "Beta list note"], titles)
+        self.assertEqual(204, self.call("DELETE", "/api/v1/notes/list-doc-a")[0])
+        left = json.loads(self.call("GET", "/api/v1/notes")[1])
+        self.assertEqual(["list-doc-b"], [n["document_id"] for n in left])
+        self.assertNotIn("Alpha list note", json.dumps(notes.STATE["log"]))
+        self.assertEqual(404, self.call("DELETE", "/api/v1/notes/unknown")[0])
+
+
+class NotesListHelperTests(unittest.TestCase):
+    LOG = [{"method": "DELETE", "path": "/api/v1/notes/list-doc-a", "status": 204}]
+
+    def test_summary_when_only_the_forgotten_note_is_deleted(self):
+        got = notes.list_summary(self.LOG, ["Your notes", "Beta list note"])
+        self.assertEqual({"list_forget_deletes": 1, "list_other_deletes": 0, "list_other_row_remains": True, "list_forgotten_row_gone": True}, got)
+
+    def test_summary_flags_a_stray_delete_a_missing_row_and_a_lingering_row(self):
+        stray = self.LOG + [{"method": "DELETE", "path": "/api/v1/notes/list-doc-b", "status": 204}]
+        self.assertEqual(1, notes.list_summary(stray, ["Beta list note"])["list_other_deletes"])
+        self.assertFalse(notes.list_summary(self.LOG, ["Your notes"])["list_other_row_remains"])
+        self.assertFalse(notes.list_summary(self.LOG, ["Alpha list note", "Beta list note"])["list_forgotten_row_gone"])
+
+    def test_find_last_prefers_the_dialog_button_over_the_row_button(self):
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring('<hierarchy><node text="Forget" content-desc="" bounds="[0,0][1,1]"/><node text="Forget" content-desc="" bounds="[5,5][6,6]"/></hierarchy>')
+        self.assertEqual("[5,5][6,6]", notes.find_last(root, r"^Forget\|")["bounds"])
+        self.assertIsNone(notes.find_last(root, "Nope"))
 
 
 if __name__ == "__main__":

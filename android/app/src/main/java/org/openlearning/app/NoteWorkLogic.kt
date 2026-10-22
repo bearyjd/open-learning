@@ -14,6 +14,35 @@ fun PendingIngest.canRemove() = isNoteJob() && !isCompletedState(status)
 /** After a scope change only completed rows holding no text go; a row with unsent text is kept for its own account. */
 fun PendingIngest.purgeableAfterScopeChange() = text == null && isCompletedState(status)
 
+/**
+ * The completed note rows to delete when forgetting [documentId] (whose title was [title]): those linked to it, plus
+ * unlinked rows (made before schema v3, so they cannot be matched by id):
+ * - once any completed row anywhere carries a document id, unlinked rows go only when their title equals [title];
+ * - in a purely pre-migration state (no row has an id) the unlinked rows whose title matches go; with no match the
+ *   unlinked rows go only when there is exactly one (it cannot be another note's), never several.
+ * Rows linked to other documents are never touched. Residual: an unlinked row with the same title as the forgotten
+ * note is removed even if it belonged to a different note, and when the title is unavailable or does not match, a
+ * title residue can stay on the device. Those rows are only completed history; the server keeps the notes.
+ */
+fun noteRowsToPurge(completedNoteRows: List<PendingIngest>, documentId: String, title: String? = null): List<PendingIngest> {
+    val linked = completedNoteRows.filter { it.documentId == documentId }
+    val unlinked = completedNoteRows.filter { it.documentId == null }
+    val wanted = title?.let(::normalizedNoteTitle)
+    val titled = if (wanted == null) emptyList() else unlinked.filter { normalizedNoteTitle(it.title) == wanted }
+    // Pre-migration, with no title match: only a lone unlinked row is certainly this note's. With several, deleting all
+    // could remove other notes' rows, so none are deleted (a title residue may stay on the device instead).
+    val pureLegacy = completedNoteRows.none { it.documentId != null }
+    return linked + if (pureLegacy && titled.isEmpty() && unlinked.size == 1) unlinked else titled
+}
+
+/** The list shows a blank title as "Untitled", so rows compare the same way. */
+private fun normalizedNoteTitle(title: String?) = java.text.Normalizer.normalize(title.orEmpty(), java.text.Normalizer.Form.NFC).trim().ifBlank { "Untitled" }
+
+/** The server answers 429 with Retry-After: 30, so note retries never start sooner than this. */
+const val NOTE_BACKOFF_SECONDS = 30L
+const val URL_BACKOFF_SECONDS = 10L
+fun backoffSeconds(kind: String) = if (kind == "note") NOTE_BACKOFF_SECONDS else URL_BACKOFF_SECONDS
+
 /** A purge belongs to the connection that started it; a later switch (A to B to A) makes it stale. */
 fun shouldRunPurge(activeScope: String?, purgeScope: String) = activeScope == purgeScope
 
@@ -39,7 +68,8 @@ fun noteAfterResponse(row: PendingIngest, job: IngestJob): NoteUpdate {
     val state = job.status.lowercase()
     val completed = state in COMPLETED_STATES
     val finished = completed || state == "cancelled"
-    val next = row.copy(jobId = job.id, status = job.status, error = job.error, text = if (finished) null else row.text)
+    val next = row.copy(jobId = job.id, status = job.status, error = job.error, text = if (finished) null else row.text,
+        documentId = if (completed) job.documentId?.takeIf { it.isNotBlank() } ?: row.documentId else row.documentId)
     val outcome = when {
         completed -> WorkOutcome.SUCCESS
         state == "failed" || state == "error" || state == "cancelled" -> WorkOutcome.FAILURE

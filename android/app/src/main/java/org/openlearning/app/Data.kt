@@ -29,7 +29,7 @@ data class Insight(
     val coverage: String = "", val sourceTruncated: Boolean = false, val model: String = "",
     val sourceKind: String = "url", val sourceLabel: String = "",
 )
-data class IngestJob(val id: String, val status: String, val error: String? = null)
+data class IngestJob(val id: String, val status: String, val error: String? = null, val documentId: String? = null)
 data class UrlRequest(val url: String)
 // A null label is omitted by Gson; the server rejects explicit nulls.
 data class TextRequest(val title: String, val text: String, val label: String? = null) {
@@ -54,6 +54,8 @@ interface LearningApi {
     @POST("api/v1/insights/{id}/feedback") suspend fun dismiss(@Path("id") id: String, @Body body: Feedback = Feedback())
     @POST("api/v1/ingest/url") suspend fun ingest(@Body body: UrlRequest): IngestJob
     @POST("api/v1/ingest/text") suspend fun ingestText(@Body body: TextRequest): IngestJob
+    @GET("api/v1/notes") suspend fun notes(@HttpQuery("limit") limit: Int = NOTES_PAGE_LIMIT, @HttpQuery("offset") offset: Int = 0): List<NoteListItem>
+    @GET("api/v1/limits") suspend fun limits(): Limits
     @DELETE("api/v1/notes/{id}") suspend fun forgetNote(@Path("id") documentId: String): Response<Unit>
     @DELETE("api/v1/jobs/{id}") suspend fun deleteJob(@Path("id") id: String): Response<Unit>
     @GET("api/v1/jobs/{id}") suspend fun job(@Path("id") id: String): IngestJob
@@ -71,10 +73,15 @@ data class PendingIngest(
     val scope: String, val id: String, val url: String, val jobId: String? = null, val status: String = "queued", val error: String? = null,
     @ColumnInfo(defaultValue = "url") val kind: String = "url",
     val title: String? = null, val label: String? = null, val text: String? = null,
+    // Set from the server job when a note job completes; null for rows made before schema v3.
+    val documentId: String? = null,
 ) {
     // Note bodies are private: keep them out of logs and crash reports.
     override fun toString() = "PendingIngest(scope=$scope, id=$id, kind=$kind, jobId=$jobId, status=$status, text=${if (text == null) "null" else "<redacted>"})"
 }
+/** Reserved for offline forget (E2b-3); nothing reads or writes it yet. */
+@Entity(primaryKeys = ["scope", "documentId"])
+data class PendingForget(val scope: String, val documentId: String, val createdAt: Long, val status: String, val error: String? = null)
 @Entity
 data class NoteDraft(@PrimaryKey val scope: String, val title: String, val label: String, val text: String) {
     override fun toString() = "NoteDraft(scope=$scope, text=<redacted>)"
@@ -103,6 +110,8 @@ interface LearningDao {
     // Completed notes hold no text but still show a title; forgetting must not leave them behind.
     @Query("DELETE FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND text IS NULL AND lower(status) IN (:states)")
     suspend fun deleteCompletedNotes(scope: String, states: List<String>): Int
+    @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND text IS NULL AND lower(status) IN (:states)")
+    suspend fun completedNoteRows(scope: String, states: List<String>): List<PendingIngest>
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND saved = 0 AND inFeed = 0") suspend fun pruneCards(scope: String): Int
     @Query("DELETE FROM CachedInsight WHERE scope != :scope") suspend fun deleteCardsOutside(scope: String): Int
     @Query("SELECT * FROM PendingIngest WHERE scope != :scope") suspend fun jobsOutside(scope: String): List<PendingIngest>
@@ -112,7 +121,7 @@ interface LearningDao {
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope") suspend fun allInsights(scope: String): List<CachedInsight>
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND id IN (:ids)") suspend fun deleteInsights(scope: String, ids: List<String>)
 }
-@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class], version = 2, exportSchema = true)
+@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 3, exportSchema = true)
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
 
 // Overwrite deleted pages and flush the WAL so cleared note text does not linger on disk.
@@ -181,19 +190,29 @@ class LearningRepository(val config: Connection, private val database: LearningD
         return row
     }
     /**
-     * Deletes every cached row of this scope that belongs to the document, scanning all rows (not the feed/library
-     * filter). The job response has no document id, so completed note rows cannot be linked to one document:
-     * all completed note rows of this scope go too, so no title outlives the forgotten note.
+     * Deletes every cached card of this scope that belongs to the document, scanning all rows (not the feed/library
+     * filter), and only the completed, text-free import rows linked to that document ([purgeNoteLinkedRows]).
      */
-    suspend fun purgeDocument(documentId: String): List<String> {
+    suspend fun purgeDocument(documentId: String, title: String? = null): List<String> {
         val ids = database.withTransaction {
             val found = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
             if (found.isNotEmpty()) dao.deleteInsights(config.scope, found)
-            dao.deleteCompletedNotes(config.scope, COMPLETED_STATES)
+            deleteNoteRows(documentId, title)
             found
         }
         database.checkpointBestEffort()
         return ids
+    }
+    /** Targeted purge of the completed import rows of one note; see [noteRowsToPurge] for the pre-migration fallback. */
+    suspend fun purgeNoteLinkedRows(documentId: String, title: String? = null): Int {
+        val removed = database.withTransaction { deleteNoteRows(documentId, title) }
+        database.checkpointBestEffort()
+        return removed
+    }
+    private suspend fun deleteNoteRows(documentId: String, title: String?): Int {
+        val rows = noteRowsToPurge(dao.completedNoteRows(config.scope, COMPLETED_STATES), documentId, title)
+        rows.forEach { dao.deleteJob(it.scope, it.id) }
+        return rows.size
     }
     /**
      * Drops the cards and the completed, text-free import rows of other scopes. Unsent note text (queued, failed,
@@ -218,7 +237,7 @@ class LearningRepository(val config: Connection, private val database: LearningD
 class AppContainer(context: Context) {
     val credentials = Credentials(context)
     val database = Room.databaseBuilder(context, LearningDatabase::class.java, "learning.db")
-        .addMigrations(MIGRATION_1_2).addCallback(SecureDeleteCallback).build()
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(SecureDeleteCallback).build()
     /** Notes being forgotten: in-flight refreshes must not write their cards back. */
     val forgotten = ForgottenNotes()
     fun repository(connection: Connection) = LearningRepository(connection, database, forgotten)

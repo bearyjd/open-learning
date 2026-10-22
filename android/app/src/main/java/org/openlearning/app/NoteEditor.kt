@@ -3,7 +3,6 @@ package org.openlearning.app
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -14,11 +13,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.InterceptPlatformTextInput
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -26,7 +23,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 
 private val NOTE_MIME_TYPES = arrayOf("text/plain", "text/markdown", "text/x-markdown", "application/octet-stream")
 
-private tailrec fun Context.activity(): Activity? = when (this) {
+internal tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
     else -> null
@@ -39,14 +36,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 @Composable
 private fun ProtectWhileEditing() {
     ExcludeFromAutofill()
-    val view = LocalView.current
-    DisposableEffect(view) {
-        val window = view.context.activity()?.window
-        window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        onDispose {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
-    }
+    SecureWindow()
 }
 
 /**
@@ -67,12 +57,12 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
     val draft = model.draft
     val message = model.noteMessage
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) model.loadNoteFile(uri) }
-    val overCap = draft.text.codePointCount(0, draft.text.length) > NOTE_MAX_CHARS
+    val overCap = draft.text.codePointCount(0, draft.text.length) > model.limits.maxChars
     model.pendingFile?.let {
         AlertDialog(
             onDismissRequest = model::discardPendingFile,
             title = { Text("Replace your text?") },
-            text = { Text("The file will replace the text you typed. This can't be undone.") },
+            text = { Text(replaceDialogText(model.pendingFromShare)) },
             confirmButton = { TextButton(onClick = model::applyPendingFile) { Text("Replace") } },
             dismissButton = { TextButton(onClick = model::discardPendingFile) { Text("Keep my text") } },
         )
@@ -82,7 +72,7 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
         OutlinedTextField(draft.title, { model.editDraft(draft.copy(title = it)) }, Modifier.fillMaxWidth(), label = { Text("Title") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
         OutlinedTextField(draft.label, { model.editDraft(draft.copy(label = it)) }, Modifier.fillMaxWidth(), label = { Text("Label (optional)") }, singleLine = true, keyboardOptions = TextInputPrivacy.noLearningKeyboard)
         OutlinedTextField(draft.text, { model.editDraft(draft.copy(text = it)) }, Modifier.fillMaxWidth(), label = { Text("Note text") }, minLines = 8, maxLines = 16, keyboardOptions = TextInputPrivacy.noLearningKeyboard,
-            isError = overCap, supportingText = { Text(noteCounter(draft.text)) })
+            isError = overCap, supportingText = { Text(noteCounter(draft.text, model.limits.maxChars)) })
         message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         OutlinedButton(onClick = { picker.launch(NOTE_MIME_TYPES) }) {
             Icon(Icons.Default.UploadFile, null); Spacer(Modifier.width(6.dp)); Text("Import a .txt or .md file")

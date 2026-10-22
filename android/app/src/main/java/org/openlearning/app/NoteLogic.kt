@@ -1,7 +1,5 @@
 package org.openlearning.app
 
-import java.text.NumberFormat
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** Documents the user is forgetting. Set before the server call so an in-flight refresh cannot write cards back. */
@@ -12,6 +10,15 @@ class ForgottenNotes {
     fun remove(scope: String, documentId: String) { keys.remove(key(scope, documentId)) }
     fun blocks(scope: String, insight: Insight) = insight.documentId.isNotBlank() && key(scope, insight.documentId) in keys
     fun allowed(scope: String, items: List<Insight>) = items.filterNot { blocks(scope, it) }
+    /**
+     * Documents the server deleted whose local cleanup threw, to be retried. Memory only (the title is private and the
+     * cheap option; a persisted table is future work), so a process death before the retry forgets them.
+     */
+    data class PendingPurge(val documentId: String, val title: String?)
+    private val pending = ConcurrentHashMap<String, PendingPurge>()
+    fun purgeFailed(scope: String, documentId: String, title: String?) { if (documentId.isNotBlank()) pending[key(scope, documentId)] = PendingPurge(documentId, title) }
+    fun pendingPurges(scope: String): List<PendingPurge> = pending.filterKeys { it.startsWith("$scope\u0000") }.values.toList()
+    fun purgeDone(scope: String, documentId: String) { pending.remove(key(scope, documentId)) }
 }
 
 /** The editable note fields. Immutable: every edit is a new value. */
@@ -31,8 +38,7 @@ fun filePlan(draft: NoteDraftFields): FilePlan = if (draft.text.isBlank()) FileP
 /** Fills the text from the file; a title the person already typed is kept. */
 fun NoteDraftFields.withFile(file: NoteFileResult.Loaded) = copy(title = title.ifBlank { file.title }, text = file.text)
 
-fun noteCounter(text: String): String =
-    "${NumberFormat.getIntegerInstance(Locale.US).format(text.codePointCount(0, text.length))} / ${NumberFormat.getIntegerInstance(Locale.US).format(NOTE_MAX_CHARS)}"
+fun noteCounter(text: String, max: Int = NOTE_MAX_CHARS): String = "${formatCount(text.codePointCount(0, text.length))} / ${formatCount(max)}"
 
 fun PendingIngest.isNoteJob() = kind == "note"
 
@@ -91,3 +97,26 @@ fun forgetFailureMessage(error: Throwable, outcome: String = "the note was not f
     is java.io.IOException -> "Can't reach your server, so $outcome. Try again when you're online."
     else -> "The server could not complete that, so $outcome. Try again."
 }
+
+/** How forgetting a note ended. The server DELETE decides success; a local cleanup failure afterwards is only partial. */
+sealed interface ForgetResult {
+    data class Done(val purged: List<String>) : ForgetResult
+    /** The server deleted it but this device's cleanup threw: the tombstone stays so the note remains hidden. */
+    data object PurgeFailed : ForgetResult
+    data class Failed(val error: Throwable) : ForgetResult
+}
+
+const val FORGET_PARTIAL_MESSAGE = "Deleted on the server; cleaning up this device failed. It will be hidden."
+
+/** The banner for a finished forget, or null when it simply worked. */
+fun ForgetResult.message(): String? = when (this) {
+    is ForgetResult.Done -> null
+    ForgetResult.PurgeFailed -> FORGET_PARTIAL_MESSAGE
+    is ForgetResult.Failed -> forgetFailureMessage(error)
+}
+
+/**
+ * The title to match unlinked import rows against. [Insight.title] is the model-written headline of one idea; the
+ * import row and the notes list hold the note's own title, which the server returns as the document title (sourceTitle).
+ */
+fun purgeTitle(item: Insight): String? { val title: String? = item.sourceTitle; return title }

@@ -34,12 +34,19 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var requestGeneration = 0
     private var chatGeneration = 0
     private var detailJob: Job? = null
+    private val notesActions = NotesActions(viewModelScope, container.forgotten, { repo }, mutable) { memory.clear(); detailJob?.cancel(); chatGeneration++ }
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
     // A picked file waiting for the person to confirm replacing the text they typed. Held in memory only.
     var pendingFile by mutableStateOf<NoteFileResult.Loaded?>(null); private set
-    private var draftReady = false
+    // Server limits fetched on connect (best-effort); the defaults apply until then and when the fetch fails.
+    var limits by mutableStateOf(DEFAULT_LIMITS); private set
+    // True only once the Room draft of the active account has loaded: a share must not see an empty draft before that.
+    var draftReady by mutableStateOf(false); private set
+    // True once the limits fetch for the active account has finished (loaded or failed): a share is judged against the real cap only after.
+    var limitsLoaded by mutableStateOf(false); private set
+    var pendingFromShare by mutableStateOf(false); private set
     private val draftLock = Mutex()
     init {
         viewModelScope.launch { snapshotFlow { draft }.debounce(400).collect { saveDraft(it) } }
@@ -52,11 +59,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
-                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null
+                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
+                    launch { notesActions.retryPurges(repository) }
+                    launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) { limits = fetched; limitsLoaded = true } }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
                         mutable.update { it.copy(feed = rows.filter { row -> row.inFeed }.map(repository::decode), library = rows.filter { row -> row.saved }.map(repository::decode)) }
@@ -70,7 +79,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                                 // "paused" is excluded here but is not in NoteLogic's TERMINAL set: a paused job needs a manual retry
                                 // so it is not rescheduled, yet it stays in flight and keeps its "Note queued" banner.
                                 jobs.filter { it.status.lowercase() !in setOf("completed", "complete", "succeeded", "success", "done", "failed", "error", "cancelled", "paused") }
-                                    .forEach { IngestWorker.schedule(getApplication(), it.scope, it.id) }
+                                    .forEach { IngestWorker.schedule(getApplication(), it.scope, it.id, kind = it.kind) }
                             }
                         }
                     }
@@ -158,20 +167,20 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             NoteRetry.Requeue -> current.copy(status = "queued", error = null)
             is NoteRetry.ServerRetry -> try {
                 val retry = repository.api.retryJob(plan.jobId)
-                current.copy(jobId = retry.id, status = retry.status, error = null)
+                current.copy(jobId = retry.id, status = retry.status, error = null, documentId = retry.documentId ?: current.documentId)
             } catch (conflict: HttpException) {
                 if (!isJobGone(conflict.code())) throw conflict
                 noteConflictPlan(current) ?: expired
             }
         }
         // @Update, not REPLACE: a row the user removed meanwhile must stay removed.
-        if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true)
+        if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true, kind = "note")
     }
     private suspend fun loadDraft(repository: LearningRepository) {
-        val saved = container.database.dao().draft(repository.config.scope)
-        if (repo !== repository) return
-        if (saved != null && draft.isEmpty) draft = NoteDraftFields(saved.title, saved.label, saved.text)
-        draftReady = true
+        loadDraftThen({ repo === repository }, { draftReady = true }) {
+            val saved = container.database.dao().draft(repository.config.scope)
+            if (repo === repository && saved != null && draft.isEmpty) draft = NoteDraftFields(saved.title, saved.label, saved.text)
+        }
     }
     private suspend fun saveDraft(fields: NoteDraftFields) {
         val repository = repo ?: return
@@ -186,14 +195,14 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     /** Persists the draft now (the editor calls this on stop) instead of waiting for the debounce. */
     fun flushDraft() { viewModelScope.launch { saveDraft(draft) } }
     fun editDraft(next: NoteDraftFields) { draft = next; noteMessage = null }
-    fun applyPendingFile() { pendingFile?.let { draft = draft.withFile(it); noteMessage = null }; pendingFile = null }
-    fun discardPendingFile() { pendingFile = null }
+    fun applyPendingFile() { pendingFile?.let { draft = draft.withFile(it); noteMessage = null; flushDraft() }; pendingFile = null; pendingFromShare = false }
+    fun discardPendingFile() { pendingFile = null; pendingFromShare = false }
     fun clearNoteMessage() { noteMessage = null }
     /** Returns true when the note was accepted for queueing, so the editor can close. */
     fun submitNote(): Boolean {
         val repository = repo ?: return false
         val fields = draft
-        val note = when (val check = validateNote(fields.title, fields.text, fields.label)) {
+        val note = when (val check = validateNote(fields.title, fields.text, fields.label, limits)) {
             is NoteCheck.Invalid -> { noteMessage = check.message; return false }
             is NoteCheck.Valid -> check.note
         }
@@ -202,7 +211,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         viewModelScope.launch {
             try {
                 val row = draftLock.withLock { repository.queueNote(note) }
-                IngestWorker.schedule(getApplication(), row.scope, row.id)
+                IngestWorker.schedule(getApplication(), row.scope, row.id, kind = "note")
                 val queued = Notice("Note queued. It is sent to your server as soon as it is reachable.", jobId = row.id)
                 // The jobs flow may already have reported this note finished; a row not listed yet is not "removed".
                 mutable.update { it.copy(notice = if (it.jobs.any { job -> job.id == row.id }) noticeAfterJobUpdate(queued, it.jobs) else queued) }
@@ -217,6 +226,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     /** Reads a picked file into the draft. The Uri is used only inside this call and never stored. */
     fun loadNoteFile(uri: Uri) {
         val resolver = getApplication<Application>().contentResolver
+        val fileLimits = limits
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 var name: String? = null
@@ -225,41 +235,17 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
                         if (c.moveToFirst()) { name = c.getString(0); if (!c.isNull(1)) size = c.getLong(1) }
                     }
-                    readNoteFile(name, size) { resolver.openInputStream(uri) }
+                    readNoteFile(name, size, fileLimits) { resolver.openInputStream(uri) }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { NoteFileResult.Rejected("Could not open that file.") }
             }
             when (result) {
-                is NoteFileResult.Loaded -> when (filePlan(draft)) {
-                    FilePlan.Apply -> { draft = draft.withFile(result); noteMessage = null }
-                    FilePlan.ConfirmReplace -> { pendingFile = result; noteMessage = null }
-                }
+                is NoteFileResult.Loaded -> offerText(result)
                 is NoteFileResult.Rejected -> noteMessage = result.message
             }
         }
     }
-    /** Online-only: nothing is cleared locally unless the server confirms the note is gone. */
-    fun forgetNote(item: Insight) {
-        val repository = repo ?: return
-        val scope = repository.config.scope
-        if (!item.isNote() || item.documentId.isBlank()) return
-        viewModelScope.launch {
-            container.forgotten.add(scope, item.documentId)
-            try {
-                val response = repository.api.forgetNote(item.documentId)
-                if (!response.isGone()) throw HttpException(response)
-                val purged = repository.purgeDocument(item.documentId)
-                if (repo === repository) {
-                    memory.clear(); detailJob?.cancel(); chatGeneration++
-                    mutable.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice("Note forgotten.")) }
-                }
-            } catch (cancelled: CancellationException) { container.forgotten.remove(scope, item.documentId); throw cancelled }
-            catch (error: Exception) {
-                container.forgotten.remove(scope, item.documentId)
-                if (repo === repository) mutable.update { it.copy(error = forgetFailureMessage(error)) }
-            }
-        }
-    }
+    fun forgetNote(item: Insight) = notesActions.forgetInsight(item)
     /**
      * Cancels the worker and waits (bounded) for it to stop, re-reads the row (it may have just submitted), drops the
      * server job unless another row shares it, then the row. Completed notes are removed by forgetting instead.
@@ -345,13 +331,23 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         val results = container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim()))
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
+    fun loadNotes() = notesActions.load()
+    fun closeNotes() = notesActions.close()
+    fun forgetListedNote(note: NoteSummary) = notesActions.forget(note)
+    fun noteMessageShown() = notesActions.messageShown()
+    /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
+    fun receiveSharedNote(note: ShareRoute.Note) {
+        if (acceptShare(note.text, pendingFile?.text, draft.text) == null) return
+        offerText(NoteFileResult.Loaded(note.title, note.text), fromShare = true)
+    }
+    /** An over-size share is refused with a message; nothing reaches the draft. */
+    fun reportShareRejected(route: ShareRoute.TooLong) { mutable.update { it.copy(error = shareTooLongMessage(route)) } }
+    private fun offerText(loaded: NoteFileResult.Loaded, fromShare: Boolean = false) {
+        noteMessage = null
+        when (filePlan(draft)) {
+            FilePlan.Apply -> { draft = draft.withFile(loaded); flushDraft() }
+            FilePlan.ConfirmReplace -> { pendingFile = loaded; pendingFromShare = fromShare }
+        }
+    }
     fun clearError() { mutable.update { it.copy(error = null, notice = null) } }
 }
-data class ChatLine(val role: String, val text: String, val question: String = "", val citations: List<Citation> = emptyList())
-data class ScreenState(
-    val feed: List<Insight> = emptyList(), val library: List<Insight> = emptyList(),
-    val results: List<Insight> = emptyList(), val searched: Boolean = false,
-    val jobs: List<PendingIngest> = emptyList(), val reviews: List<Review> = emptyList(), val reviewsLoaded: Boolean = false,
-    val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
-    val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
-)

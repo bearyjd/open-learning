@@ -145,6 +145,23 @@ title and label.
 `min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
 validates against. All new response fields are additive and optional.
 
+Android handling of those limits (E2b-2): the app never trusts the server's numbers unbounded. Clamp ceilings:
+`max_document_chars` and `min_text_chars` at 200,000 characters, `max_title_chars` and `max_label_chars` at 2,000
+(the backend defaults are 500 and 100, `MAX_TITLE_CHARS`/`MAX_LABEL_CHARS` in `notes.py`, so 2,000 is only a safety
+ceiling, not a mismatch). A missing, non-positive or contradictory value falls back to the app default. A shared
+text may exceed the note limit by 10,000 characters (so the editor can show it as over-limit) but never 256,000
+characters, which is the hard cap. The share is judged only after the `/limits` fetch finished (loaded or failed), so
+the defaults cannot reject a share the real limit allows. A "too long" rejection is shown once and is dropped if the
+activity is recreated before it is shown. `FLAG_SECURE` on the editor and the notes list is reference-counted per
+window (`SecureWindow`): the first screen sets it and it is cleared only when the last one leaves.
+
+Forgetting a note on Android: when the server delete succeeded but the local cleanup threw, the note stays hidden and
+the cleanup is retried on the next connect and whenever the notes list is opened. The need is held in memory only
+(persisting it would need a new table). If the process dies before a retry, nothing re-runs the cleanup: the cached
+cards and completed import rows of that note stay on the device until it is cleaned some other way. Unlinked
+(pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
+match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
+
 The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
 On SQLite with the API and the worker as separate processes, a forget can commit between
 the worker's read of the document and its job update and leave a dangling `document_id`
@@ -225,21 +242,24 @@ Local retention: a failed or waiting note keeps its text so you can retry; Remov
 deletes it (and the server job, unless another local row shares it). Completed notes have no Remove:
 forgetting the note is the way. Forgetting needs a connection to your server; nothing is cleared
 locally unless the server confirms. It then deletes every cached card of that document (scanning
-all rows, not only the feed or library) and, because a job has no document id to match on, every
-completed note entry in Recent imports for that connection. After each refresh, cached cards that
+all rows, not only the feed or library) and the completed note entries in Recent imports that are linked
+to that document (the app stores the `document_id` the server links to the job when it completes).
+Entries made before the link existed (Room schema v3) cannot be matched: only when no entry is linked to
+the forgotten document are the completed entries without a link removed, so no title outlives the note.
+That fallback can remove an entry of another pre-migration note; entries linked to other documents are
+never touched. After each refresh, cached cards that
 are neither saved nor in the feed are deleted (offline detail for search or review items is lost;
 they are fetched again online). When a different server or token is connected, the previous
 connection's cached cards and its completed import rows are deleted at once. Unsent note text (queued,
 failed, waiting, paused or running notes) and note drafts are never deleted by that purge, so a
 mistyped token cannot destroy a note: those rows stay on the device, hidden and not sent, and
 reconnecting the original account resumes them. Remove (or forgetting) is the way to clear them. The
-cards are purged immediately, not after a first successful call on the new connection. Forgetting a
-note deletes every completed note row of that connection, not only the forgotten note's (an app
-limitation until E2b-2: the app does not yet read the `document_id` the server now links to
-each job, so it cannot scope the deletion). An in-flight submission cancelled at the wrong moment can still leave a note on the
+cards are purged immediately, not after a first successful call on the new connection. 
+An in-flight submission cancelled at the wrong moment can still leave a note on the
 server whose response never arrived; the server deduplicates by hash and Forget removes it.
-Open risks: the 60,000-character limit is
-hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (now advertised by `GET /api/v1/limits`; the app does not read it yet) (a 422 keeps the
+Open risks: the app fetches `GET /api/v1/limits` once per connection, best-effort (a failure or a
+missing or contradictory field falls back to 60,000 / 100 / 100 / 100 characters), so a server that lowers
+its limit mid-session still answers 422 (a 422 keeps the
 text so you can Remove it); and resubmitting the same text under a new title keeps the
 first title because the server deduplicates by content hash.
 
@@ -276,3 +296,16 @@ podman compose --env-file .env -f infrastructure/compose.yaml up -d api worker
 Test restores periodically on an isolated instance. A dump contains private
 reading content even if the original source was public. Uninstalling Android
 removes its local cache; the canonical library remains in PostgreSQL.
+
+Notes list (E2b-2): "Your notes" shows `GET /api/v1/notes` rows (title, label, character count, date).
+The rows live in view-model memory only and are re-fetched on every open and on Refresh; titles and labels
+are never written to Room, and the list is empty after process death. `FLAG_SECURE` is set on the window
+while the list is shown (recents thumbnail and screenshots are blank) and the previous flag state is restored
+when it closes; the list has no text inputs, so no autofill handling applies. Forget from the list asks
+for confirmation, needs a connection, treats 204 and 404 as success and otherwise clears nothing (see above for
+which import rows go). Share-as-note: shared text that is not a link (an http(s) URL with at most 300
+other characters) opens the note editor pre-filled, never submits, shows an over-limit share as over-limit
+instead of truncating it, and asks before replacing text already typed; links still fill the import field.
+The title is the first non-blank line cut to 80 code points. Retry-After: the server answers 429 with
+`Retry-After: 30`; note ingestion's WorkManager backoff starts at 30 s (exponential), and the worker never
+reschedules itself. E2b-2 is not device-verified (see verification).

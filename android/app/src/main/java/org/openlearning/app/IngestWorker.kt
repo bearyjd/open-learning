@@ -100,11 +100,11 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         /** Bounded wait for the unique work to finish after [cancel]. Returns false on timeout. */
         suspend fun awaitStopped(context: Context, scope: String, id: String): Boolean =
             awaitSettled(WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(workName(scope, id)), 5_000) { infos -> infos.all { it.state.isFinished } }
-        fun schedule(context: Context, scope: String, id: String, replace: Boolean = false) {
+        fun schedule(context: Context, scope: String, id: String, replace: Boolean = false, kind: String = "url") {
             val request = OneTimeWorkRequestBuilder<IngestWorker>()
                 .setInputData(input(scope, id))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, backoffSeconds(kind), TimeUnit.SECONDS)
                 .addTag("ingest").build()
             WorkManager.getInstance(context).enqueueUniqueWork(workName(scope, id), if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, request)
         }
