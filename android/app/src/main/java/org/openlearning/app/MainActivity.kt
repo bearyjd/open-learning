@@ -42,12 +42,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        receive(intent)
-        setContent { LearningTheme { LearningApp(shared, consumeShare = { shared = null }) } }
+        receive(intent, isNewIntent = false, recreated = savedInstanceState != null)
+        setContent { LearningTheme { LearningApp(shared, consumeShare = ::consumeShare) } }
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
-    private fun receive(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") shared = intent.getStringExtra(Intent.EXTRA_TEXT)
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent, isNewIntent = true, recreated = false) }
+    /** The SEND intent stays on the activity after the share is handled, so replace it: a recreation must not replay it. */
+    private fun consumeShare() { shared = null; setIntent(Intent(Intent.ACTION_MAIN)) }
+    private fun receive(intent: Intent, isNewIntent: Boolean, recreated: Boolean) {
+        val share = intent.action == Intent.ACTION_SEND && intent.type == "text/plain"
+        val fromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+        if (shouldHandleShare(share, isNewIntent, recreated, fromHistory)) acceptShare(intent.getStringExtra(Intent.EXTRA_TEXT), shared)?.let { shared = it }
+        else if (share) setIntent(Intent(Intent.ACTION_MAIN))
     }
 }
 internal val Ink = Color(0xFF173A36)
@@ -72,11 +77,12 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     var composingNote by rememberSaveable { mutableStateOf(false) }
     var showingNotes by rememberSaveable { mutableStateOf(false) }
     val accountReady = connection != null && state.scope == connection?.scope
-    LaunchedEffect(shared, accountReady) { if (shared != null) {
+    LaunchedEffect(shared, accountReady, model.draftReady) { if (shared != null) {
         val route = routeShare(shared, model.limits)
-        if (!shareDeferred(route, accountReady)) {
+        if (!shareDeferred(route, accountReady, model.draftReady)) {
             importTextFor(route)?.let { importText = it }
             if (route is ShareRoute.Note) model.receiveSharedNote(route)
+            if (route is ShareRoute.TooLong) model.reportShareRejected(route)
             destination = Destination.Discover; composingNote = route is ShareRoute.Note; showingNotes = false; model.closeDetail(); consumeShare()
         }
     } }

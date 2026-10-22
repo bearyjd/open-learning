@@ -62,7 +62,7 @@ private fun NoteEditorBody(model: LearningViewModel, busy: Boolean, onClose: () 
         AlertDialog(
             onDismissRequest = model::discardPendingFile,
             title = { Text("Replace your text?") },
-            text = { Text("The file will replace the text you typed. This can't be undone.") },
+            text = { Text(replaceDialogText(model.pendingFromShare)) },
             confirmButton = { TextButton(onClick = model::applyPendingFile) { Text("Replace") } },
             dismissButton = { TextButton(onClick = model::discardPendingFile) { Text("Keep my text") } },
         )

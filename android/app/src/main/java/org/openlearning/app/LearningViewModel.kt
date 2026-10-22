@@ -42,7 +42,9 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     var pendingFile by mutableStateOf<NoteFileResult.Loaded?>(null); private set
     // Server limits fetched on connect (best-effort); the defaults apply until then and when the fetch fails.
     var limits by mutableStateOf(DEFAULT_LIMITS); private set
-    private var draftReady = false
+    // True only once the Room draft of the active account has loaded: a share must not see an empty draft before that.
+    var draftReady by mutableStateOf(false); private set
+    var pendingFromShare by mutableStateOf(false); private set
     private val draftLock = Mutex()
     init {
         viewModelScope.launch { snapshotFlow { draft }.debounce(400).collect { saveDraft(it) } }
@@ -55,7 +57,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 feedFlow?.cancel(); jobsFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatGeneration++; activeOperations = 0; cached = emptyList()
                 mutable.value = ScreenState(scope = config?.scope.orEmpty())
-                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; limits = DEFAULT_LIMITS
+                draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS
                 repo = config?.let(container::repository)
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
@@ -190,8 +192,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     /** Persists the draft now (the editor calls this on stop) instead of waiting for the debounce. */
     fun flushDraft() { viewModelScope.launch { saveDraft(draft) } }
     fun editDraft(next: NoteDraftFields) { draft = next; noteMessage = null }
-    fun applyPendingFile() { pendingFile?.let { draft = draft.withFile(it); noteMessage = null }; pendingFile = null }
-    fun discardPendingFile() { pendingFile = null }
+    fun applyPendingFile() { pendingFile?.let { draft = draft.withFile(it); noteMessage = null; flushDraft() }; pendingFile = null; pendingFromShare = false }
+    fun discardPendingFile() { pendingFile = null; pendingFromShare = false }
     fun clearNoteMessage() { noteMessage = null }
     /** Returns true when the note was accepted for queueing, so the editor can close. */
     fun submitNote(): Boolean {
@@ -352,13 +354,16 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun noteMessageShown() = notesActions.messageShown()
     /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
     fun receiveSharedNote(note: ShareRoute.Note) {
-        offerText(NoteFileResult.Loaded(note.title, note.text))
+        if (acceptShare(note.text, pendingFile?.text, draft.text) == null) return
+        offerText(NoteFileResult.Loaded(note.title, note.text), fromShare = true)
     }
-    private fun offerText(loaded: NoteFileResult.Loaded) {
+    /** An over-size share is refused with a message; nothing reaches the draft. */
+    fun reportShareRejected(route: ShareRoute.TooLong) { mutable.update { it.copy(error = shareTooLongMessage(route)) } }
+    private fun offerText(loaded: NoteFileResult.Loaded, fromShare: Boolean = false) {
         noteMessage = null
         when (filePlan(draft)) {
-            FilePlan.Apply -> draft = draft.withFile(loaded)
-            FilePlan.ConfirmReplace -> pendingFile = loaded
+            FilePlan.Apply -> { draft = draft.withFile(loaded); flushDraft() }
+            FilePlan.ConfirmReplace -> { pendingFile = loaded; pendingFromShare = fromShare }
         }
     }
     fun clearError() { mutable.update { it.copy(error = null, notice = null) } }

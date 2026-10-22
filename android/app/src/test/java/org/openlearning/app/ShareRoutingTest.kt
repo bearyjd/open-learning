@@ -42,4 +42,20 @@ class ShareRoutingTest {
         assertEquals("abcd", route.title)
         assertEquals(SHARE_TITLE_MAX, (routeShare("x".repeat(200)) as ShareRoute.Note).title.length)
     }
+    @Test fun textOverTheShareCapIsRejectedNotTruncated() {
+        val cap = shareCap(DEFAULT_LIMITS)
+        assertEquals(DEFAULT_LIMITS.maxChars + SHARE_OVER_LIMIT_SLACK, cap)
+        assertTrue(routeShare("a".repeat(cap)) is ShareRoute.Note)
+        assertEquals(ShareRoute.TooLong(cap + 1, cap), routeShare("a".repeat(cap + 1)))
+        assertEquals(ShareRoute.TooLong(300_001, SHARE_HARD_CAP_CHARS), routeShare("a".repeat(300_001), EffectiveLimits(maxChars = Int.MAX_VALUE)))
+    }
+    @Test fun capCountsCodePointsAndAppliesBeforeLinkDetection() {
+        val cap = shareCap(DEFAULT_LIMITS)
+        assertTrue(routeShare("😀".repeat(cap)) is ShareRoute.Note)
+        assertTrue(routeShare("https://a.example " + "a".repeat(cap)) is ShareRoute.TooLong)
+    }
+    @Test fun secondLinkMakesItANoteInsteadOfDroppingIt() {
+        assertTrue(routeShare("https://a.example/x and https://b.example/y") is ShareRoute.Note)
+        assertEquals(ShareRoute.Url("https://a.example/x"), routeShare("see https://a.example/x https://a.example/x"))
+    }
 }
