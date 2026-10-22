@@ -80,6 +80,8 @@ A later assessment-grounding attempt also failed the gate (primary 2/8, holdout 
 one critical failure each) and its prompt wording was reverted; see the
 [archived experiment](model-evaluation.md#rejected-assessment-grounding-experiment).
 Follow-up grounding remains open.
+A pre-registered baseline of current `main` also failed the gate (primary 0/8 with one critical failure, holdout 0/8); see the
+[main baseline](model-evaluation.md#main-baseline-pre-registered). No quality improvement is claimed.
 
 **Deliver:** A small, versioned corpus of legally reusable passages and questions,
 including misleading premises, partial excerpts, unsupported questions, and
