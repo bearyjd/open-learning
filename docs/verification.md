@@ -549,3 +549,14 @@ scenario (open list, forget one of two notes, the other row remains; uiautomator
 has not been run against a device. The script cannot check the Room import-row property or FLAG_SECURE; the
 instrumented tests do. Not verified: pull of a real server's `/notes`, the WorkManager 30 s backoff on a device, share
 intents from real apps, and the pre-migration fallback on a migrated database.
+
+### E2b-2 review fixes (still NOT device-verified)
+
+New JVM tests (all pass in CI; nothing here was run on a device): `ShareEntryTest` (fresh, recreated, from-history,
+new-intent and consumed share decisions; deferral table incl. the late-draft cold start; repeat-share coalescing; dialog
+wording), `ShareRoutingTest` additions (share cap and hard ceiling, code-point counting, second link), `NotesListStateTest`
+additions (load before delete, out-of-order responses, stale failure, partial forget, redacted `toString`),
+`NoteWorkLogicTest` purge branches (mixed state, title match, blank title, pure pre-migration), `NoteLogicTest`
+forget outcome mapping, `NoteLimitsTest` clamping, `SecureRefCountTest`. Not covered by any test: the Activity wiring
+(`onCreate`/`onNewIntent`/`consumeShare`), the `DisposableEffect` that clears the list, and `FLAG_SECURE` counting on a
+real window; the instrumented tests were not extended or run.
