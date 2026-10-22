@@ -17,8 +17,8 @@ internal class ListFixture {
     val deleteStatus = AtomicInteger(204)
     private val deleted = CopyOnWriteArrayList<String>()
     private val notes = mapOf(
-        "doc-a" to """{"document_id":"doc-a","title":"Alpha note","label":"Lecture","created_at":"2026-10-22T09:30:00Z","char_count":1234}""",
-        "doc-b" to """{"document_id":"doc-b","title":"Beta note","label":null,"created_at":"2026-10-21T08:00:00Z","char_count":456}""",
+        TestIds.DOC_A to """{"document_id":"${TestIds.DOC_A}","title":"Alpha note","label":"Lecture","created_at":"2026-10-22T09:30:00Z","char_count":1234}""",
+        TestIds.DOC_B to """{"document_id":"${TestIds.DOC_B}","title":"Beta note","label":null,"created_at":"2026-10-21T08:00:00Z","char_count":456}""",
     )
 
     fun start() {

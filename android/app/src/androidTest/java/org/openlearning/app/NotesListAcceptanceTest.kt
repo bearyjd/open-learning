@@ -39,8 +39,8 @@ class NotesListAcceptanceTest {
         container.credentials.save(fixture.server.url("/").toString(), "alpha", true)
         io {
             val scope = scope()
-            container.database.dao().putJob(PendingIngest(scope, "row-a", "", kind = "note", status = "completed", title = "Alpha note", documentId = "doc-a"))
-            container.database.dao().putJob(PendingIngest(scope, "row-b", "", kind = "note", status = "completed", title = "Beta note", documentId = "doc-b"))
+            container.database.dao().putJob(PendingIngest(scope, "row-a", "", kind = "note", status = "completed", title = "Alpha note", documentId = TestIds.DOC_A))
+            container.database.dao().putJob(PendingIngest(scope, "row-b", "", kind = "note", status = "completed", title = "Beta note", documentId = TestIds.DOC_B))
         }
     }
 
@@ -62,7 +62,7 @@ class NotesListAcceptanceTest {
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         compose.onNodeWithText("Cancel").performClick()
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
         assertEquals(2, rows().size)
     }
 
@@ -71,11 +71,11 @@ class NotesListAcceptanceTest {
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         confirm()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/doc-a") == 1 }
-        waitUntil { rows().map { it.documentId } == listOf("doc-b") }
+        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") == 1 }
+        waitUntil { rows().map { it.documentId } == listOf(TestIds.DOC_B) }
         waitUntil { compose.onAllNodesWithText("Alpha note").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Beta note").assertExists()
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-b"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_B}"))
     }
 
     // Not run on a device. A 5xx no longer blocks the forget: the note is hidden now and the DELETE is retried.
@@ -88,7 +88,7 @@ class NotesListAcceptanceTest {
         waitUntil { compose.onAllNodesWithText("Alpha note").fetchSemanticsNodes().isEmpty() }
         waitText("1 forgotten note waiting for the server")
         assertEquals(listOf(FORGET_PENDING), io { container.database.dao().forgets(scope()).map { it.status } })
-        assertEquals(listOf("doc-b"), rows().map { it.documentId })
+        assertEquals(listOf(TestIds.DOC_B), rows().map { it.documentId })
     }
 
     // Not run on a device. Offline forget succeeds locally: hidden at once, no request, one queued row.
@@ -101,9 +101,9 @@ class NotesListAcceptanceTest {
         waitText("1 forgotten note waiting for the server")
         compose.onNodeWithText("Alpha note").assertDoesNotExist()
         assertTrue(compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isEmpty())
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
-        assertEquals(listOf("doc-a"), io { container.database.dao().forgets(scope()).map { it.documentId } })
-        assertEquals(listOf("doc-b"), rows().map { it.documentId })
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
+        assertEquals(listOf(TestIds.DOC_A), io { container.database.dao().forgets(scope()).map { it.documentId } })
+        assertEquals(listOf(TestIds.DOC_B), rows().map { it.documentId })
     }
 
     // NOT device-verified. FLAG_SECURE is set while the list is shown and cleared again after it is closed.

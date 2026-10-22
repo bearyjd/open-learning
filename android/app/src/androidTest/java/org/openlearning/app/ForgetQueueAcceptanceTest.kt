@@ -49,18 +49,18 @@ class ForgetQueueAcceptanceTest {
         fixture.down.set(true)
         forgetFirst()
         waitText("1 forgotten note waiting for the server")
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
         // Process death stand-in: finish the activity (new ViewModel on relaunch) and drop the scheduled work.
         scenario!!.closeAfterFinish(); scenario = null
         work.cancelAllWork().result.get(10, TimeUnit.SECONDS)
         assertEquals(1, forgets().size)
         fixture.down.set(false)
         openList()
-        waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/doc-a") == 1 }
+        waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") == 1 }
         waitUntil { forgets().isEmpty() }
         waitUntil { compose.onAllNodesWithText("waiting for the server", substring = true).fetchSemanticsNodes().isEmpty() }
         Thread.sleep(2_000)
-        assertEquals(1, fixture.count("DELETE", "/api/v1/notes/doc-a"))
+        assertEquals(1, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
     }
 
     @Test fun a404CountsAsSuccess() {
@@ -92,7 +92,7 @@ class ForgetQueueAcceptanceTest {
         fixture.deleteStatus.set(503)
         openList(); waitText("Alpha note")
         forgetFirst()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/doc-a") >= 1 }
+        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") >= 1 }
         assertEquals(listOf(FORGET_PENDING), forgets().map { it.status })
         fixture.deleteStatus.set(204)
         waitUntil(90_000) { forgets().isEmpty() }
@@ -100,10 +100,10 @@ class ForgetQueueAcceptanceTest {
 
     @Test fun anotherAccountsPendingRowSurvivesReconnect() {
         val otherScope = Connection("https://other.invalid/", "beta").scope
-        io { container.database.dao().putForget(PendingForget(otherScope, "doc-other", 1, FORGET_PENDING)) }
+        io { container.database.dao().putForget(PendingForget(otherScope, TestIds.DOC_OTHER, 1, FORGET_PENDING)) }
         openList(); waitText("Alpha note")
         Thread.sleep(3_000)
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-other"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_OTHER}"))
         assertEquals(1, io { container.database.dao().forgets(otherScope).size })
     }
 
