@@ -3,7 +3,6 @@ package org.openlearning.app
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -14,11 +13,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.InterceptPlatformTextInput
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -26,7 +23,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 
 private val NOTE_MIME_TYPES = arrayOf("text/plain", "text/markdown", "text/x-markdown", "application/octet-stream")
 
-private tailrec fun Context.activity(): Activity? = when (this) {
+internal tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
     else -> null
@@ -39,14 +36,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 @Composable
 private fun ProtectWhileEditing() {
     ExcludeFromAutofill()
-    val view = LocalView.current
-    DisposableEffect(view) {
-        val window = view.context.activity()?.window
-        window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        onDispose {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
-    }
+    SecureWindow()
 }
 
 /**

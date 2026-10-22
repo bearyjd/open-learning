@@ -70,10 +70,20 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     var importText by rememberSaveable { mutableStateOf("") }
     // Only this flag survives process death; the note text is a Room-backed draft in the view model.
     var composingNote by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(shared) { if (shared != null) { importText = sharedUrl(shared) ?: shared; destination = Destination.Discover; composingNote = false; model.closeDetail(); consumeShare() } }
+    var showingNotes by rememberSaveable { mutableStateOf(false) }
+    val accountReady = connection != null && state.scope == connection?.scope
+    LaunchedEffect(shared, accountReady) { if (shared != null) {
+        val route = routeShare(shared, model.limits)
+        if (!shareDeferred(route, accountReady)) {
+            importTextFor(route)?.let { importText = it }
+            if (route is ShareRoute.Note) model.receiveSharedNote(route)
+            destination = Destination.Discover; composingNote = route is ShareRoute.Note; showingNotes = false; model.closeDetail(); consumeShare()
+        }
+    } }
     LaunchedEffect(destination, connection?.scope) { if (destination == Destination.Review && connection != null) model.loadReviews() }
     BackHandler(state.selected != null) { model.closeDetail() }
     BackHandler(composingNote && state.selected == null) { composingNote = false }
+    BackHandler(showingNotes && !composingNote && state.selected == null) { showingNotes = false }
     if (settings || connection == null) ConnectionDialog(connection, model, onDismiss = { settings = false })
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val expanded = maxWidth >= 840.dp
@@ -102,7 +112,8 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                         if (state.learning) Tutor(state, model) else InsightDetail(state.selected!!, model)
                     } else when (destination) {
                         Destination.Discover -> if (composingNote) NoteEditor(model, state.busy) { composingNote = false }
-                            else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, model)
+                            else if (showingNotes) NotesList(state.notes, model) { showingNotes = false }
+                            else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, { showingNotes = true }, model)
                         Destination.Library -> InsightList("Your library", "Keep the ideas you want to return to. Saved ideas stay readable offline.", state.library, "No saved ideas yet", "Save an idea from Discover to keep its explanation and source here.", model)
                         Destination.Learn -> InsightList("A little deeper", "Choose an idea. Your tutor explains it, then asks you to recall it in your own words.", state.library, "Choose something worth learning", "Save an idea first, then start a source-grounded conversation.", model, true)
                         Destination.Review -> ReviewScreen(state, model)
@@ -119,7 +130,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-@Composable private fun StatusMessage(text: String, error: Boolean, dismiss: () -> Unit) {
+@Composable internal fun StatusMessage(text: String, error: Boolean, dismiss: () -> Unit) {
     Surface(color = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
@@ -127,13 +138,13 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         }
     }
 }
-@Composable private fun EmptyState(title: String, description: String) {
+@Composable internal fun EmptyState(title: String, description: String) {
     Column(Modifier.fillMaxWidth().padding(vertical = 30.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif)
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, writeNote: () -> Unit, model: LearningViewModel) {
+@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, writeNote: () -> Unit, openNotes: () -> Unit, model: LearningViewModel) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageTitle("Follow a good idea.", "Turn something you read into something you understand.") }
         item {
@@ -145,6 +156,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                     Button(onClick = import, enabled = input.isNotBlank() && !state.busy) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add to learning feed") }
                     Text("Or share a link from your browser. Imports continue in the background.", style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = writeNote) { Icon(Icons.Default.EditNote, null); Spacer(Modifier.width(6.dp)); Text("Write or import a note") }
+                    OutlinedButton(onClick = openNotes) { Icon(Icons.Default.Bookmarks, null); Spacer(Modifier.width(6.dp)); Text("Your notes") }
                 }
             }
         }

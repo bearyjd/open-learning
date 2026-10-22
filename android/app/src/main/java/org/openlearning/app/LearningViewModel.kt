@@ -34,6 +34,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var requestGeneration = 0
     private var chatGeneration = 0
     private var detailJob: Job? = null
+    private val notesActions = NotesActions(viewModelScope, container.forgotten, { repo }, mutable) { memory.clear(); detailJob?.cancel(); chatGeneration++ }
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
@@ -59,7 +60,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
-                    launch { loadLimits(repository) }
+                    launch { val fetched = notesActions.fetchLimits(repository); if (repo === repository) limits = fetched }
                     feedFlow = launch { repository.cached.collect { rows ->
                         cached = rows
                         mutable.update { it.copy(feed = rows.filter { row -> row.inFeed }.map(repository::decode), library = rows.filter { row -> row.saved }.map(repository::decode)) }
@@ -169,10 +170,6 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         }
         // @Update, not REPLACE: a row the user removed meanwhile must stay removed.
         if (dao.updateJob(next) > 0 && next !== expired) IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true, kind = "note")
-    }
-    private suspend fun loadLimits(repository: LearningRepository) {
-        val fetched = runCatching { repository.api.limits() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
-        if (repo === repository) limits = effectiveLimits(fetched)
     }
     private suspend fun loadDraft(repository: LearningRepository) {
         val saved = container.database.dao().draft(repository.config.scope)
@@ -350,40 +347,9 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
         val results = container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim()))
         if (repo === repository) mutable.update { it.copy(results = results, searched = true) }
     }
-    fun loadNotes() {
-        val repository = repo ?: return
-        mutable.update { it.copy(notes = it.notes.refreshStarted()) }
-        viewModelScope.launch {
-            try {
-                val fetched = repository.api.notes().toSummaries()
-                if (repo === repository) mutable.update { it.copy(notes = it.notes.refreshed(fetched)) }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo === repository) mutable.update { it.copy(notes = it.notes.refreshFailed(error.userMessage())) } }
-        }
-    }
-    fun forgetListedNote(note: NoteSummary) {
-        val repository = repo ?: return
-        val scope = repository.config.scope
-        if (note.documentId in state.value.notes.forgetting) return
-        mutable.update { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
-        viewModelScope.launch {
-            container.forgotten.add(scope, note.documentId)
-            try {
-                val response = repository.api.forgetNote(note.documentId)
-                if (!response.isGone()) throw HttpException(response)
-                val purged = repository.purgeDocument(note.documentId)
-                if (repo === repository) {
-                    memory.clear(); detailJob?.cancel(); chatGeneration++
-                    mutable.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId)) }
-                }
-            } catch (cancelled: CancellationException) { container.forgotten.remove(scope, note.documentId); throw cancelled }
-            catch (error: Exception) {
-                container.forgotten.remove(scope, note.documentId)
-                if (repo === repository) mutable.update { it.copy(notes = it.notes.forgetFailed(note.documentId, forgetFailureMessage(error))) }
-            }
-        }
-    }
-    fun noteMessageShown() = mutable.update { it.copy(notes = it.notes.messageShown()) }
+    fun loadNotes() = notesActions.load()
+    fun forgetListedNote(note: NoteSummary) = notesActions.forget(note)
+    fun noteMessageShown() = notesActions.messageShown()
     /** Shared plain text for the note editor. Never submits; typed text is only replaced after the existing confirm. */
     fun receiveSharedNote(note: ShareRoute.Note) {
         offerText(NoteFileResult.Loaded(note.title, note.text))
