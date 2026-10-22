@@ -132,6 +132,45 @@ the run's digest against the current `ai.py` bytes. Against the reverted
 `ai.py` they will not validate, by design; their hashes must never be rewritten.
 These are single-sample runs with AI-assisted reviewers, not a statistical estimate.
 
+## Main baseline (pre-registered)
+
+Pre-registration, recorded before inference:
+
+- Candidate: current `main` `backend/open_learning/ai.py`, SHA256
+  `2bfdb9ed89ff69d50b3baafae304face9f7b06991dfe18ec907b58fb605b89ee`, verified with
+  `sha256sum` before the runs. Production prompts and code are unchanged.
+- Model: Qwen2.5-7B-Instruct Q4_K_M (two parts, from `$HOME/.local/share/open-learning-vulkan`),
+  llama.cpp build 9551 (`379ac6673`) Vulkan, temperature 0.2 (the production default in `ai.py`).
+- One attempt per case, on both frozen corpora (primary 8 cases, holdout 8 cases), in one
+  server session. No retries, no selective re-runs, no prompt edits.
+- Gate, unchanged: 8/8 contract-valid, every applicable score 2, zero critical failures.
+- Expected result: **FAIL**.
+- Disclosure: the designers have already seen the holdout corpus.
+- Reviews are independent and done later by separate reviewers who receive no prior scores
+  and no `ai.py` or prompt access.
+
+Run metadata:
+
+- Server: `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json llama-server
+  --model qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf --alias qwen2.5-7b-instruct-q4_k_m
+  --device Vulkan0 --gpu-layers all --ctx-size 8192 --parallel 1 --flash-attn on
+  --batch-size 512 --ubatch-size 128 --no-jinja --chat-template chatml
+  --host 127.0.0.1 --port 18080` (NVIDIA RTX 4070 Laptop GPU, loopback only).
+- Client: `uv run --frozen python -m open_learning.evaluation run --execute --model
+  qwen2.5-7b-instruct-q4_k_m --endpoint http://127.0.0.1:18080/v1 --timeout 180`
+  (`--corpus evaluation/holdout.json` for the holdout), matching the timeout recorded in earlier archived runs.
+- Primary corpus SHA256 `71dc220abf40648d6ddd8e67a84bbbc83bfc6ab900a18a1cca059664991c8d74`;
+  holdout corpus SHA256 `5587b0a329574d36f30744b1192c109e2288f9d9737866ce6c1beca48399fe84`.
+
+| Run | Contract-valid | Measured inference time | Wall time (incl. startup) |
+| --- | --- | --- | --- |
+| [Main, primary](../backend/evaluation/results/qwen2.5-7b-q4-main-primary-2026-10-21-run.json) | 8/8 | 20.833 s | 21 s |
+| [Main, holdout](../backend/evaluation/results/qwen2.5-7b-q4-main-holdout-2026-10-21-run.json) | 8/8 | 19.455 s | 19 s |
+
+Timestamps in the run files are UTC (`2026-10-22T03:34Z`); the local run date was 2026-10-21.
+**Reviews and scores are pending.** No semantic result is claimed. Both runs are unscored
+(`status: pending_review`), and the pre-registered expectation remains FAIL until independent review.
+
 ## Run locally
 
 With the locked backend dependencies and a local model server running:
