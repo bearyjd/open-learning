@@ -7,7 +7,7 @@ const val PURGE_FLOOR_TTL_MS = 10 * 60 * 1000L
 data class FloorEntry(val arrivals: Int = 0, val addedAt: Long = 0)
 
 /**
- * Document ids a forget commit has just purged from the retained state ([ScreenPublisher.purgeNow]), kept so that a publication
+ * Document ids (kept per account scope, so one account's purge never lowers another's floor) a forget commit has just purged from the retained state ([ScreenPublisher.purgeNow]), kept so that a publication
  * or the derived view that still holds an older hidden set scrubs them too. An id leaves the floor on the FIRST of:
  * 1. an arrival that holds it (the Room set now hides it);
  * 2. an explicit [released] call, made whenever a PendingForget row is deleted (stop trying, TTL prune), so a note the person
@@ -17,22 +17,26 @@ data class FloorEntry(val arrivals: Int = 0, val addedAt: Long = 0)
  * The time bound is safe because a still-pending or confirmed forget is also in the Room set, which hides it independently.
  * Time is passed in ([now]) so the class stays pure.
  */
-data class PurgeFloor(val scope: String = "", val ids: Map<String, FloorEntry> = emptyMap()) {
+data class PurgeFloor(val byScope: Map<String, Map<String, FloorEntry>> = emptyMap()) {
     fun added(scope: String, ids: Set<String>, now: Long = 0): PurgeFloor {
-        val base = if (scope == this.scope) this.ids else emptyMap()
-        return PurgeFloor(scope, base + ids.filter { it !in base }.associateWith { FloorEntry(0, now) })
+        val base = byScope[scope].orEmpty()
+        return PurgeFloor(byScope + (scope to base + ids.filter { it !in base }.associateWith { FloorEntry(0, now) }))
     }
 
-    fun arrived(scope: String, hidden: Set<String>, now: Long = 0): PurgeFloor =
-        if (scope != this.scope) this
-        else copy(ids = ids.filter { (id, e) -> id !in hidden && !expired(e, now) }
-            .mapValues { it.value.copy(arrivals = it.value.arrivals + 1) }.filterValues { it.arrivals < STALE_ARRIVALS })
+    fun arrived(scope: String, hidden: Set<String>, now: Long = 0): PurgeFloor {
+        val current = byScope[scope] ?: return this
+        val next = current.filter { (id, e) -> id !in hidden && !expired(e, now) }
+            .mapValues { it.value.copy(arrivals = it.value.arrivals + 1) }.filterValues { it.arrivals < STALE_ARRIVALS }
+        return PurgeFloor(byScope + (scope to next))
+    }
 
-    fun released(scope: String, ids: Set<String>): PurgeFloor =
-        if (scope != this.scope) this else copy(ids = this.ids.filterKeys { it !in ids })
+    fun released(scope: String, ids: Set<String>): PurgeFloor {
+        val current = byScope[scope] ?: return this
+        return PurgeFloor(byScope + (scope to current.filterKeys { it !in ids }))
+    }
 
     fun idsFor(scope: String, now: Long = 0): Set<String> =
-        if (scope == this.scope) ids.filterValues { !expired(it, now) }.keys else emptySet()
+        byScope[scope].orEmpty().filterValues { !expired(it, now) }.keys
 
     private fun expired(e: FloorEntry, now: Long) = now - e.addedAt >= PURGE_FLOOR_TTL_MS
 

@@ -155,6 +155,16 @@ class ScreenPublisherTest {
         forgetPurge(p); val once = p.value; forgetPurge(p)
         assertEquals(once, p.value); assertEquals(listOf("b"), feedIds(p))
     }
+    @Test fun aLateOtherAccountPurgeNeverLowersTheActiveAccountsFloor() = runBlocking {
+        val p = publisher { emptySet() }.also { it.reset("A") }
+        p.hiddenArrived("A" to emptySet())
+        p.publishLocal(both)
+        forgetPurge(p)
+        p.purgeNow("B", setOf("x")) // an in-flight DELETE for the previous account finishing late
+        p.publishFlow(both) // a queued stale A emission trusting the old snapshot
+        assertEquals(listOf("b"), feedIds(p))
+        assertEquals("A" to setOf("d1"), p.hiddenForView.first())
+    }
     @Test fun theDerivedViewScrubsWithThePurgeIdsBeforeTheRoomFlowCatchesUp() = runBlocking {
         val p = ScreenPublisher({ emptySet() }, { flowOf(emptySet()) }).also { it.reset("A") }
         assertEquals("A" to emptySet<String>(), p.hiddenForView.first())

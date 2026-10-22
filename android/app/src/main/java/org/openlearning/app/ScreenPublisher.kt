@@ -113,7 +113,7 @@ class ScreenPublisher(
         var used = hiddenSnapshot.value
         mutable.update { current ->
             applied = scope == null || current.scope == scope
-            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used, floor.value.scope to floor.value.idsFor(floor.value.scope, clock())) + extra, transform) }
+            if (!applied) current else { used = hiddenSnapshot.value; current.published(listOf(used, current.scope to floor.value.idsFor(current.scope, clock())) + extra, transform) }
         }
         val latest = hiddenSnapshot.value
         if (applied && latest !== used) mutable.update { it.purgedFor(latest.first, latest.second) }
