@@ -132,12 +132,20 @@ class ForgetQueueRoomTest {
         assertTrue(dao.forgets("s").isEmpty()); assertTrue(scheduled.isEmpty())
     }
 
-    @Test fun resumeMarksAThrowingRowFailedAndStillSchedulesTheRest() = runBlocking {
-        val throwing = ForgetQueue(db, { scope, id, _ -> if (id == "bad") throw IllegalStateException("too big") else scheduled += scope to id }, { _, _ -> })
+    @Test fun resumeMarksOnlyAPermanentlyBadRowFailedAndStillSchedulesTheRest() = runBlocking {
+        val throwing = ForgetQueue(db, { scope, id, _ -> if (id == "bad") throw IllegalArgumentException("Data too large") else scheduled += scope to id }, { _, _ -> })
         dao.putForget(PendingForget("s", "bad", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "ok", 1, FORGET_PENDING))
         throwing.resumePending("s")
         assertEquals(listOf("s" to "ok"), scheduled)
         assertEquals(FORGET_SCHEDULE_ERROR, dao.forget("s", "bad")?.error); assertEquals(FORGET_FAILED, dao.forget("s", "bad")?.status)
+    }
+
+    @Test fun resumeLeavesATransientlyFailingRowPendingAndStillSchedulesTheRest() = runBlocking {
+        val throwing = ForgetQueue(db, { scope, id, _ -> if (id == "bad") throw IllegalStateException("WorkManager not initialised") else scheduled += scope to id }, { _, _ -> })
+        dao.putForget(PendingForget("s", "bad", 1, FORGET_PENDING)); dao.putForget(PendingForget("s", "ok", 1, FORGET_PENDING))
+        throwing.resumePending("s")
+        assertEquals(listOf("s" to "ok"), scheduled)
+        assertEquals(FORGET_PENDING, dao.forget("s", "bad")?.status); assertNull(dao.forget("s", "bad")?.error)
     }
 
     @Test fun aSchedulingFailureAfterTheCommitStillCountsAsForgotten() = runBlocking {
