@@ -359,7 +359,7 @@ androidTest APK, so every instrumented test (including `DatabaseHygieneTest`) is
 on a device. JVM-tested: the purge predicate, the stale-purge decision, redacted `toString`, retry and
 conflict plans. Instrumented only, not yet run: Room purge SQL and transactions, the WAL checkpoint,
 `ViewModel` wiring (purge job cancel on reconnect, `removeNoteJob`, `forgetNote`). Forgetting a note
-still deletes all completed note rows of that connection (accepted over-deletion).
+still deletes all completed note rows of that connection (app limitation until E2b-2, which will use the server's job `document_id`).
 
 Not verified: any device behavior, the real backend with the app, process death of the
 editor on hardware, Compose text-field performance at 60,000 characters, an actual backup or

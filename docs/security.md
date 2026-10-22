@@ -85,7 +85,10 @@ no such lock, so the cap can overshoot slightly under concurrent submissions.
 
 Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id and
 `char_count`, the number of characters (not bytes) in the stored text; never the text or
-the internal key), newest first, with `limit` (1 to 500, default 100) and `offset` (default
+the internal key). `char_count` is computed with `length(documents.text)`, which reads
+the whole stored text of every listed row (on PostgreSQL this detoasts it): up to about
+6 MB per default 100-row page and about 30 MB at the 500-row maximum at the default
+document limit, so keep pages small. There is no stored length column, newest first, with `limit` (1 to 500, default 100) and `offset` (default
 0). `GET /api/v1/jobs?kind=note` (same `limit`/`offset`) lists note jobs as `id`,
 `status`, `created_at` and `document_id` only, never text, title, label or error, so a
 failed near-duplicate job can be found and removed. `document_id` is null until a job
@@ -99,6 +102,11 @@ jobs still holding the same text are cancelled and their text cleared; cancellin
 running job closes the race in which its worker would recreate the note. Completed note
 jobs whose `document_id` points at the note are deleted with it; completed jobs without a
 link (created before migration 0004) are left alone.
+Race with duplicate submissions: forget holds the document lock for its whole transaction.
+Note jobs that already exist are cancelled by its content-hash pass; a duplicate submitted
+after that pass can only complete by linking the document through the worker's dedupe path,
+which share-locks the document first, so it waits for forget's commit, finds the document
+gone and imports the text afresh instead of linking a deleted note.
 `DELETE /api/v1/jobs/{job_id}` removes a note job of any status (409 for URL jobs). Importing the
 same text again afterwards creates new rows.
 Limits of forgetting: it deletes live data only. Database backups and snapshots
@@ -121,9 +129,12 @@ fields and an empty body are 422) and returns the note. Both fields use the inge
 validators, including the control-character and bidi rules and fixed error messages that
 never echo input; a null or blank label clears it, a null title is rejected. It changes
 metadata only: no model call, no new version, the text and insights are untouched. Unknown
-ids and URL documents answer 404 `Note not found`. It takes the document row lock first
-and then its source, the same order as forgetting, so a concurrent forget gives 404 or
-204, never a 500. This partly fixes the old limitation that resubmitting the same text
+field names are reported in the 422 `loc` (pydantic `extra_forbidden`), the same as ingest,
+so a field name you send is echoed back there but never a value. Unknown
+ids and URL documents answer 404 `Note not found`. It locks the document row first and
+then its source; forgetting locks the document, then note jobs by id, then insights and
+review items, and deletes the source last (full lock order in the `open_learning/forget.py`
+docstring), so a concurrent forget gives 404 or 204, never a 500. This partly fixes the old limitation that resubmitting the same text
 keeps the first title: the title and label can now be changed after import, but
 resubmitting identical text still deduplicates to the first import and ignores the new
 title and label.
@@ -213,8 +224,9 @@ failed, waiting, paused or running notes) and note drafts are never deleted by t
 mistyped token cannot destroy a note: those rows stay on the device, hidden and not sent, and
 reconnecting the original account resumes them. Remove (or forgetting) is the way to clear them. The
 cards are purged immediately, not after a first successful call on the new connection. Forgetting a
-note deletes every completed note row of that connection, not only the forgotten note's (known
-over-deletion: a job row has no document id). An in-flight submission cancelled at the wrong moment can still leave a note on the
+note deletes every completed note row of that connection, not only the forgotten note's (an app
+limitation until E2b-2: the app does not yet read the `document_id` the server now links to
+each job, so it cannot scope the deletion). An in-flight submission cancelled at the wrong moment can still leave a note on the
 server whose response never arrived; the server deduplicates by hash and Forget removes it.
 Open risks: the 60,000-character limit is
 hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (now advertised by `GET /api/v1/limits`; the app does not read it yet) (a 422 keeps the
