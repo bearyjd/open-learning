@@ -174,7 +174,7 @@ curl --fail http://127.0.0.1:8000/api/v1/ingest/text \
 Cards from notes report `source_kind: "note"`, an empty `source_url`, and
 `source_label`; URL cards report `source_kind: "url"`. The Android app writes and
 imports notes, shows note attribution, lists your notes ("Your notes", from
-`GET /api/v1/notes`, kept in memory only) and forgets one note at a time; text shared
+`GET /api/v1/notes`, kept in memory only) and forgets one note at a time (hidden on the device at once, deleted from the server when a connection is available, no undo); text shared
 into the app opens the note editor (device run pending, see
 [verification](docs/verification.md)).
 

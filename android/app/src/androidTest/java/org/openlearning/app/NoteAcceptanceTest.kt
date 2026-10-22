@@ -139,19 +139,25 @@ class NoteAcceptanceTest {
         compose.onNodeWithText("Forget", substring = false).performClick()
         waitUntil { fixture.count("DELETE", "/api/v1/notes/note-doc") == 1 }
         waitUntil { io { container.database.dao().allInsights(scope()).isEmpty() } }
-        waitText("Note forgotten.")
+        waitText("Note hidden on this device", substring = true)
     }
 
-    @Test fun offlineForgetKeepsEverything() {
+    // Not run on a device. Offline forget hides the note and the card now; the worker deletes it once the server is back.
+    @Test fun offlineForgetHidesNowThenDeletesOnReconnect() {
         completeOneNote()
         scrollTo("Your note: Lecture 3").performClick()
         waitText("Forget this note")
         fixture.down.set(true)
         scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Forget", substring = false).performClick()
-        waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        waitText("Note hidden on this device", substring = true)
         assertEquals(0, fixture.count("DELETE", "/api/v1/notes/note-doc"))
-        assertEquals(1, io { container.database.dao().allInsights(scope()).size })
+        assertEquals(0, io { container.database.dao().allInsights(scope()).size })
+        assertEquals(listOf("note-doc"), io { container.database.dao().forgets(scope()).map { it.documentId } })
+        fixture.down.set(false)
+        // The first attempt failed with no answer: WorkManager backs off 30 s, so allow two periods.
+        waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/note-doc") == 1 }
+        waitUntil { io { container.database.dao().forgets(scope()).isEmpty() } }
     }
 
     @Test fun removingAQueuedNoteBeforeSubmitSendsNothing() {
@@ -207,7 +213,7 @@ class NoteAcceptanceTest {
         return io { container.database.dao().jobs(scope()).first().first(predicate) }
     }
     private fun workInfo(row: PendingIngest): List<WorkInfo> = work.getWorkInfosForUniqueWork("ingest-${row.scope}-${row.id}").get(10, TimeUnit.SECONDS)
-    private fun waitText(text: String) = waitUntil { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitText(text: String, substring: Boolean = false) = waitUntil { compose.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty() }
     private fun waitUntil(timeout: Long = 15_000, condition: () -> Boolean) {
         try { compose.waitUntil(timeout, condition) } catch (error: Throwable) {
             // Fixture sentinels only: request counts and the semantics tree explain a timeout without real note text.

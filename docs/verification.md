@@ -615,3 +615,31 @@ Test-side fixes after static diagnosis (compile-only, NOT re-run on a device; no
 
 Still unverified: all fixes above on a device, confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF
 picker via DocumentsUI, offline forget (E2b-3).
+
+## E2b-3 Android offline forget (NOT device-verified)
+
+Nothing in this slice has run on a device. The forget queue (`PendingForget`, `ForgetQueue`, `ForgetWorker`) is new, and the
+policy it implements reverses the earlier "nothing is cleared locally unless the server confirms" rule (see security.md).
+
+JVM tests (run in CI): replay decision table (200/204/404 done, 401/403 failed with fixed errors, 429/5xx/no answer retry,
+other 4xx failed), read-time filter predicate, scope isolation of hidden ids, which queued note jobs are cancelled, worker
+scope rule, work name and backoff constants, list copy (waiting line, failed line, queue summary, banner), forget-outcome copy,
+confirm-dialog copy. Python: `scripts/tests` cover the offline-forget helpers and the mock's offline mode.
+
+Compile-checked only (androidTest, not run): `ForgetQueueRoomTest` (PendingForget DAO insert idempotence, hidden ids, delete,
+scope isolation, purgeInactiveScopes keeps PendingForget, read-time hiding in feed, library, search, reviews and the notes list,
+forgetting cancels a queued ingest of the same note, retry and resume scheduling) and `ForgetQueueAcceptanceTest` (offline
+forget, restart, reconnect, exactly one DELETE; 404 counts as success; 401 gives a failed row with Retry and the note stays
+hidden; 5xx keeps the row pending and retries; another account's pending row survives a reconnect). The two earlier offline-forget
+tests were rewritten for the new behaviour. Their fixtures use the `peek()` / `DISCONNECT_AFTER_REQUEST` pattern.
+
+Behaviours with NO JVM test, because they are bound to Room, WorkManager or Compose and the JVM has none of them:
+the single Room transaction in `forgetNoteOffline` and `confirmed`; the DAO queries (insert-ignore, counts, status updates);
+the combined feed/library filter in `LearningRepository.cached`; `visibleReviews` fallback to the server; worker credential
+lookup and `Result.retry()` for a local cleanup failure; unique-work KEEP and the network constraint; `resumePending` on connect;
+the Compose rows (waiting line, failed row, Retry); and the process-death survival claim. The instrumented tests above check
+these only once someone runs them.
+
+Device-acceptance script: `scripts/android_notes.py` has an offline-forget scenario (mock offline, forget the remaining listed
+note, expect the "forgotten note waiting for the server" line and no DELETE, then mock online and expect exactly one DELETE
+within 150 s and the line gone). Written, not run.

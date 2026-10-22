@@ -155,10 +155,25 @@ the defaults cannot reject a share the real limit allows. A "too long" rejection
 activity is recreated before it is shown. `FLAG_SECURE` on the editor and the notes list is reference-counted per
 window (`SecureWindow`): the first screen sets it and it is cleared only when the last one leaves.
 
-Forgetting a note on Android: when the server delete succeeded but the local cleanup threw, the note stays hidden and
-the cleanup is retried on the next connect and whenever the notes list is opened. The need is held in memory only
-(persisting it would need a new table). If the process dies before a retry, nothing re-runs the cleanup: the cached
-cards and completed import rows of that note stay on the device until it is cleaned some other way. Unlinked
+POLICY REVERSAL (E2b-3). Through E2b-2 the Android app cleared nothing locally unless the server confirmed the
+delete. That rule is gone. Forgetting a note on Android now means: HIDDEN ON THIS DEVICE IMMEDIATELY, DELETED ON THE SERVER
+LATER, when a connection is available. Until the server confirms, the server copy still exists. A device that never
+reconnects (lost, wiped before it reconnects, or offline for good) leaves the server copy in place. There is no undo
+and no cancel: once confirmed in the dialog, the note is hidden and the delete is queued.
+
+How it works: forgetting writes a `PendingForget` row in one Room transaction together with the local purge (cached
+cards of that document, the linked import rows, and any queued, running or failed import job linked to it, which is
+cancelled and its text deleted), then schedules a unique worker `forget-<scope>-<documentId>` (network required, 30 s
+exponential backoff). The row holds only the scope, the document id, a creation time, a status (`pending` or `failed`)
+and a fixed error string; never a title, text or server response body. Feed, library, search, reviews and the notes
+list are filtered against these rows at read time from Room, so a process death cannot bring a hidden note back.
+Replay: 204 or 404 deletes the row and repeats the local purge; 401 or 403 marks the row `failed` and it stays hidden
+(the notes list shows "Could not delete (the server rejected the request)" with a Retry button, which sets it back to
+pending); 429, 5xx and no network retry. The worker only runs for the connected account: while another account is
+active the row stays pending and is scheduled again when its account connects. The `purgeInactiveScopes` path and every
+other purge never delete `PendingForget` rows, like unsent note text. A local cleanup that throws after the server
+confirmed is repeated by retrying the whole job, which is safe because a repeated DELETE answers 404.
+The old in-memory retry of failed local cleanups is removed: the queue supersedes it. Unlinked
 (pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
 match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
 
@@ -240,8 +255,8 @@ manifest and a JVM test parses the rules, but no real backup or device transfer 
 
 Local retention: a failed or waiting note keeps its text so you can retry; Remove on the job row
 deletes it (and the server job, unless another local row shares it). Completed notes have no Remove:
-forgetting the note is the way. Forgetting needs a connection to your server; nothing is cleared
-locally unless the server confirms. It then deletes every cached card of that document (scanning
+forgetting the note is the way. Forgetting hides the note on this device at once and queues the server delete
+(see the policy reversal above); it does not need a connection to start. It deletes every cached card of that document (scanning
 all rows, not only the feed or library) and the completed note entries in Recent imports that are linked
 to that document (the app stores the `document_id` the server links to the job when it completes).
 Entries made before the link existed (Room schema v3) cannot be matched: only when no entry is linked to
@@ -302,8 +317,10 @@ The rows live in view-model memory only and are re-fetched on every open and on 
 are never written to Room, and the list is empty after process death. `FLAG_SECURE` is set on the window
 while the list is shown (recents thumbnail and screenshots are blank) and the previous flag state is restored
 when it closes; the list has no text inputs, so no autofill handling applies. Forget from the list asks
-for confirmation, needs a connection, treats 204 and 404 as success and otherwise clears nothing (see above for
-which import rows go). Share-as-note: shared text that is not a link (an http(s) URL with at most 300
+for confirmation (the dialog says the note is hidden here now, deleted from the server when a connection is
+available, and that there is no undo), then hides the note and queues the delete (see the policy reversal above for what
+the queue stores and replays; see above for which import rows go). The list shows one line, "N forgotten notes waiting for
+the server" (hidden at 0), and one row per rejected delete with Retry; none of these rows carry a title. Share-as-note: shared text that is not a link (an http(s) URL with at most 300
 other characters) opens the note editor pre-filled, never submits, shows an over-limit share as over-limit
 instead of truncating it, and asks before replacing text already typed; links still fill the import field.
 The title is the first non-blank line cut to 80 code points. Retry-After: the server answers 429 with

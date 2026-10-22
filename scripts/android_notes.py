@@ -16,7 +16,9 @@ Scenarios: draft survives process death; submit posts exactly once with the expe
 hash and shows no source link; forget Cancel sends no DELETE and Confirm sends exactly one;
 notes list: open "Your notes", forget one of two listed notes (Confirm sends exactly one DELETE for it, none for the other)
 and the other note's list row remains; 429 (Retry-After, once) shows the fixed "busy, retrying automatically" message, then the retry is accepted (202) and the
-note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message. Evidence goes to --out (default .omc/notes/, ignored by Git).
+note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message; offline forget
+(android_notes_forget.py): mock offline, forget the remaining listed note, the list shows "1 forgotten note waiting for the
+server" and the mock has seen no DELETE; mock online, within 150 s exactly one DELETE for it and the waiting line is gone. Evidence goes to --out (default .omc/notes/, ignored by Git).
 """
 
 import argparse
@@ -30,6 +32,8 @@ import time
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import android_notes_forget as offline_forget
 
 PACKAGE = "org.openlearning.app.acceptance"
 ACTIVITY = PACKAGE + "/org.openlearning.app.MainActivity"
@@ -181,7 +185,7 @@ def list_summary(log, texts, forgotten="list-doc-a", kept="list-doc-b", forgotte
             "list_other_row_remains": any(kept_title in x for x in texts), "list_forgotten_row_gone": gone(texts)}
 
 
-STATE = {"log": [], "text_status": 200, "list_deleted": set(), "done": False, "rate_limit_once": False, "retried": False}
+STATE = {"log": [], "text_status": 200, "list_deleted": set(), "offline": False, "done": False, "rate_limit_once": False, "retried": False}
 LOCK = threading.Lock()
 
 
@@ -210,10 +214,17 @@ def make_handler():
             path = self.path.split("?")[0]
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self._digest = None if path.startswith("/__ctl/") else body_digest(raw)
+            with LOCK:
+                offline = STATE["offline"]
+            if offline and not path.startswith("/__ctl/"):  # drop the connection unanswered and unlogged, like a dead network
+                self.close_connection = True
+                return
             if path.startswith("/__ctl/"):
                 with LOCK:
                     if path == "/__ctl/text_status":
                         STATE["text_status"] = int(self.path.split("=")[1])
+                    elif path == "/__ctl/offline":
+                        STATE["offline"] = self.path.endswith("=1")
                     elif path == "/__ctl/rate_limit_once":
                         STATE["rate_limit_once"] = True
                     elif path == "/__ctl/log":
@@ -534,7 +545,8 @@ def scenarios_pass(results) -> bool:
                 and results.get("list_other_row_remains") and results.get("list_forgotten_row_gone") and results.get("413_message")
                 and results.get("sentinel_body_in_ui") is False
                 and results.get("429_message") and results.get("429_posts") == 2 and results.get("429_same_body_hash")
-                and results.get("429_completed") and results.get("429_sentinel_in_ui") is False)
+                and results.get("429_completed") and results.get("429_sentinel_in_ui") is False
+                and offline_forget.forget_scenario_passes(results))
 
 
 def write_evidence(out, results):
@@ -601,6 +613,7 @@ def main():
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
 
         run_notes_list(dev, results)
+        offline_forget.run_offline_forget(dev, lambda on: urllib_ctl(args.port, "offline", "?on=%d" % on), mock_log, STEP, results)
 
         run_rate_limit(dev, args.port, results)
         if not results["429_completed"]:  # a half-finished retry would turn the next scenario's 413 into a second failure

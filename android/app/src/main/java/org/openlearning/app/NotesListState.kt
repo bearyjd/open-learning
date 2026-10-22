@@ -37,7 +37,7 @@ fun NotesListState.refreshFailed(message: String, generation: Int = this.generat
 
 fun NotesListState.forgetStarted(documentId: String) = copy(forgetting = forgetting + documentId, message = null)
 
-fun NotesListState.forgetSucceeded(documentId: String, message: String = "Note forgotten.") =
+fun NotesListState.forgetSucceeded(documentId: String, message: String = FORGET_QUEUED_MESSAGE) =
     copy(items = items.filterNot { it.documentId == documentId }, forgetting = forgetting - documentId, gone = gone + documentId, message = message)
 
 /** Nothing was cleared: the row stays so the person can try again. */

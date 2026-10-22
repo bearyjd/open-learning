@@ -26,7 +26,7 @@ class NotesListStateTest {
     }
     @Test fun forgetSuccessRemovesOnlyThatNote() {
         val state = NotesListState().refreshed(listOf(a, b)).forgetStarted("a").forgetSucceeded("a")
-        assertEquals(listOf(b), state.items); assertTrue(state.forgetting.isEmpty()); assertEquals("Note forgotten.", state.message)
+        assertEquals(listOf(b), state.items); assertTrue(state.forgetting.isEmpty()); assertEquals(FORGET_QUEUED_MESSAGE, state.message)
     }
     @Test fun forgetFailureKeepsTheRowAndReportsIt() {
         val state = NotesListState().refreshed(listOf(a, b)).forgetStarted("a").forgetFailed("a", "no network")
