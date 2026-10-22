@@ -173,6 +173,10 @@ class Job(Base):
     payload_label: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     error: Mapped[str | None] = mapped_column(Text)
+    # Set when a note job completes; no foreign key (forget_note deletes linked jobs itself).
+    document_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    # Reserved for note re-processing (E2b-4); unused until then.
+    replaces_document_id: Mapped[str | None] = mapped_column(String(36))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     lease_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

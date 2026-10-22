@@ -1,7 +1,27 @@
 """Forgetting notes: listing, hard deletion, and bounded retention of note text in jobs.
 
-Lock order (every writer must follow it): note jobs by id, the document, its insights by id,
-then their review items by id. Responses and logs never carry note text.
+Global lock order (every transaction that takes more than one of these must follow it):
+
+    1. the Document row (forget and PATCH exclusive, the worker's dedupe path shared)
+    2. note Job rows, by id
+    3. the Source row (PATCH locks it right after the document; forget deletes it last; the
+       worker's fresh import takes it after its own job, which is safe because nothing that
+       holds a Source row waits for a document or job)
+    4. Insight rows, by id
+    5. ReviewItem rows, by id
+
+Per path: forget = 1,2,4,5 then deletes (including the Source); PATCH edit_note = 1,3; worker
+dedupe = 1,2; worker fresh import = 2,3 and never waits for a document (if an identical document
+appears it rolls back and restarts through the dedupe path); retry and ingest take one job (or
+none) then a transaction-scoped advisory lock that nothing else holds while waiting for rows;
+review_answer, save, feedback and tutor take 4,5 only. No path acquires an earlier-numbered
+lock while holding a later one, so there is no cycle.
+
+The dedupe-job versus forget race is closed in two halves: jobs that exist when forget runs are
+cancelled by the hash pass (forget holds the document, so that pass cannot be overtaken), and a
+job that appears later can only link the document by share-locking it first, which waits for
+forget's commit and then finds the document gone (a fresh import). Responses and logs never
+carry note text.
 """
 
 import hashlib
@@ -34,31 +54,76 @@ RETRY_AFTER_SECONDS = "30"
 EXPIRED_MESSAGE = "Note text expired; submit it again"
 
 
-def list_notes(db: Session, limit: int = NOTE_LIMIT, offset: int = 0) -> list[dict]:
-    rows = db.execute(
-        select(Document.id, Document.title, Source.label, Document.created_at)
+def _note_query(*where):
+    return (
+        select(
+            Document.id,
+            Document.title,
+            Source.label,
+            Document.created_at,
+            func.length(Document.text),
+        )
         .join(Source, Source.id == Document.source_id)
-        .where(Source.kind == "note")
-        .order_by(Document.created_at.desc(), Document.id.desc())
-        .limit(limit)
-        .offset(offset)
+        .where(Source.kind == "note", *where)
     )
-    return [
-        {"document_id": id_, "title": title, "label": label, "created_at": created_at}
-        for id_, title, label, created_at in rows
-    ]
+
+
+def _note_dict(row) -> dict:
+    id_, title, label, created_at, chars = row
+    return {
+        "document_id": id_,
+        "title": title,
+        "label": label,
+        "created_at": created_at,
+        "char_count": chars,
+    }
+
+
+def list_notes(db: Session, limit: int = NOTE_LIMIT, offset: int = 0) -> list[dict]:
+    query = _note_query().order_by(Document.created_at.desc(), Document.id.desc())
+    return [_note_dict(row) for row in db.execute(query.limit(limit).offset(offset))]
+
+
+def edit_note(db: Session, document_id: str, changes: dict) -> dict:
+    """Update a note's title and/or label in place; no new version, no model call."""
+    locked = db.execute(
+        select(Document.source_id)
+        .join(Source, Source.id == Document.source_id)
+        .where(Document.id == document_id, Source.kind == "note")
+        .with_for_update(of=Document)
+    ).first()
+    if locked is None:
+        db.rollback()
+        raise HTTPException(404, "Note not found")
+    document = db.get(Document, document_id)
+    source = db.scalar(select(Source).where(Source.id == locked[0]).with_for_update())
+    if document is None or source is None:  # Forgotten between the lock and the load (SQLite).
+        db.rollback()
+        raise HTTPException(404, "Note not found")
+    if "title" in changes:
+        document.title = source.title = changes["title"]
+    if "label" in changes:
+        source.label = changes["label"]
+    db.commit()
+    row = db.execute(_note_query(Document.id == document_id)).first()
+    if row is None:  # Forgotten between commit and read.
+        raise HTTPException(404, "Note not found")
+    return _note_dict(row)
 
 
 def list_note_jobs(db: Session, limit: int, offset: int) -> list[dict]:
     """Identify note jobs without exposing their text, title, label or error."""
     rows = db.execute(
-        select(Job.id, Job.status, Job.created_at)
+        select(Job.id, Job.status, Job.created_at, Job.document_id)
         .where(Job.kind == "note")
         .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(limit)
         .offset(offset)
     )
-    return [{"id": id_, "status": status, "created_at": created} for id_, status, created in rows]
+    return [
+        {"id": id_, "status": status, "created_at": created, "document_id": document_id}
+        for id_, status, created, document_id in rows
+    ]
 
 
 def _matching_job_ids(db: Session, content_hash: str) -> list[str]:
@@ -83,6 +148,18 @@ def _cancel_matching_jobs(db: Session, content_hash: str) -> None:
         job.status, job.error = "cancelled", "Note deleted"
         job.payload_title = job.payload_text = job.payload_label = None
         job.lease_token = job.lease_until = None
+
+
+def _delete_linked_jobs(db: Session, document_id: str) -> None:
+    """Delete completed note jobs that produced this document (null-link jobs are untouched)."""
+    jobs = db.scalars(
+        select(Job)
+        .where(Job.kind == "note", Job.status == "completed", Job.document_id == document_id)
+        .order_by(Job.id)
+        .with_for_update()
+    ).all()
+    for job in jobs:
+        db.delete(job)
 
 
 def _lock_graph(db: Session, document_id: str) -> None:
@@ -116,16 +193,8 @@ def _delete_graph(db: Session, document_id: str, source_id: str) -> None:
 
 def forget_note(db: Session, document_id: str) -> None:
     """Hard-delete a note document and everything derived from it in one transaction."""
-    found = db.execute(
-        select(Document.content_hash)
-        .join(Source, Source.id == Document.source_id)
-        .where(Document.id == document_id, Source.kind == "note")
-    ).first()
-    if found is None:
-        raise HTTPException(404, "Note not found")
-    _cancel_matching_jobs(db, found[0])
     locked = db.execute(
-        select(Document.source_id)
+        select(Document.source_id, Document.content_hash)
         .join(Source, Source.id == Document.source_id)
         .where(Document.id == document_id, Source.kind == "note")
         .with_for_update(of=Document)
@@ -133,8 +202,11 @@ def forget_note(db: Session, document_id: str) -> None:
     if locked is None:
         db.rollback()
         raise HTTPException(404, "Note not found")
+    source_id, content_hash = locked
+    _cancel_matching_jobs(db, content_hash)
+    _delete_linked_jobs(db, document_id)
     _lock_graph(db, document_id)
-    _delete_graph(db, document_id, locked[0])
+    _delete_graph(db, document_id, source_id)
     db.commit()
 
 

@@ -91,7 +91,9 @@ def test_upgrade_downgrade_roundtrip(database_url):
     refused = alembic(database_url, "downgrade", "0002")
     assert refused.returncode != 0
     assert "note jobs" in refused.stdout + refused.stderr
-    assert "0003" in ok(database_url, "current").stdout
+    # PostgreSQL rolls the whole run back (still 0004); SQLite keeps the completed 0004 downgrade.
+    expected = "0004" if database_url.startswith("postgresql") else "0003"
+    assert ok(database_url, "current").stdout.split()[0] == expected
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
 
     run(engine, "UPDATE jobs SET status = 'failed' WHERE id = 'jq'")
@@ -129,5 +131,32 @@ def test_constraints_and_indexes_survive_rebuild(database_url):
     for sql in bad_rows:
         with pytest.raises(IntegrityError):
             run(engine, sql, n=NOW)
+    ok(database_url, "check")
+    engine.dispose()
+
+
+def test_0004_job_document_link_roundtrip(database_url):
+    engine = create_engine(database_url)
+    ok(database_url, "upgrade", "0003")
+    seed_note_rows(engine)
+    ok(database_url, "upgrade", "head")
+    columns = {column["name"] for column in inspect(engine).get_columns("jobs")}
+    assert {"document_id", "replaces_document_id"} <= columns
+    names = {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    assert {"ix_jobs_status", "ix_jobs_document_id"} <= names
+    assert run(engine, "SELECT document_id, replaces_document_id FROM jobs WHERE id = 'jc'").one() == (None, None)
+    run(engine, "UPDATE jobs SET document_id = 'doc-1', replaces_document_id = 'doc-0' WHERE id = 'jc'")
+    ok(database_url, "check")
+
+    ok(database_url, "downgrade", "0003")
+    columns = {column["name"] for column in inspect(engine).get_columns("jobs")}
+    assert columns.isdisjoint({"document_id", "replaces_document_id"})
+    assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
+    names = {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    assert "ix_jobs_status" in names and "ix_jobs_document_id" not in names
+
+    ok(database_url, "upgrade", "head")
+    assert "ix_jobs_document_id" in {index["name"] for index in inspect(engine).get_indexes("jobs")}
+    assert run(engine, "SELECT document_id FROM jobs WHERE id = 'jc'").scalar() is None
     ok(database_url, "check")
     engine.dispose()

@@ -86,3 +86,17 @@ def validate_note(title: str, text: str, label: str | None, max_chars: int) -> N
         text=_normalise_text(text, max_chars),
         label=_normalise_label(label),
     )
+
+
+def validate_note_edit(title: str | None, label: str | None, fields: set[str]) -> dict:
+    """Validate a metadata edit; return only the fields to change (label None clears it)."""
+    if not fields:
+        _reject("Provide a title or a label")
+    changes: dict = {}
+    if "title" in fields:
+        if title is None:
+            _reject("Title must not be null")
+        changes["title"] = _normalise_title(title)
+    if "label" in fields:
+        changes["label"] = _normalise_label(label)
+    return changes

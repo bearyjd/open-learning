@@ -15,6 +15,7 @@ from .config import Settings, get_settings
 from .database import session_factory
 from .fetching import FetchError, validate_url
 from .forget import (
+    edit_note,
     forget_note,
     forget_note_job,
     list_note_jobs,
@@ -24,8 +25,22 @@ from .forget import (
 )
 from .limits import BodyLimitMiddleware
 from .models import History, Insight, Interaction, Job, Preference, ReviewItem, SavedItem, now
-from .notes import validate_note
-from .schemas import InsightOutput, JobListItem, JobOutput, NoteOutput, ReviewOutput, TutorOutput
+from .notes import (
+    MAX_LABEL_CHARS,
+    MAX_TITLE_CHARS,
+    MIN_TEXT_CHARS,
+    validate_note,
+    validate_note_edit,
+)
+from .schemas import (
+    InsightOutput,
+    JobListItem,
+    JobOutput,
+    LimitsOutput,
+    NoteOutput,
+    ReviewOutput,
+    TutorOutput,
+)
 from .services import (
     RowVanished,
     answer_review,
@@ -201,6 +216,20 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     ):
         return list_notes(db, limit, offset)
 
+    @api.patch("/notes/{document_id}", response_model=NoteOutput)
+    def patch_note(document_id: str, payload: NotePatch, db=Depends(database)):
+        changes = validate_note_edit(payload.title, payload.label, payload.model_fields_set)
+        return edit_note(db, document_id, changes)
+
+    @api.get("/limits", response_model=LimitsOutput)
+    def limits(request: Request):
+        return {
+            "max_document_chars": request.app.state.settings.max_document_chars,
+            "min_text_chars": MIN_TEXT_CHARS,
+            "max_title_chars": MAX_TITLE_CHARS,
+            "max_label_chars": MAX_LABEL_CHARS,
+        }
+
     @api.delete("/notes/{document_id}", status_code=204)
     def delete_note(document_id: str, db=Depends(database)):
         forget_note(db, document_id)
@@ -334,6 +363,13 @@ class TextInput(BaseModel):
     label: str | None = None
 
 
+class NotePatch(BaseModel):
+    # Unbounded types for the same reason as TextInput; validation lives in notes.py.
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    label: str | None = None
+
+
 class FeedbackInput(BaseModel):
     action: Literal["dismiss"]
 
@@ -353,7 +389,12 @@ class PreferencesInput(BaseModel):
 
 
 def job_output(item: Job):
-    return {"id": item.id, "status": item.status, "error": item.error}
+    return {
+        "id": item.id,
+        "status": item.status,
+        "error": item.error,
+        "document_id": item.document_id,
+    }
 
 
 app = create_app()

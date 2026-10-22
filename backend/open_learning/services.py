@@ -274,13 +274,21 @@ def _upsert_source(db: Session, key: str, **fields) -> Source:
 
 
 def _publish(
-    db: Session, settings: Settings, source: Source, *, title, text, digest, texts, batch, truncated
-) -> None:
+    db: Session, settings: Settings, source: Source, *, title, text, digest, texts, batch, truncated,
+    on_existing: type[Exception] | None = None,
+) -> str:
+    """Store the document and its insights; return the document id (existing one on a race).
+
+    With on_existing set, raise it instead of returning an existing document: the caller holds
+    row locks in an order that does not allow locking that document now.
+    """
     existing = db.scalar(
-        select(Document).where(Document.source_id == source.id, Document.content_hash == digest)
+        select(Document.id).where(Document.source_id == source.id, Document.content_hash == digest)
     )
     if existing is not None:
-        return
+        if on_existing is not None:
+            raise on_existing
+        return existing
     document = Document(
         source_id=source.id,
         title=title,
@@ -309,6 +317,7 @@ def _publish(
                 model_endpoint=settings.effective_ai_endpoint,
             )
         )
+    return document.id
 
 
 def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] | None:
@@ -321,15 +330,36 @@ def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] 
         return job.payload_title, job.payload_text, job.payload_label
 
 
-def _note_imported(db: Session, key: str, digest: str) -> bool:
-    return (
-        db.scalar(
-            select(Document.id)
-            .join(Source, Source.id == Document.source_id)
-            .where(Source.url == key, Document.content_hash == digest)
-        )
-        is not None
+def _note_imported(db: Session, key: str, digest: str) -> str | None:
+    return db.scalar(
+        select(Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(Source.url == key, Document.content_hash == digest)
     )
+
+
+class _DocumentAppeared(Exception):
+    """A matching document was committed after the dedupe check; retry from the lock order."""
+
+
+def _complete_from_existing(db: Session, job_id: str, token: str, key: str, digest: str) -> bool:
+    """Complete a note job from an already imported identical note; False means import afresh.
+
+    The document is share-locked before the job so a concurrent forget (which holds the document
+    first) either finishes before we look, or waits for us and then deletes the job we linked.
+    """
+    existing = _note_imported(db, key, digest)
+    if existing is None:
+        return False
+    still_there = db.scalar(
+        select(Document.id).where(Document.id == existing).with_for_update(read=True)
+    )
+    if still_there is None:
+        return False  # Forgotten while we waited for the lock: treat as a fresh import.
+    if (job := _lease_holder(db, job_id, token)) is not None:
+        _complete(job)
+        job.document_id = existing
+    return True
 
 
 def _process_note(factory, settings: Settings, claim, model) -> None:
@@ -341,22 +371,28 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
     digest = hashlib.sha256(text.encode()).hexdigest()
     key = NOTE_KEY_PREFIX + digest
     with factory.begin() as db:
-        if _note_imported(db, key, digest):  # Same content: first import wins, no model call.
-            if (job := _lease_holder(db, job_id, token)) is not None:
-                _complete(job)
-            return
+        if _complete_from_existing(db, job_id, token, key, digest):
+            return  # Same content: first import wins, no model call.
     texts = chunk_text(text)
     batch = (model or ModelClient(settings, factory)).insights(texts[:8])
-    with factory.begin() as db:
-        job = _lease_holder(db, job_id, token)
-        if job is None:
+    for _ in range(2):
+        try:
+            with factory.begin() as db:
+                if _complete_from_existing(db, job_id, token, key, digest):
+                    return  # Another worker imported it while the model ran.
+                job = _lease_holder(db, job_id, token)
+                if job is None:
+                    return
+                source = _upsert_source(db, key, kind="note", title=title, label=label)
+                job.document_id = _publish(
+                    db, settings, source, title=title, text=text, digest=digest, texts=texts,
+                    batch=batch, truncated=False, on_existing=_DocumentAppeared,
+                )
+                _complete(job)
             return
-        source = _upsert_source(db, key, kind="note", title=title, label=label)
-        _publish(
-            db, settings, source, title=title, text=text, digest=digest, texts=texts,
-            batch=batch, truncated=False,
-        )
-        _complete(job)
+        except _DocumentAppeared:
+            continue  # Rolled back: the next pass share-locks the document before the job.
+    raise RuntimeError("Note import kept racing another import")
 
 
 def process_job(
