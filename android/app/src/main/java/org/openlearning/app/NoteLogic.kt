@@ -39,6 +39,19 @@ fun PendingIngest.isNoteJob() = kind == "note"
 /** What the job row shows in place of a URL. */
 fun PendingIngest.displayName(): String = if (isNoteJob()) "Note: ${title.orEmpty().ifBlank { "Untitled" }}" else url
 
+/** A banner message. [jobId] ties a "queued" notice to the note job it describes; other notices have none. */
+data class Notice(val text: String, val jobId: String? = null)
+
+private val TERMINAL = setOf("completed", "complete", "succeeded", "success", "done", "failed", "error", "cancelled")
+fun PendingIngest.isTerminal() = status.lowercase() in TERMINAL
+
+/** Clears a job-bound notice once its job is finished or gone; any other notice is returned untouched. */
+fun noticeAfterJobUpdate(current: Notice?, jobs: List<PendingIngest>): Notice? {
+    val jobId = current?.jobId ?: return current
+    val job = jobs.firstOrNull { it.id == jobId }
+    return if (job == null || job.isTerminal()) null else current
+}
+
 private val RETRYABLE = listOf("failed", "error", "paused", "cancelled")
 /** A cancelled note has no text left and the server already dropped it, so there is nothing to retry. */
 fun PendingIngest.canRetry() = status.lowercase() in RETRYABLE && !(isNoteJob() && status.lowercase() == "cancelled")

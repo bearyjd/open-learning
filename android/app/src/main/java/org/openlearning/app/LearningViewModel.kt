@@ -64,7 +64,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                     jobsFlow = launch {
                         var recover = true
                         repository.jobs.collect { jobs ->
-                            mutable.update { it.copy(jobs = jobs) }
+                            mutable.update { it.copy(jobs = jobs, notice = noticeAfterJobUpdate(it.notice, jobs)) }
                             if (recover) {
                                 recover = false
                                 jobs.filter { it.status.lowercase() !in setOf("completed", "complete", "succeeded", "success", "done", "failed", "error", "cancelled", "paused") }
@@ -201,7 +201,9 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             try {
                 val row = draftLock.withLock { repository.queueNote(note) }
                 IngestWorker.schedule(getApplication(), row.scope, row.id)
-                mutable.update { it.copy(notice = "Note queued. It is sent to your server as soon as it is reachable.") }
+                val queued = Notice("Note queued. It is sent to your server as soon as it is reachable.", jobId = row.id)
+                // The jobs flow may already have reported this note finished; a row not listed yet is not "removed".
+                mutable.update { it.copy(notice = if (it.jobs.any { job -> job.id == row.id }) noticeAfterJobUpdate(queued, it.jobs) else queued) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (repo === repository && draft.isEmpty) draft = fields
@@ -247,7 +249,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 val purged = repository.purgeDocument(item.documentId)
                 if (repo === repository) {
                     memory.clear(); detailJob?.cancel(); chatGeneration++
-                    mutable.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = "Note forgotten.") }
+                    mutable.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice("Note forgotten.")) }
                 }
             } catch (cancelled: CancellationException) { container.forgotten.remove(scope, item.documentId); throw cancelled }
             catch (error: Exception) {
@@ -335,7 +337,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     }
     fun rate(review: Review, rating: String) = request { repository ->
         val next = repository.api.rate(review.id, Rating(rating))
-        if (repo === repository) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null, notice = "Next review: ${next.dueAt}") }
+        if (repo === repository) mutable.update { it.copy(reviews = it.reviews.filterNot { r -> r.id == review.id }, revealed = false, reviewSource = null, notice = Notice("Next review: ${next.dueAt}")) }
     }
     fun search(query: String) = request { repository ->
         val results = container.forgotten.allowed(repository.config.scope, repository.api.search(query.trim()))
@@ -349,5 +351,5 @@ data class ScreenState(
     val results: List<Insight> = emptyList(), val searched: Boolean = false,
     val jobs: List<PendingIngest> = emptyList(), val reviews: List<Review> = emptyList(), val reviewsLoaded: Boolean = false,
     val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
-    val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: String? = null,
+    val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
 )
