@@ -471,6 +471,31 @@ at "Write or import a note" (the feed list was still scrolled past it after the 
 back, bounded), so the 413 scenario is INCONCLUSIVE, 429 is not scripted, and the instrumented suites were not run
 because not every scenario completed. No reruns were made after the crash (device stopped per the zero-retry rule).
 
+Fourth supervised device run (same device, APKs rebuilt up to date, script commits 7ff0e62 and 4eb875e): autofill
+prompt YES/NO: NO. No Bitwarden, autofill or save-password sheet appeared at any dump; four consecutive builds with the
+fix were quiet at the token step. The script ran every scenario to completion with no retries: connect PASS; draft
+survived process death (counter 145) PASS; submit posted exactly once PASS; the logged body length (182) and SHA-256
+matched the exact JSON the app should send, `{"text":...,"title":...}` compact with no label (Gson emits `text`
+before `title`; key order is not contractual, so the script accepts either order and an empty-label variant, and the
+first comparison, which assumed title-first, reported a mismatch of the same length until the order was corrected);
+note card appeared with no Refresh tap PASS; no source-link nodes on list or detail PASS; forget Cancel 0 DELETEs and
+Confirm 1 DELETE PASS; 413 shows the fixed "larger than your server accepts" message and the SENTINEL response body is
+not in the UI PASS. Instrumented suites (acceptance package, one run each, no retries): `DatabaseHygieneTest` 9/9,
+`MigrationTest` 1/1, `ConnectAutofillTest` 1/1 (connect dialog window excluded from autofill) PASS.
+`DeviceAcceptanceTest` 5/6 (FAIL: `onlineSaveSurvivesOfflineRelaunchAndAccountSwitch`, Compose wait timed out after
+15 s). `NoteAcceptanceTest` 2/8: PASS `draftSurvivesActivityRecreate` and `noteEditorAncestorIsExcludedFromAutofill`;
+FAIL (Compose or DB wait timed out after 20 s) `removingAQueuedNoteBeforeSubmitSendsNothing`,
+`serverErrorsMapToFixedMessagesWithoutEchoingTheBody` (NoteAcceptanceTest.kt:101 area, awaiting the job row),
+`textIsClearedFromRoomAfterCompletion`, `offlineForgetKeepsEverything`,
+`completedNoteShowsNoSourceLinksAndForgetCancelDoesNotDelete`. The failures were not diagnosed or retried and no app
+code was changed; the same behaviours passed in the adb script against the same build, so a test-harness or timing
+cause (instrumentation device state, WorkManager scheduling under test) is suspected but unconfirmed.
+`LiveLearningLoopTest` was not run (needs a real backend and model).
+
+Still unverified on device: the 429 retry message, the SAF file picker through DocumentsUI, the remove-job race,
+offline forget, fold/unfold and activity recreate with a note open, and whether Bitwarden's save sheet is suppressed
+(it was not observed in four quiet runs, which is evidence rather than proof).
+
 Connect-dialog and note-editor autofill opt-out (`fix/android-token-no-autofill`) is only partly device-verified (see above). The
 earlier E2a claim that the note editor was excluded from autofill was wrong: it flagged the AndroidComposeView,
 which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover the target selection, restore and
