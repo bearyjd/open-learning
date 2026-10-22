@@ -88,6 +88,7 @@ def serialize_review(db: Session, item: ReviewItem) -> dict:
         "due_at": item.due_at.isoformat(),
         "interval_days": item.interval_days,
         "insight_title": insight.title,
+        "document_id": insight.document_id,
     }
 
 

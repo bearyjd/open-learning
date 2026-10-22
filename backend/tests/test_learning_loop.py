@@ -171,3 +171,16 @@ def test_tutor_chat_returns_model_assessment_to_service_callers(client, factory,
     with factory() as db:
         result = tutor_chat(db, db.get(Insight, insight["id"]), "Recall.", Assessing())
     assert result["assessment"] == "partially_correct"
+
+
+def test_review_payloads_carry_additive_document_id(client, factory, settings):
+    insight = ingest(client, factory, settings)
+    client.post(API + "/insights/" + insight["id"] + "/save")
+    due = client.get(API + "/reviews/due").json()
+    assert len(due) == 1
+    assert due[0]["document_id"] == insight["document_id"]
+    # Fields existing clients rely on stay present alongside the new one.
+    assert {"id", "insight_id", "question", "due_at", "interval_days", "insight_title"} <= set(due[0])
+    answered = client.post(API + "/reviews/" + due[0]["id"] + "/answer", json={"rating": "easy"})
+    assert answered.status_code == 200
+    assert answered.json()["document_id"] == insight["document_id"]
