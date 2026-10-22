@@ -172,7 +172,15 @@ Replay: 2xx, 404 or 410 turn the row into a durable `confirmed` tombstone and re
 pending); 429, 5xx and no network retry. The worker only runs for the connected account: while another account is
 active the row stays pending and is scheduled again when its account connects. The `purgeInactiveScopes` path and every
 other purge never delete `PendingForget` rows, like unsent note text; `forgetsOutside` (used for the notice) skips confirmed rows. A local cleanup that throws after the server
-confirmed is repeated by retrying the whole job, which is safe because a repeated DELETE answers 404.
+confirmed is repeated by retrying the whole job (a repeated DELETE answers 404), at most `FORGET_MAX_ATTEMPTS` times, after which the row is marked failed.
+A 404 on the DELETE counts as "already gone" only after the notes list answered, was read completely and does not list the note;
+otherwise the job retries like any other transient failure.
+
+Limitation, token rotation: the queue and the hiding are keyed by the account scope, a hash of server and token. A note forgotten
+under one token or server is hidden only while that scope is connected. After connecting with another token or server the note is
+visible again on this device and has not yet been deleted on the server; its row waits until the original scope connects again, and
+the app shows a notice that says so. There is no migration of queued forgets between scopes, so rotating the token before the
+server DELETE ran can leave the server copy in place.
 The old in-memory retry of failed local cleanups is removed: the queue supersedes it. Unlinked
 (pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
 match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
@@ -256,7 +264,7 @@ failed with "gave up", still hidden); 401 and 403 fail as "rejected by the serve
 as "server refused". Failed rows offer Retry and "Stop trying", which deletes the queue row and shows the note again on the
 next refresh; the note stays on the server. Error text is one of four fixed strings, never a title or server text.
 Notice: when pending or failed rows belong to a scope other than the connected one (another server, or another token), a notice
-says "Some notes you forgot while connected to another server or token are still waiting to be deleted." once per app start. It
+says "Notes you forgot while connected to another server or token are visible again on this device and are not yet deleted on the server." once per app start. It
 names no server; the stored previous-server key of earlier builds is deleted. Reconnecting with that account finishes them;
 there is no other way to delete them from this device.
 Residuals: an import of the same text that is still in flight on the server can republish the note after a forget (the confirm

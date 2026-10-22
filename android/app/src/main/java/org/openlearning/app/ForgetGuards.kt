@@ -135,7 +135,7 @@ suspend fun resolveReviews(
 }
 
 const val FORGET_ELSEWHERE_NOTICE =
-    "Some notes you forgot while connected to another server or token are still waiting to be deleted."
+    "Notes you forgot while connected to another server or token are visible again on this device and are not yet deleted on the server."
 
 /** Shown once per app start. Rows of another scope that still wait or failed; never names a server. */
 fun forgetElsewhereNotice(rows: List<PendingForget>, activeScope: String): String? =

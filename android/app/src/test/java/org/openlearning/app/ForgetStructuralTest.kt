@@ -90,7 +90,7 @@ class ForgetStructuralTest {
         assertNull(forgetElsewhereNotice(emptyList(), "s"))
     }
     @Test fun noticeNeverNamesAServer() {
-        assertEquals("Some notes you forgot while connected to another server or token are still waiting to be deleted.", FORGET_ELSEWHERE_NOTICE)
+        assertEquals("Notes you forgot while connected to another server or token are visible again on this device and are not yet deleted on the server.", FORGET_ELSEWHERE_NOTICE)
         assertFalse(FORGET_ELSEWHERE_NOTICE.contains("http"))
     }
     @Test fun fixedErrorStringsAreFour() { assertEquals(4, FORGET_FIXED_ERRORS.size) }
