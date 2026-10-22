@@ -1,5 +1,6 @@
 package org.openlearning.app
 
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,6 +66,32 @@ internal fun autofillTargetsFor(ancestors: List<AutofillTarget>): List<AutofillT
     return listOf(ancestors.firstOrNull() ?: error(NO_AUTOFILL_ANCESTOR))
 }
 
+/**
+ * Never-throwing variant of [autofillTargetsFor] for production. When no ancestor can be flagged it calls [onFailure]
+ * (a fixed-message warning) and falls back to [root] if that is a different target than [self]; otherwise it skips.
+ */
+internal fun autofillTargetsOrFallback(
+    ancestors: List<AutofillTarget>,
+    self: AutofillTarget,
+    root: AutofillTarget,
+    onFailure: () -> Unit,
+): List<AutofillTarget> = try {
+    autofillTargetsFor(ancestors)
+} catch (_: IllegalStateException) {
+    onFailure()
+    if (root != self) listOf(root) else emptyList()
+}
+
+private const val TAG = "TextInputPrivacy"
+
+/** Targets to flag for [view]; logs a fixed warning (no view or text content) and degrades instead of crashing. */
+private fun safeAutofillTargets(view: View): List<AutofillTarget> = autofillTargetsOrFallback(
+    ancestors = ancestorTargets(view),
+    self = ViewAutofillTarget(view),
+    root = ViewAutofillTarget(view.rootView),
+    onFailure = { Log.w(TAG, NO_AUTOFILL_ANCESTOR) },
+)
+
 /** The parent chain of [view], nearest first, excluding [view] itself. */
 internal fun ancestorTargets(view: View): List<AutofillTarget> =
     generateSequence(view.parent) { it.parent }.filterIsInstance<View>().map(::ViewAutofillTarget).toList()
@@ -81,13 +108,13 @@ internal fun optOutOfAutofill(targets: List<AutofillTarget>): () -> Unit {
 
 /**
  * Excludes the ancestors of the current compose view from autofill while composed (works in the activity and
- * inside a Dialog); restores every previous value on dispose. Throws if there is no ancestor to flag.
+ * inside a Dialog); restores every previous value on dispose. With no ancestor to flag it logs a warning and falls back to the root view, or skips; it never crashes.
  */
 @Composable
 internal fun ExcludeFromAutofill() {
     val view = LocalView.current
     DisposableEffect(view) {
-        val restore = optOutOfAutofill(autofillTargetsFor(ancestorTargets(view)))
+        val restore = optOutOfAutofill(safeAutofillTargets(view))
         onDispose(restore)
     }
 }
@@ -98,7 +125,7 @@ internal fun ExcludeDialogFromAutofill() {
     val view = LocalView.current
     val autofillManager = LocalAutofillManager.current
     DisposableEffect(view) {
-        val restore = optOutOfAutofill(autofillTargetsFor(ancestorTargets(view)))
+        val restore = optOutOfAutofill(safeAutofillTargets(view))
         onDispose {
             restore()
             autofillManager?.cancel()

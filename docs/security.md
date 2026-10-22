@@ -139,13 +139,21 @@ returns `IMPORTANT_FOR_AUTOFILL_YES`, so flagging it has no effect. `View.isImpo
 the ancestors and stops at one marked `NO_EXCLUDE_DESCENDANTS`. `ExcludeFromAutofill()` therefore flags
 ANCESTORS only, never the compose view: in a dialog the `DialogLayout` (the `DialogWindowProvider`) and its
 window's decor view; in the activity (note editor) only the nearest ancestor. Previous values are restored on
-dispose (reverse order). If no ancestor exists it throws a fixed-message `IllegalStateException` instead of
-silently doing nothing. The Connect dialog also calls `AutofillManager.cancel()` on dismissal (best effort) to
+dispose (reverse order). `autofillTargetsFor` throws a fixed-message `IllegalStateException` when no ancestor exists (asserted by a JVM test);
+the composables catch it, `Log.w` a fixed string (no view or text content), fall back to the root view if it differs
+from the compose view, otherwise skip. They never crash. The Connect dialog also calls `AutofillManager.cancel()` on dismissal (best effort) to
 drop any pending, unsaved autofill context. The original note-editor opt-out shipped in E2a flagged the
 AndroidComposeView itself and was ineffective; it is corrected by this change. The server URL and token fields
 also ask the keyboard not to learn (`IME_FLAG_NO_PERSONALIZED_LEARNING`, autocorrect off), and the token stays
 masked. The pinned Compose version has no `ContentType.None`, so no per-field `contentType` is set. Trade-off:
 the token cannot be filled from a password manager.
+While the note editor is open the activity's whole ComposeView (its nearest ancestor) is excluded from autofill; the
+previous value is restored on dispose.
+
+Residual virtual-view caveat: the `AndroidAutofillManager` `notifyViewEntered` path has no `isImportantForAutofill`
+check; the ancestor flag suppresses the contents of the assist structure. The effect on Bitwarden is unverified, and
+accessibility-based managers are unaffected.
+
 Limits: this is an opt-out request, not enforcement. `importantForAutofill` is honoured by framework-autofill
 services only; accessibility-based managers (some third-party password managers) read the view tree through
 accessibility and ignore it. It affects autofill requests only. Whether the save sheet is suppressed on a real

@@ -33,6 +33,31 @@ class TextInputPrivacyTest {
         assertEquals(NO_AUTOFILL_ANCESTOR, e.message)
     }
 
+    @Test fun noAncestorFallsBackToDifferentRootAndWarnsOnce() {
+        val self = FakeTarget(0)
+        val root = FakeTarget(0)
+        var warnings = 0
+        val picked = autofillTargetsOrFallback(emptyList(), self, root) { warnings++ }
+        assertEquals(listOf<AutofillTarget>(root), picked)
+        assertEquals(1, warnings)
+    }
+
+    @Test fun noAncestorSkipsWhenRootIsSelf() {
+        val self = FakeTarget(0)
+        var warnings = 0
+        val picked = autofillTargetsOrFallback(emptyList(), self, self) { warnings++ }
+        assertEquals(emptyList<AutofillTarget>(), picked)
+        assertEquals(1, warnings)
+    }
+
+    @Test fun fallbackIsNotUsedWhenAncestorExists() {
+        val near = FakeTarget(0)
+        var warnings = 0
+        val picked = autofillTargetsOrFallback(listOf(near), FakeTarget(0), FakeTarget(0)) { warnings++ }
+        assertEquals(listOf<AutofillTarget>(near), picked)
+        assertEquals(0, warnings)
+    }
+
     @Test fun composeViewItselfIsNeverFlaggedWhenOnlyAncestorsAreProvided() {
         val composeView = FakeTarget(1)
         val parent = FakeTarget(0)
