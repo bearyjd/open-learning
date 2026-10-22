@@ -14,7 +14,8 @@ settings; touches only the acceptance package. Install the APK first:
 
 Scenarios: draft survives process death; submit posts exactly once with the expected
 hash and shows no source link; forget Cancel sends no DELETE and Confirm sends exactly one;
-429 (Retry-After, once) shows the fixed "busy, retrying automatically" message, then the retry is accepted (202) and the
+notes list: open "Your notes", forget one of two listed notes (Confirm sends exactly one DELETE for it, none for the other)
+and the other note's list row remains; 429 (Retry-After, once) shows the fixed "busy, retrying automatically" message, then the retry is accepted (202) and the
 note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message. Evidence goes to --out (default .omc/notes/, ignored by Git).
 """
 
@@ -42,6 +43,10 @@ NOTE = {
     "source_url": "https://example.invalid/never-linked", "document_id": "note-doc", "evidence": "Spaced practice revisits an idea.",
     "tags": ["memory"], "saved": False, "coverage": "full_source", "source_truncated": False, "model": "mock",
     "source_kind": "note", "source_label": "",
+}
+LIST_NOTES = {  # GET /notes fixture: newest first, as the server answers
+    "list-doc-a": {"document_id": "list-doc-a", "title": "Alpha list note", "label": "Lecture", "created_at": "2026-10-22T09:30:00Z", "char_count": 1234},
+    "list-doc-b": {"document_id": "list-doc-b", "title": "Beta list note", "label": None, "created_at": "2026-10-21T08:00:00Z", "char_count": 456},
 }
 ALLOWED_PACKAGES = {PACKAGE, "com.google.android.inputmethod.latin", "com.android.systemui"}
 FORBIDDEN_TEXT = re.compile(r"bitwarden|save password|autofill|use saved|password manager", re.I)
@@ -157,7 +162,26 @@ def count_requests(log, method, path) -> int:
     return sum(1 for e in log if e["method"] == method and e["path"] == path)
 
 
-STATE = {"log": [], "text_status": 200, "done": False, "rate_limit_once": False, "retried": False}
+def notes_payload(deleted):
+    """GET /notes body: the fixture notes the app has not deleted yet, in order."""
+    return [n for doc, n in LIST_NOTES.items() if doc not in deleted]
+
+
+def find_last(root, pattern):
+    """Last node matching pattern in document order: a dialog's window follows the activity's, so its button wins."""
+    hits = [n.attrib for n in root.iter("node") if re.search(pattern, (n.get("text") or "") + "|" + (n.get("content-desc") or ""))]
+    return hits[-1] if hits else None
+
+
+def list_summary(log, texts, forgotten="list-doc-a", kept="list-doc-b", forgotten_title="Alpha list note", kept_title="Beta list note") -> dict:
+    """Notes-list verdicts from the mock log (counts only) and the final list texts."""
+    gone = lambda t: not any(forgotten_title in x for x in t)
+    return {"list_forget_deletes": count_requests(log, "DELETE", "/api/v1/notes/" + forgotten),
+            "list_other_deletes": count_requests(log, "DELETE", "/api/v1/notes/" + kept),
+            "list_other_row_remains": any(kept_title in x for x in texts), "list_forgotten_row_gone": gone(texts)}
+
+
+STATE = {"log": [], "text_status": 200, "list_deleted": set(), "done": False, "rate_limit_once": False, "retried": False}
 LOCK = threading.Lock()
 
 
@@ -224,6 +248,14 @@ def make_handler():
             }
             if (method, path) in routes:
                 return self._send(routes[(method, path)])
+            if method == "GET" and path == "/api/v1/notes":
+                with LOCK:
+                    payload = notes_payload(STATE["list_deleted"])
+                return self._send(payload)
+            if method == "DELETE" and path.startswith("/api/v1/notes/") and path.rsplit("/", 1)[1] in LIST_NOTES:
+                with LOCK:
+                    STATE["list_deleted"].add(path.rsplit("/", 1)[1])
+                return self._send(None, 204)
             if method == "DELETE" and path == "/api/v1/notes/note-doc":
                 return self._send(None, 204)
             return self._send({"detail": "not found"}, 404)
@@ -298,6 +330,19 @@ class Device:
             node = self.find(pattern)
             if node:
                 x1, y1, x2, y2 = map(int, re.findall(r"\d+", node["bounds"]))
+                self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+                time.sleep(0.8)
+                return
+            time.sleep(MIN_POLL_GAP)
+        raise RuntimeError("UI element not found: " + pattern)
+
+    def tap_last(self, pattern, timeout=15):
+        """Tap the last on-screen match (see find_last); used for a dialog button that shares its label with a row button."""
+        end = time.time() + timeout
+        while time.time() < end:
+            node = find_last(self.dump(), pattern)
+            if node:
+                x1, y1, x2, y2 = parse_bounds(node["bounds"])
                 self.shell("input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
                 time.sleep(0.8)
                 return
@@ -463,11 +508,30 @@ def run_rate_limit(dev, port, results):
     dev.dump("06-429-completed")
 
 
+def run_notes_list(dev, results):
+    """Open the notes list, forget the first of two notes, check the second stays. Starts and ends on Discover."""
+    STEP["name"] = "list:open"
+    dev.tap_scrolling("Your notes")
+    results["list_rows_shown"] = dev.wait_for("Alpha list note") and dev.wait_for("Beta list note")
+    dev.dump("04b-notes-list")
+    STEP["name"] = "list:forget one"
+    dev.tap(r"^Forget\|")  # the first row is the newest note
+    dev.wait_for("Forget this note")
+    dev.tap_last(r"^Forget\|")
+    results["list_forgotten_message"] = dev.wait_for("Note forgotten")
+    texts = dev.texts(dev.dump("04c-notes-list-after-forget"))
+    results.update(list_summary(mock_log(), texts))
+    dev.tap(r"^Close\|")
+    dev.wait_for("Write or import a note")
+
+
 def scenarios_pass(results) -> bool:
     return bool(results.get("draft_survives_process_death") and results.get("posts") == 1 and results.get("submit_hash_match") is not False
                 and results.get("submit_shows_note_card") and results.get("no_link_nodes_on_list")
                 and results.get("no_link_nodes_on_detail") and results.get("forget_cancel_deletes") == 0
-                and results.get("forget_confirm_deletes") == 1 and results.get("413_message")
+                and results.get("forget_confirm_deletes") == 1 and results.get("list_rows_shown")
+                and results.get("list_forget_deletes") == 1 and results.get("list_other_deletes") == 0
+                and results.get("list_other_row_remains") and results.get("list_forgotten_row_gone") and results.get("413_message")
                 and results.get("sentinel_body_in_ui") is False
                 and results.get("429_message") and results.get("429_posts") == 2 and results.get("429_same_body_hash")
                 and results.get("429_completed") and results.get("429_sentinel_in_ui") is False)
@@ -535,6 +599,8 @@ def main():
         dev.wait_for("Note forgotten")
         dev.dump("04-after-forget")
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
+
+        run_notes_list(dev, results)
 
         run_rate_limit(dev, args.port, results)
         if not results["429_completed"]:  # a half-finished retry would turn the next scenario's 413 into a second failure

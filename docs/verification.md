@@ -358,8 +358,8 @@ CI (`.github/workflows/ci.yml`) runs `assembleDebug testDebugUnitTest lintDebug`
 androidTest APK, so every instrumented test (including `DatabaseHygieneTest`) is compile-only until run
 on a device. JVM-tested: the purge predicate, the stale-purge decision, redacted `toString`, retry and
 conflict plans. Instrumented only, not yet run: Room purge SQL and transactions, the WAL checkpoint,
-`ViewModel` wiring (purge job cancel on reconnect, `removeNoteJob`, `forgetNote`). Forgetting a note
-still deletes all completed note rows of that connection (app limitation until E2b-2, which will use the server's job `document_id`).
+`ViewModel` wiring (purge job cancel on reconnect, `removeNoteJob`, `forgetNote`). Since E2b-2 forgetting purges only the rows linked to
+that document (fallback for pre-migration unlinked rows; see security).
 
 Not verified: any device behavior, the real backend with the app, process death of the
 editor on hardware, Compose text-field performance at 60,000 characters, an actual backup or
@@ -536,3 +536,16 @@ which ignores the flag. The corrected mechanism flags ancestors. JVM tests cover
 fail-loudly logic against fakes (not real views); the instrumented `ConnectAutofillTest` and
 `NoteAcceptanceTest.noteEditorAncestorIsExcludedFromAutofill` are compile-checked only. Whether Bitwarden's save
 sheet is suppressed on a real device has not been observed.
+
+## E2b-2 Android notes list (NOT device-verified)
+
+Implemented: notes list screen ("Your notes" on Discover), targeted forget, server limits, share-as-note and the
+30 s note backoff. JVM tests cover the list state reducer, row formatting, body selection, forget dialog copy, share
+routing and deferral, limits and file cap math, and the purge predicate; they pass in CI. Instrumented
+`NotesListAcceptanceTest` (list rows, forget Cancel sends 0 DELETEs, Confirm sends 1 and purges only that note's
+import rows, a failed or offline delete keeps rows, FLAG_SECURE only while the list is shown, shared text opens
+the editor pre-filled without submitting) is compile-checked only: not run on a device. The `scripts/android_notes.py` notes-list
+scenario (open list, forget one of two notes, the other row remains; uiautomator dumps only) has pure-helper unit tests but
+has not been run against a device. The script cannot check the Room import-row property or FLAG_SECURE; the
+instrumented tests do. Not verified: pull of a real server's `/notes`, the WorkManager 30 s backoff on a device, share
+intents from real apps, and the pre-migration fallback on a migrated database.
