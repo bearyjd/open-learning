@@ -29,23 +29,34 @@ sealed interface ForgetReplay {
     /** Permanent: the row stays hidden with [error] until the person retries. */
     data class Failed(val error: String) : ForgetReplay
     data object Retry : ForgetReplay
+    /** 404: a wrong route, proxy or server also answers 404, so it is Done only after [forgetVerify404] checked the notes list. */
+    data object Verify : ForgetReplay
 }
 
 /**
  * [code] is null when no answer arrived (IOException, no network). [attempt] is WorkManager's runAttemptCount: a retry
- * on the last allowed attempt becomes a permanent "gave up". Answers: 2xx, 404, 410 done; 401 and 403 rejected;
+ * on the last allowed attempt becomes a permanent "gave up". Answers: 2xx and 410 done; 404 is verified first (see [forgetVerify404]); 401 and 403 rejected;
  * 408, 425, 429, 5xx and no answer retry; every other status (3xx, other 4xx) is refused.
  */
 fun forgetReplay(code: Int?, attempt: Int = 0): ForgetReplay {
     val replay = when {
         code == null -> ForgetReplay.Retry
-        code in 200..299 || code == 404 || code == 410 -> ForgetReplay.Done
+        code in 200..299 || code == 410 -> ForgetReplay.Done
+        code == 404 -> ForgetReplay.Verify
         code == 401 || code == 403 -> ForgetReplay.Failed(FORGET_REJECTED_ERROR)
         code == 408 || code == 425 || code == 429 || code >= 500 -> ForgetReplay.Retry
         else -> ForgetReplay.Failed(FORGET_REFUSED_ERROR)
     }
     return if (replay == ForgetReplay.Retry && attempt + 1 >= FORGET_MAX_ATTEMPTS) ForgetReplay.Failed(FORGET_GAVE_UP_ERROR) else replay
 }
+
+/**
+ * A 404 on the DELETE counts as "already gone" only when the notes list answered, is complete (all pages read) and does not
+ * list the note. [serverIds] is null when the list call failed. Anything else is unverified: retry, capped like any failure.
+ */
+fun forgetVerify404(serverIds: Set<String>?, complete: Boolean, documentId: String, attempt: Int): ForgetReplay =
+    if (serverIds != null && complete && serverIds.none { it.equals(documentId, ignoreCase = true) }) ForgetReplay.Done
+    else forgetReplay(null, attempt)
 
 /** Server confirmed but the local cleanup threw: retried like any other failure, and capped by the same attempt limit. */
 fun forgetCleanupFailed(attempt: Int): ForgetReplay = forgetReplay(null, attempt)

@@ -7,7 +7,8 @@ class ForgetLogicTest {
     @Test fun replayDecisionTable() {
         assertEquals(ForgetReplay.Done, forgetReplay(204))
         assertEquals(ForgetReplay.Done, forgetReplay(200))
-        assertEquals(ForgetReplay.Done, forgetReplay(404))
+        assertEquals(ForgetReplay.Verify, forgetReplay(404))
+        assertEquals(ForgetReplay.Done, forgetReplay(410))
         assertEquals(ForgetReplay.Failed(FORGET_REJECTED_ERROR), forgetReplay(401))
         assertEquals(ForgetReplay.Failed(FORGET_REJECTED_ERROR), forgetReplay(403))
         assertEquals(ForgetReplay.Retry, forgetReplay(500))
@@ -53,5 +54,14 @@ class ForgetLogicTest {
         assertEquals(ForgetReplay.Retry, forgetCleanupFailed(0))
         assertEquals(ForgetReplay.Retry, forgetCleanupFailed(FORGET_MAX_ATTEMPTS - 2))
         assertEquals(ForgetReplay.Failed(FORGET_GAVE_UP_ERROR), forgetCleanupFailed(FORGET_MAX_ATTEMPTS - 1))
+    }
+    @Test fun a404IsDoneOnlyWhenACompleteListAnswerLacksTheNote() {
+        assertEquals(ForgetReplay.Done, forgetVerify404(setOf("other"), true, "d1", 0))
+        assertEquals(ForgetReplay.Done, forgetVerify404(emptySet(), true, "d1", 0))
+        assertEquals(ForgetReplay.Retry, forgetVerify404(null, false, "d1", 0)) // list call failed
+        assertEquals(ForgetReplay.Retry, forgetVerify404(setOf("d1"), true, "d1", 0)) // server still lists it
+        assertEquals(ForgetReplay.Retry, forgetVerify404(setOf("D1"), true, "d1", 0)) // ids compare case-insensitively
+        assertEquals(ForgetReplay.Retry, forgetVerify404(setOf("other"), false, "d1", 0)) // more pages than were read
+        assertEquals(ForgetReplay.Failed(FORGET_GAVE_UP_ERROR), forgetVerify404(null, false, "d1", FORGET_MAX_ATTEMPTS - 1))
     }
 }

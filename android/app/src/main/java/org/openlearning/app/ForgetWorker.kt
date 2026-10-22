@@ -25,8 +25,10 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             container.repository(config).api.forgetNote(documentId).code()
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (error: Exception) { null } // IOException or anything unexpected: no answer, so retry
-        return when (val replay = forgetReplay(code, runAttemptCount)) {
-            // The DELETE is idempotent (404 is Done), so a failed local cleanup is repeated by retrying the whole job.
+        val first = forgetReplay(code, runAttemptCount)
+        val replay = if (first == ForgetReplay.Verify) verify404(container, config, documentId) else first
+        return when (replay) {
+            // The DELETE is idempotent, so a failed local cleanup is repeated by retrying the whole job.
             ForgetReplay.Done -> try { queue.confirmed(scope, documentId); Result.success() }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (error: Exception) {
@@ -37,10 +39,27 @@ class ForgetWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     }
                 }
             is ForgetReplay.Failed -> { queue.markFailed(scope, documentId, replay.error); Result.success() }
-            ForgetReplay.Retry -> Result.retry()
+            ForgetReplay.Retry, ForgetReplay.Verify -> Result.retry()
         }
     }
+
+    /** Reads the notes list (up to [VERIFY_MAX_PAGES] pages) to check that a 404 means the note is really gone. */
+    private suspend fun verify404(container: AppContainer, config: Connection, documentId: String): ForgetReplay {
+        val ids = HashSet<String>()
+        var complete = false
+        try {
+            val api = container.repository(config).api
+            for (page in 0 until VERIFY_MAX_PAGES) {
+                val items = api.notes(NOTES_PAGE_LIMIT, page * NOTES_PAGE_LIMIT)
+                ids += serverPage(items).ids
+                if (items.size < NOTES_PAGE_LIMIT) { complete = true; break }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) { return forgetVerify404(null, false, documentId, runAttemptCount) }
+        return forgetVerify404(ids, complete, documentId, runAttemptCount)
+    }
     companion object {
+        private const val VERIFY_MAX_PAGES = 5
         fun input(scope: String, documentId: String): Data = workDataOf("scope" to scope, "documentId" to documentId)
         /**
          * Enqueues the unique work and waits for WorkManager to accept it. Throws when the request cannot be built (an
