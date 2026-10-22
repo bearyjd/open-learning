@@ -83,16 +83,22 @@ running note jobs. Beyond it, `POST /api/v1/ingest/text` and note job retries an
 with a transaction advisory lock so concurrent requests cannot overshoot. SQLite has
 no such lock, so the cap can overshoot slightly under concurrent submissions.
 
-Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id, never the
-internal key), newest first, with `limit` (1 to 500, default 100) and `offset` (default
+Forgetting notes: `GET /api/v1/notes` lists notes (title, label, document id and
+`char_count`, the number of characters (not bytes) in the stored text; never the text or
+the internal key), newest first, with `limit` (1 to 500, default 100) and `offset` (default
 0). `GET /api/v1/jobs?kind=note` (same `limit`/`offset`) lists note jobs as `id`,
-`status` and `created_at` only, never text, title, label or error, so a failed
-near-duplicate job can be found and removed. `DELETE /api/v1/notes/{document_id}`
+`status`, `created_at` and `document_id` only, never text, title, label or error, so a
+failed near-duplicate job can be found and removed. `document_id` is null until a job
+completes (and for jobs completed before migration 0004); `GET /api/v1/jobs/{id}` and
+the retry response carry the same optional field. A job that completes by deduplication
+links to the already-imported document. `DELETE /api/v1/notes/{document_id}`
 hard-deletes the note document, its chunks, insights, saved items, interactions, tutor history,
 review items and
 review history, and its source, in one transaction. Queued, running or failed note
 jobs still holding the same text are cancelled and their text cleared; cancelling a
-running job closes the race in which its worker would recreate the note.
+running job closes the race in which its worker would recreate the note. Completed note
+jobs whose `document_id` points at the note are deleted with it; completed jobs without a
+link (created before migration 0004) are left alone.
 `DELETE /api/v1/jobs/{job_id}` removes a note job of any status (409 for URL jobs). Importing the
 same text again afterwards creates new rows.
 Limits of forgetting: it deletes live data only. Database backups and snapshots
@@ -109,6 +115,28 @@ already sent by a running job cannot be recalled; surviving `cloud_attempt` rows
 `request_bytes` and `generation_id`; cancelled and completed `jobs` rows keep
 timestamps and the `Note deleted` error; PostgreSQL statement logs and replicas may
 contain the text.
+
+Editing notes: `PATCH /api/v1/notes/{document_id}` takes `{"title"?, "label"?}` (unknown
+fields and an empty body are 422) and returns the note. Both fields use the ingest
+validators, including the control-character and bidi rules and fixed error messages that
+never echo input; a null or blank label clears it, a null title is rejected. It changes
+metadata only: no model call, no new version, the text and insights are untouched. Unknown
+ids and URL documents answer 404 `Note not found`. It takes the document row lock first
+and then its source, the same order as forgetting, so a concurrent forget gives 404 or
+204, never a 500. This partly fixes the old limitation that resubmitting the same text
+keeps the first title: the title and label can now be changed after import, but
+resubmitting identical text still deduplicates to the first import and ignores the new
+title and label.
+
+`GET /api/v1/limits` (authenticated) returns `max_document_chars` (`OL_MAX_DOCUMENT_CHARS`),
+`min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
+validates against. All new response fields are additive and optional.
+
+Downgrading migration 0004: it only drops `jobs.document_id` and
+`jobs.replaces_document_id` (the latter is reserved and unused); notes and jobs survive,
+but job-to-document links are lost, so a later upgrade starts with null links and
+forgetting will not delete the old completed jobs. On PostgreSQL it takes the same
+`SHARE ROW EXCLUSIVE` lock on `jobs` as 0003.
 
 Downgrading migration 0003: stop the API and the worker first. The downgrade
 refuses to run while note jobs are queued or running (on PostgreSQL it takes a
@@ -189,7 +217,7 @@ note deletes every completed note row of that connection, not only the forgotten
 over-deletion: a job row has no document id). An in-flight submission cancelled at the wrong moment can still leave a note on the
 server whose response never arrived; the server deduplicates by hash and Forget removes it.
 Open risks: the 60,000-character limit is
-hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (a 422 keeps the
+hardcoded in the app while the server's `OL_MAX_DOCUMENT_CHARS` decides (now advertised by `GET /api/v1/limits`; the app does not read it yet) (a 422 keeps the
 text so you can Remove it); and resubmitting the same text under a new title keeps the
 first title because the server deduplicates by content hash.
 

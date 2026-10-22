@@ -180,7 +180,10 @@ Notes can be listed with `GET /api/v1/notes` (`limit` 1 to 500, default 100, and
 also cancels queued, running and failed jobs holding the same text. Backups, the
 Android cache and model-provider copies are not purged; see
 [security](docs/security.md). `GET /api/v1/jobs?kind=note` lists note jobs (id,
-status, created_at only) so a failed job can be removed with `DELETE /api/v1/jobs/{id}`.
+status, created_at and, once completed, document_id) so a failed job can be removed with
+`DELETE /api/v1/jobs/{id}`. `GET /api/v1/notes` also returns `char_count`;
+`PATCH /api/v1/notes/{document_id}` edits a note's title and label without reprocessing it;
+`GET /api/v1/limits` reports the server's note length limits.
 `OL_NOTE_MAX_PENDING_JOBS` (default 20) limits queued plus running note jobs (429
 beyond it; SQLite can overshoot slightly), and failed jobs keep note text for at
 least `OL_NOTE_FAILED_PAYLOAD_HOURS` (default 168) only while the worker or note
