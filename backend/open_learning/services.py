@@ -28,6 +28,7 @@ from .versions import (
     NOTE_CONFLICT,
     NOTE_STALE,
     NoteConflict,
+    NoteStale,
     current_documents,
     is_current,
     lock_replaced,
@@ -411,7 +412,7 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
         if _complete_from_existing(db, job_id, token, key, digest, replaces):
             return  # Same content: first import wins, no model call.
         if replaces is not None and not is_current(db, replaces):
-            raise NoteConflict(NOTE_STALE)  # Fail before spending a model call.
+            raise NoteStale(NOTE_STALE)  # Fail before spending a model call.
     texts = chunk_text(text)
     batch = (model or ModelClient(settings, factory)).insights(texts[:8])
     for _ in range(2):
@@ -425,7 +426,7 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
                 if job is None:
                     return  # Cancelled (e.g. its note was forgotten) or lease lost.
                 if replaces is not None and (replaced is None or replaced.superseded):
-                    raise NoteConflict(NOTE_STALE)
+                    raise NoteStale(NOTE_STALE)
                 source = _upsert_source(db, key, kind="note", title=title, label=label)
                 job.document_id = _publish(
                     db, settings, source, title=title, text=text, digest=digest, texts=texts,

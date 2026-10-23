@@ -13,8 +13,11 @@ Global lock order (every transaction that takes more than one of these must foll
 Per path: forget = 1,2,4,5 then deletes (including the Source); PATCH edit_note = 1,3; worker
 dedupe = 1,2; worker note edit (versions.py) = 1 (only the replaced document, never a second
 one),2,3; worker fresh import = 2,3 and never waits for a document (if an identical document
-appears it rolls back and restarts through the dedupe path); retry and ingest take one job (or
-none) then a transaction-scoped advisory lock that nothing else holds while waiting for rows;
+appears it rolls back and restarts through the dedupe path); retry takes one job, and an edit
+ingest the replaced Document (1, held until its new job is committed, so a forget either runs
+first and the ingest answers 404, or waits and then cancels the new job), then each takes a
+transaction-scoped advisory lock. That advisory lock is always the last lock taken, and its
+holder never waits for a row afterwards;
 review_answer, save, feedback and tutor take 4,5 only. No path acquires an earlier-numbered
 lock while holding a later one, so there is no cycle.
 

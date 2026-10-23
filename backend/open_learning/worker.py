@@ -12,7 +12,7 @@ from .fetching import FetchError
 from .forget import purge_note_payloads
 from .models import Job
 from .services import claim_job, process_job
-from .versions import NoteConflict
+from .versions import NoteConflict, NoteStale
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,8 @@ def run_once(factory, settings, fetcher=None, model=None) -> bool:
                     else "Processing failed"
                 )
                 job.lease_until, job.lease_token = None, None
+                if isinstance(error, NoteStale):  # Retrying cannot succeed; keep no text.
+                    job.payload_title = job.payload_text = job.payload_label = None
                 db.flush()
                 purge_note_payloads(db, settings)
     return True

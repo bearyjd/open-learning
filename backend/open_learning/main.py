@@ -51,7 +51,7 @@ from .services import (
     today_feed,
     tutor_chat,
 )
-from .versions import NO_STORE, check_replaceable, current_documents, note_text
+from .versions import NO_STORE, current_documents, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
 # Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
@@ -163,10 +163,11 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         settings = request.app.state.settings
         note = validate_note(payload.title, payload.text, payload.label, settings.max_document_chars)
         replaces = payload.replaces_document_id and payload.replaces_document_id.lower()
-        if replaces is not None:
-            check_replaceable(db, replaces, note.text)
         purge_note_payloads(db, settings)
         db.commit()
+        if replaces is not None:
+            # Held until the job commits (lock order: document, then the advisory lock).
+            lock_replaceable(db, replaces, note.text)
         note_capacity_check(db, settings)
         job = Job(
             kind="note",

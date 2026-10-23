@@ -29,6 +29,10 @@ class NoteConflict(Exception):
     """A note job cannot be published; the message is fixed and safe to show."""
 
 
+class NoteStale(NoteConflict):
+    """The version an edit replaces is gone or superseded; the job's text is dropped at once."""
+
+
 def current_documents():
     """Ids of documents that are not superseded, for ``Insight.document_id.in_(...)``."""
     return select(Document.id).where(Document.superseded.is_(False))
@@ -42,12 +46,21 @@ def _note_document(db: Session, document_id: str):
     ).first()
 
 
-def check_replaceable(db: Session, document_id: str, text: str) -> None:
-    """Reject an edit early; the worker re-checks under a row lock before publishing."""
-    row = _note_document(db, document_id)
-    if row is None:
+def lock_replaceable(db: Session, document_id: str, text: str) -> None:
+    """Lock the note version an edit replaces and reject a bad edit (lock level 1).
+
+    The caller keeps the lock until its edit job is committed, so a concurrent forget either
+    finishes first (404 here) or waits and then cancels the new job. The worker re-checks under
+    its own lock before publishing.
+    """
+    document = db.scalar(
+        select(Document)
+        .join(Source, Source.id == Document.source_id)
+        .where(Document.id == document_id, Source.kind == "note")
+        .with_for_update(of=Document)
+    )
+    if document is None:
         raise HTTPException(404, "Note not found")
-    document = row[0]
     if document.superseded:
         raise HTTPException(409, "Only the latest version of a note can be edited")
     if document.content_hash == hashlib.sha256(text.encode()).hexdigest():
