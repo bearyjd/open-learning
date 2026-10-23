@@ -1,0 +1,16 @@
+# Discovery slice 3: Android Discover screen (feeds, to-read queue, topics)
+
+Goal: the Android app can use the discovery backend (slices 1-2, already merged): manage RSS/Atom feeds, browse the to-read queue (newest or by relevance), ingest or dismiss items, and manage pinned topics. Private, no new network permissions beyond the existing backend client, no Google services, no new heavy dependencies, no model calls.
+
+## Requirements
+- Entry: from the existing Discover screen (where "Your notes" lives) add a "Reading queue" entry. New screens follow the notes-list screen patterns exactly (memory-only state, FLAG_SECURE where private, fixed error strings, scope/credential handling, config-change and process-death safe, same navigation style).
+- Queue screen: list of GET /discover items (title, source host, snippet, relative published time), sort toggle newest/relevance (relevance shows matched topics as chips, max 5), pull-to-refresh, bounded pagination (cursor), 409 from relevance paging (ranking changed) -> restart from the first page with a fixed message. Item actions: Ingest (POST /discover/{id}/ingest, then show the resulting job through the existing import-job UI/tracking; item leaves the queue), Dismiss (POST /discover/{id}/dismiss), open original in the browser via the existing external-link handling (confirm dialog if the app already does for sources).
+- Feeds screen: list feeds (title/url host, last fetched, paused/error as FIXED text from last_error codes), add feed by URL (client-side http/https validation; server errors mapped to fixed messages: duplicate 409, cap, invalid feed, SSRF refusal), remove feed (confirm), refresh now (POST /feeds/{id}/refresh) with rate-limit/429 Retry-After handling like existing code.
+- Topics: show derived topics from GET /topics and pinned topics; pin/unpin (POST/DELETE /topics/pinned, cap 30, term validation client-side matching backend limits). Topic terms derive from the user's private notes: memory only, FLAG_SECURE, never logged, not persisted, not included in Android backups, cleared on scope change/forget.
+- No persistence of queue/feeds/topics in Room (memory only; offline shows a fixed "needs a connection" message). Do not touch Room schema/migrations.
+- Security: never log URLs/titles/topics; error messages are fixed strings (no server text); respect existing HTTP-consent and token handling; no autofill on the add-feed field (match existing ancestor autofill opt-out); disable redirects as the existing client does.
+- Accessibility: content descriptions, 48dp targets, TalkBack-friendly list semantics.
+- Tests: JVM unit tests (TDD) for view models/logic (sorting, pagination, 409 restart, error mapping, topic validation, scope-change clearing), compile-checked androidTest for the screens, and an adb acceptance script scripts/android_discovery.py in the style of scripts/android_notes.py (mock backend; NOT run by you) plus its helper tests in scripts/tests/. Update docs (architecture, verification with an honest unverified list: nothing here runs on a device, ROADMAP row).
+
+## Non-goals
+No push notifications or background polling in the app, no auto-ingest, no model ranking, no edit-note UI, no lineage-aware forget (separate task), no Room persistence, no new dependencies unless unavoidable (justify).
