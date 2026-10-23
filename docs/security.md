@@ -148,7 +148,8 @@ on its 404. Editing text creates a new version; the replaced version stays store
 hidden from the feed, library, search, due reviews and the default notes list, and is NOT
 made visible again when the newer version is forgotten. `DELETE /api/v1/notes/{id}` forgets
 every version of the note (lineage id `documents.note_id`), including unfinished edit jobs and
-their text; `?version_only=true` forgets one version. An edit request holds the version it
+their text; `?version_only=true` forgets one superseded (or only) version and answers 409 for
+the current version of a note that still has earlier versions. An edit request holds the version it
 replaces locked until its job is committed, so a concurrent forget either answers first (the
 edit gets 404) or cancels the new job and clears its text.
 The tutor answers 404 for a superseded insight before any model call, and again (without

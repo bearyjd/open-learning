@@ -79,7 +79,10 @@ text cleared), in one transaction that locks the versions in id order. A version
 published while the forget waits for those locks is found by a second pass and forgotten
 too. This is a client-facing change from the first E2b-4 draft, where DELETE removed
 one version only: forgetting a note must not silently leave its other versions behind.
-`DELETE /api/v1/notes/{id}?version_only=true` keeps the old per-version behaviour.
+`DELETE /api/v1/notes/{id}?version_only=true` forgets one version, but only a superseded
+version or a note's only version: for the current version of a note that still has earlier
+versions it answers 409 "This note has earlier versions; forget the whole note instead",
+so the earlier versions' text is never silently left behind.
 **Forgetting only the latest version does not make the previous version current
 again**: it stays superseded and hidden until it is forgotten too. That is the
 privacy-safe choice: text the user replaced never comes back by itself. A newer

@@ -60,6 +60,7 @@ CAPACITY_LOCK_KEY = 0x4F4C4E4F  # Arbitrary constant serialising note admission 
 CAPACITY_MESSAGE = "Too many notes are waiting to be processed; try again shortly"
 RETRY_AFTER_SECONDS = "30"
 EXPIRED_MESSAGE = "Note text expired; submit it again"
+EARLIER_VERSIONS = "This note has earlier versions; forget the whole note instead"
 
 
 def _note_query(*where):
@@ -254,19 +255,34 @@ def _lock_lineage(db: Session, note_id: str) -> list:
     is the only path that ever holds more than one document row.
     """
     held: dict[str, tuple] = {}
-    lineage = or_(Document.note_id == note_id, Document.id == note_id)
     while True:
-        rows = _lock_note_documents(db, lineage, Document.id.not_in(list(held)))
+        rows = _lock_note_documents(db, _lineage(note_id), Document.id.not_in(list(held)))
         if not rows:
             return list(held.values())
         held.update({row[0]: tuple(row) for row in rows})
+
+
+def _lineage(note_key: str):
+    return or_(Document.note_id == note_key, Document.id == note_key)
+
+
+def _refuse_partial_forget(db: Session, document_id: str, note_key: str) -> None:
+    """Forgetting only the current version must not silently keep its earlier versions' text."""
+    superseded = db.scalar(select(Document.superseded).where(Document.id == document_id))
+    others = db.scalar(
+        select(Document.id).where(_lineage(note_key), Document.id != document_id).limit(1)
+    )
+    if not superseded and others is not None:
+        db.rollback()
+        raise HTTPException(409, EARLIER_VERSIONS)
 
 
 def forget_note(db: Session, document_id: str, version_only: bool = False) -> None:
     """Hard-delete a note and everything derived from it in one transaction.
 
     By default every version of the note (its lineage) is forgotten; version_only forgets just
-    this version and leaves the others as they are.
+    this version and leaves the others as they are; it is refused (409) for a current version
+    that still has earlier versions.
     """
     found = db.execute(
         select(Document.note_id)
@@ -276,14 +292,17 @@ def forget_note(db: Session, document_id: str, version_only: bool = False) -> No
     if found is None:
         db.rollback()
         raise HTTPException(404, "Note not found")
+    note_key = found[0] or document_id
     if version_only:
         rows = _lock_note_documents(db, Document.id == document_id)
     else:
-        rows = _lock_lineage(db, found[0] or document_id)
+        rows = _lock_lineage(db, note_key)
     ids = {row[0] for row in rows}
     if document_id not in ids:  # Forgotten between the lookup and the lock.
         db.rollback()
         raise HTTPException(404, "Note not found")
+    if version_only:
+        _refuse_partial_forget(db, document_id, note_key)
     _cancel_matching_jobs(db, {row[2] for row in rows}, ids)
     _delete_linked_jobs(db, ids)
     _lock_graph(db, ids)

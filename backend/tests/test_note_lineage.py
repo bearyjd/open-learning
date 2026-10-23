@@ -7,7 +7,7 @@ from conftest import FixtureModel
 from sqlalchemy import event, select
 from test_note_forget import OTHER, count, import_note
 from test_note_version_races import require_postgres, wait_for_lock_waiter
-from test_note_versions import EDITED, EDITED_AGAIN, MARKER, edit, edit_and_run
+from test_note_versions import EARLIER_VERSIONS, EDITED, EDITED_AGAIN, MARKER, edit, edit_and_run
 
 from open_learning.forget import forget_note
 from open_learning.models import Chunk, Document, Insight, Job, Source
@@ -66,6 +66,21 @@ def test_version_only_forget_keeps_other_versions(client, factory, settings):
     response = client.delete(f"{API}/notes/{v2}", params={"version_only": True})
     assert response.status_code == 204
     assert note_documents(factory) == {v1, v3}
+
+
+def test_version_only_forget_of_current_version_with_predecessors_is_refused(
+    client, factory, settings
+):
+    versions = three_versions(client, factory, settings)
+    response = client.delete(f"{API}/notes/{versions[2]}", params={"version_only": True})
+    assert (response.status_code, response.json()) == (409, {"detail": EARLIER_VERSIONS})
+    assert note_documents(factory) == set(versions)
+
+
+def test_version_only_forget_of_an_only_version_is_allowed(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    assert client.delete(f"{API}/notes/{v1}", params={"version_only": True}).status_code == 204
+    assert note_documents(factory) == set()
 
 
 def test_whole_note_forget_after_root_was_forgotten_alone(client, factory, settings):

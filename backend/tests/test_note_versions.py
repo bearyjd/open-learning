@@ -13,6 +13,7 @@ EDITED_AGAIN = (PASSAGE * 5).strip()
 MARKER = "wombat-private-marker-9043"
 CONFLICT = "This text matches another note or version; change it or forget that note first"
 STALE = "This note was changed or forgotten; edit its latest version"
+EARLIER_VERSIONS = "This note has earlier versions; forget the whole note instead"
 
 
 def edit(client, document_id, text=EDITED, title="Edited", label="cls2"):
@@ -172,16 +173,17 @@ def test_forget_original_cancels_pending_edit(client, factory, settings):
     assert count(factory, Document) == 0
 
 
-def test_forget_latest_does_not_resurrect_previous(client, factory, settings):
+def test_version_only_forget_of_latest_with_predecessors_is_refused(client, factory, settings):
     v1 = import_note(client, factory, settings)
     v2 = edit_and_run(client, factory, settings, v1)
-    only = {"version_only": True}
-    assert client.delete(f"{API}/notes/{v2}", params=only).status_code == 204
-    assert client.get(API + "/notes").json() == []
-    assert document(factory, v1).superseded is True
-    hidden = client.get(API + "/notes", params={"include_superseded": True}).json()
-    assert [n["document_id"] for n in hidden] == [v1]
-    assert client.delete(f"{API}/notes/{v1}").status_code == 204
+    response = client.delete(f"{API}/notes/{v2}", params={"version_only": True})
+    assert (response.status_code, response.json()) == (409, {"detail": EARLIER_VERSIONS})
+    assert document(factory, v1).superseded is True and document(factory, v2) is not None
+    # Once the earlier version is gone, the latest is the only one and may be forgotten alone,
+    # and nothing comes back.
+    assert client.delete(f"{API}/notes/{v1}", params={"version_only": True}).status_code == 204
+    assert client.delete(f"{API}/notes/{v2}", params={"version_only": True}).status_code == 204
+    assert client.get(API + "/notes", params={"include_superseded": True}).json() == []
     assert count(factory, Document) == 0
 
 
