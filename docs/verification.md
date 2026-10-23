@@ -755,5 +755,15 @@ the server really deleted (404) can never be confirmed: the worker fails closed,
 Closing this needs a server endpoint that answers "does note X exist" (for example GET /notes/{id} with a distinct 404 body), not a
 bigger scan. Covered by `ForgetPruneTest` (`scanNotes`); never run against a real server.
 
+Known limitation (stale responses after tombstone expiry). A confirmed tombstone is pruned by the 7-day TTL once a complete notes list
+no longer contains the note. `writeCards` only checks the hidden set at write time, so a network response that was already in flight
+before the forget and is delivered after the tombstone was pruned could persist the forgotten note again. Reaching this needs a
+response outliving the HTTP client timeouts, or a forward device clock jump between the forget and the delayed delivery. Found by the
+third Codex pass (P2) and accepted as a hardening gap, not fixed here. A fix needs a stale-response fence (for example a per-scope
+write epoch recorded when a request starts and compared when its result is stored).
+
+Codex review status: three adversarial passes ran on the final design (fc4b5a5, 56057a4, b8eea31). Findings from the first two were
+fixed; the third raised only the stale-response gap above. Static review only, no device and no Android runtime run by Codex.
+
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
