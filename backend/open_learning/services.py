@@ -375,6 +375,25 @@ def _note_imported(db: Session, key: str, digest: str) -> str | None:
     )
 
 
+def _published_by_same_edit(db: Session, replaces: str, key: str, digest: str) -> str | None:
+    """The current version that an identical edit of ``replaces`` already published, if any.
+
+    Called while holding the replaced version's lock, so no second document is locked: a
+    whole-note forget must lock the replaced version too, and a version-only forget of a
+    current version with predecessors is refused.
+    """
+    return db.scalar(
+        select(Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Source.url == key,
+            Document.content_hash == digest,
+            Document.replaces_document_id == replaces,
+            Document.superseded.is_(False),
+        )
+    )
+
+
 class _DocumentAppeared(Exception):
     """A matching document was committed after the dedupe check; retry from the lock order."""
 
@@ -439,7 +458,12 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
                 if job is None:
                     return  # Cancelled (e.g. its note was forgotten) or lease lost.
                 if replaces is not None and (replaced is None or replaced.superseded):
-                    raise NoteStale(NOTE_STALE)
+                    successor = replaced and _published_by_same_edit(db, replaces, key, digest)
+                    if successor is None:
+                        raise NoteStale(NOTE_STALE)
+                    job.document_id = successor  # An identical edit won the race: idempotent.
+                    _complete(job)
+                    return
                 source = _upsert_source(db, key, kind="note", title=title, label=label)
                 job.document_id = _publish(
                     db, settings, source, title=title, text=text, digest=digest, texts=texts,

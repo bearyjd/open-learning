@@ -197,3 +197,31 @@ def test_tutor_writes_nothing_when_an_edit_publishes_during_inference(client, fa
         assert db.get(Document, v1).superseded is True
     for table in (History, Interaction, ReviewItem):
         assert count(factory, table, table.insight_id == insight) == 0, table
+
+
+def test_identical_edits_racing_past_dedupe_both_complete_on_one_version(
+    client, factory, settings, monkeypatch
+):
+    """B passes its final dedupe check, then A publishes before B locks the replaced version."""
+    from open_learning import services
+
+    v1 = import_note(client, factory, settings)
+    first = edit(client, v1).json()["id"]
+    second = edit(client, v1).json()["id"]
+    claim_a = services.claim_job(factory, settings.job_lease_seconds)
+    claim_b = services.claim_job(factory, settings.job_lease_seconds)
+    original = services.lock_replaced
+
+    def a_publishes_first(db, document_id):
+        monkeypatch.setattr(services, "lock_replaced", original)
+        services.process_job(factory, settings, claim_a, model=FixtureModel())
+        return original(db, document_id)
+
+    monkeypatch.setattr(services, "lock_replaced", a_publishes_first)
+    services.process_job(factory, settings, claim_b, model=FixtureModel())
+    with factory() as db:
+        a, b = db.get(Job, first), db.get(Job, second)
+        assert a.status == "completed" and a.document_id
+        assert (b.status, b.error, b.document_id) == ("completed", None, a.document_id)
+        assert b.payload_text is None
+    assert count(factory, Document) == 2
