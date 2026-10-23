@@ -2,7 +2,7 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -38,6 +38,7 @@ from .schemas import (
     JobOutput,
     LimitsOutput,
     NoteOutput,
+    NoteTextOutput,
     ReviewOutput,
     TutorOutput,
 )
@@ -50,10 +51,13 @@ from .services import (
     today_feed,
     tutor_chat,
 )
+from .versions import NO_STORE, current_documents, lock_current, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
 # Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
 DEFAULT_BODY_LIMIT = 64 * 1024
+FORGOTTEN_IDS_HEADER = "X-Forgotten-Document-Ids"
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
 def create_app(settings: Settings | None = None, factory=None, model=None) -> FastAPI:
@@ -117,6 +121,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             raise HTTPException(404, "Insight not found")
         return item
 
+    def lock_current_insight(db, insight_id):
+        """Lock order document (shared), then insight; superseded versions answer 404."""
+        document_id = db.scalar(select(Insight.document_id).where(Insight.id == insight_id))
+        if document_id is None or not lock_current(db, document_id):
+            raise HTTPException(404, "Insight not found")
+        return find_insight(db, insight_id, lock=True)
+
     def visible(db, items, serialize):
         """Serialize rows, skipping any deleted while the request was running."""
         out = []
@@ -159,8 +170,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def ingest_text(payload: TextInput, request: Request, db=Depends(database)):
         settings = request.app.state.settings
         note = validate_note(payload.title, payload.text, payload.label, settings.max_document_chars)
+        replaces = payload.replaces_document_id and payload.replaces_document_id.lower()
         purge_note_payloads(db, settings)
         db.commit()
+        if replaces is not None:
+            # Held until the job commits (lock order: document, then the advisory lock).
+            lock_replaceable(db, replaces, note.text)
         note_capacity_check(db, settings)
         job = Job(
             kind="note",
@@ -168,6 +183,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             payload_title=note.title,
             payload_text=note.text,
             payload_label=note.label,
+            replaces_document_id=replaces,
         )
         db.add(job)
         db.commit()
@@ -212,9 +228,16 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def notes(
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        include_superseded: bool = False,
         db=Depends(database),
     ):
-        return list_notes(db, limit, offset)
+        return list_notes(db, limit, offset, include_superseded)
+
+    @api.get("/notes/{document_id}/text", response_model=NoteTextOutput)
+    def get_note_text(document_id: str, response: Response, db=Depends(database)):
+        result = note_text(db, document_id)
+        response.headers.update(NO_STORE)
+        return result
 
     @api.patch("/notes/{document_id}", response_model=NoteOutput)
     def patch_note(document_id: str, payload: NotePatch, db=Depends(database)):
@@ -231,8 +254,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         }
 
     @api.delete("/notes/{document_id}", status_code=204)
-    def delete_note(document_id: str, db=Depends(database)):
-        forget_note(db, document_id)
+    def delete_note(
+        document_id: str, response: Response, version_only: bool = False, db=Depends(database)
+    ):
+        # Forgets every version of the note unless version_only is set (privacy-safe default).
+        # Still 204 with no body; clients purge their caches of every id in the header.
+        forgotten = forget_note(db, document_id, version_only)
+        response.headers[FORGOTTEN_IDS_HEADER] = ",".join(forgotten)
 
     @api.get("/feed/today", response_model=list[InsightOutput])
     def feed(db=Depends(database)):
@@ -241,7 +269,11 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     @api.get("/library", response_model=list[InsightOutput])
     def library(db=Depends(database)):
         items = db.scalars(
-            select(Insight).join(SavedItem).order_by(SavedItem.created_at.desc()).limit(500)
+            select(Insight)
+            .join(SavedItem)
+            .where(Insight.document_id.in_(current_documents()))
+            .order_by(SavedItem.created_at.desc())
+            .limit(500)
         )
         return visible(db, items, serialize_insight)
 
@@ -251,7 +283,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/insights/{insight_id}/save", response_model=InsightOutput)
     def save(insight_id: str, db=Depends(database)):
-        item = find_insight(db, insight_id, lock=True)
+        item = lock_current_insight(db, insight_id)
         if db.get(SavedItem, item.id) is None:
             db.add(SavedItem(insight_id=item.id))
             db.add(Interaction(insight_id=item.id, action="save"))
@@ -264,7 +296,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/insights/{insight_id}/feedback", status_code=204)
     def feedback(insight_id: str, payload: FeedbackInput, db=Depends(database)):
-        item = find_insight(db, insight_id, lock=True)
+        item = lock_current_insight(db, insight_id)
         item.dismissed = True
         db.add(Interaction(insight_id=item.id, action=payload.action))
         db.commit()
@@ -276,11 +308,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             select(Insight)
             .join(SavedItem)
             .where(
+                Insight.document_id.in_(current_documents()),
                 or_(
                     Insight.title.ilike(term, escape="\\"),
                     Insight.idea.ilike(term, escape="\\"),
                     Insight.explanation.ilike(term, escape="\\"),
-                )
+                ),
             )
             .order_by(Insight.created_at.desc())
             .limit(100)
@@ -302,7 +335,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def due(db=Depends(database)):
         items = db.scalars(
             select(ReviewItem)
-            .where(ReviewItem.due_at <= now())
+            .where(
+                ReviewItem.due_at <= now(),
+                ReviewItem.insight_id.in_(
+                    select(Insight.id).where(Insight.document_id.in_(current_documents()))
+                ),
+            )
             .order_by(ReviewItem.due_at)
             .limit(100)
         )
@@ -310,10 +348,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/reviews/{review_id}/answer", response_model=ReviewOutput)
     def review_answer(review_id: str, payload: AnswerInput, db=Depends(database)):
-        # Lock order is insight, then review item (see forget.py); a delete holds them in that order.
+        # Lock order is document (shared), insight, then review item (see forget.py).
         insight_id = db.scalar(select(ReviewItem.insight_id).where(ReviewItem.id == review_id))
         if insight_id is None:
             raise HTTPException(404, "Review not found")
+        document_id = db.scalar(select(Insight.document_id).where(Insight.id == insight_id))
+        if document_id is None or not lock_current(db, document_id):
+            raise HTTPException(404, "Review not found")  # Forgotten or superseded.
         if db.scalar(select(Insight.id).where(Insight.id == insight_id).with_for_update()) is None:
             raise HTTPException(404, "Review not found")
         item = db.scalar(select(ReviewItem).where(ReviewItem.id == review_id).with_for_update())
@@ -344,7 +385,16 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
                 "message": item.message,
                 "created_at": item.created_at.isoformat(),
             }
-            for item in db.scalars(select(History).order_by(History.created_at.desc()).limit(200))
+            for item in db.scalars(
+                select(History)
+                .where(
+                    History.insight_id.in_(
+                        select(Insight.id).where(Insight.document_id.in_(current_documents()))
+                    )
+                )
+                .order_by(History.created_at.desc())
+                .limit(200)
+            )
         ]
 
     app.include_router(api)
@@ -361,6 +411,8 @@ class TextInput(BaseModel):
     title: str
     text: str
     label: str | None = None
+    # Set to edit a note: the job publishes a new version of this (current) note document.
+    replaces_document_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
 
 class NotePatch(BaseModel):
@@ -394,6 +446,7 @@ def job_output(item: Job):
         "status": item.status,
         "error": item.error,
         "document_id": item.document_id,
+        "replaces_document_id": item.replaces_document_id,
     }
 
 

@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -58,6 +59,15 @@ class Document(Base):
     generation_coverage: Mapped[str] = mapped_column(String(20), default="excerpt")
     extraction_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # Note versions (E2b-4): an edit publishes version N+1 and marks the replaced row
+    # superseded, which hides it from listings. No foreign key: versions are forgotten one by one.
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    replaces_document_id: Mapped[str | None] = mapped_column(String(36))
+    superseded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Lineage key shared by every version of a note: the root version's id. Forgetting a note
+    # forgets the whole lineage. Nullable so rows written outside _publish still work (a NULL
+    # lineage is the document on its own).
+    note_id: Mapped[str | None] = mapped_column(String(36), index=True)
 
 
 class Chunk(Base):
@@ -175,8 +185,8 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text)
     # Set when a note job completes; no foreign key (forget_note deletes linked jobs itself).
     document_id: Mapped[str | None] = mapped_column(String(36), index=True)
-    # Reserved for note re-processing (E2b-4); unused until then.
-    replaces_document_id: Mapped[str | None] = mapped_column(String(36))
+    # Set on a note edit: the note version this job's text replaces once it completes.
+    replaces_document_id: Mapped[str | None] = mapped_column(String(36), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     lease_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

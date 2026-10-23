@@ -308,7 +308,7 @@ def test_dedupe_job_after_hash_cancel_cannot_link_a_deleted_note(client, factory
             if (
                 "FOR UPDATE" in statement
                 and "jobs.status" in statement
-                and re.search(r"WHERE.*jobs\.document_id = ", statement, re.DOTALL)
+                and re.search(r"WHERE.*jobs\.document_id (=|IN) ", statement, re.DOTALL)
                 and not fired
             ):
                 fired.append(True)

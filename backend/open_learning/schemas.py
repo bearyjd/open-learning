@@ -15,6 +15,7 @@ class InsightOutput(BaseModel):
     source_kind: Literal["url", "note"]
     source_label: str
     document_id: str
+    source_version: int = 1
     evidence: str
     tags: list[str]
     saved: bool
@@ -29,6 +30,7 @@ class JobOutput(BaseModel):
     status: str
     error: str | None
     document_id: str | None = None
+    replaces_document_id: str | None = None
 
 
 class JobListItem(BaseModel):
@@ -36,6 +38,7 @@ class JobListItem(BaseModel):
     status: str
     created_at: datetime
     document_id: str | None = None
+    replaces_document_id: str | None = None
 
 
 class NoteOutput(BaseModel):
@@ -44,6 +47,17 @@ class NoteOutput(BaseModel):
     label: str | None
     created_at: datetime
     char_count: int
+    version: int = 1
+    replaces_document_id: str | None = None
+    superseded: bool = False
+
+
+class NoteTextOutput(BaseModel):
+    document_id: str
+    title: str
+    label: str | None
+    version: int
+    text: str
 
 
 class LimitsOutput(BaseModel):
@@ -68,6 +82,7 @@ class Citation(BaseModel):
     source_url: str
     source_kind: Literal["url", "note"]
     source_label: str
+    source_version: int = 1
     passage: str
 
 
