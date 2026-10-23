@@ -125,7 +125,9 @@ anchor are excluded from subsequent pages. Relevance cursors bind the status,
 sort, corpus and candidate ranking using hashes without plaintext topic terms.
 A changed corpus or ranking returns a fixed 409 error requiring pagination to
 restart. This is a bounded queue ranking, not a ranking of the entire archive.
-Both topic and discovery responses use `Cache-Control: no-store`.
+Topic and discovery responses use `Cache-Control: no-store` on success and
+handled authentication, validation and cursor errors, including when the API is
+mounted under a path prefix.
 
 No model, embedding, paid API or external search call is involved. Ranking does
 not fetch or automatically ingest articles. Android topics and ranking UI are

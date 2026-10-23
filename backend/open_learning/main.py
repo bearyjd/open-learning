@@ -53,7 +53,7 @@ from .services import (
     today_feed,
     tutor_chat,
 )
-from .topics_api import mount_topics
+from .topics_api import TopicReadPrivacyMiddleware, mount_topics, private_topic_read
 from .versions import NO_STORE, current_documents, lock_current, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
@@ -93,11 +93,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         return DEFAULT_BODY_LIMIT
 
     app.add_middleware(BodyLimitMiddleware, limit=body_limit)
+    app.add_middleware(TopicReadPrivacyMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         # Never echo submitted request bodies back (notes carry private text).
-        private_query = request.url.path in {"/api/v1/topics", "/api/v1/discover"}
+        private_query = private_topic_read(request.scope)
         errors = [
             {k: v for k, v in e.items() if k not in {"input", "ctx"}}
             if e["loc"][:1] == ("body",) or private_query else e

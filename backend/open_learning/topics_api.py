@@ -6,11 +6,38 @@ from datetime import UTC
 
 from fastapi import Depends, HTTPException, Query, Response
 from pydantic import BaseModel, model_validator
+from starlette.datastructures import MutableHeaders
 
 from .discovery import lock_sqlite_writes
 from .models import PinnedTopic
 from .topics import normalize_pin, pin_topic, profile
 from .versions import NO_STORE
+
+
+def private_topic_read(scope):
+    path = scope.get("path", "").removeprefix(scope.get("root_path", ""))
+    return scope.get("method") == "GET" and path in {"/api/v1/topics", "/api/v1/discover"}
+
+
+class TopicReadPrivacyMiddleware:
+    """Attach private cache policy even when authentication or validation ends a read early."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not private_topic_read(scope):
+            await self.app(scope, receive, send)
+            return
+
+        async def private_send(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=list(message.get("headers", [])))
+                headers.update(NO_STORE)
+                message = {**message, "headers": headers.raw}
+            await send(message)
+
+        await self.app(scope, receive, private_send)
 
 
 class PinInput(BaseModel):

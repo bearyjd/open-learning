@@ -50,9 +50,14 @@ credentials and secrets must never enter API errors or logs. Stored feed URLs,
 item metadata and snippets remain private library data and occur in backups.
 
 Discovery topic terms and matches can reveal private note content. Topic and
-queue responses use `Cache-Control: no-store`; cursors contain hashes rather than
-plaintext terms. Terms must not enter logs or error messages, and pin validation
-uses fixed errors without echoing submitted content. Derivation reads bounded,
+queue responses use `Cache-Control: no-store` on success and handled
+authentication, validation and cursor errors, including mounted API paths.
+Cursors contain hashes rather
+than plaintext terms. Terms must not enter logs or error messages, and pin validation
+uses fixed errors without echoing submitted content. Topic/discovery query
+validation also removes private input and context from errors, including under a
+mounted path prefix. The cache middleware copies the ASGI response mapping and header list before
+adding headers, so it does not mutate shared response data. Derivation reads bounded,
 SQL-truncated current document and insight text, with no persisted derived
 profile. Forgotten and superseded sources lose their influence on the next read;
 explicitly pinned terms remain until deleted and occur in database backups.
