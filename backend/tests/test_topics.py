@@ -5,6 +5,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 from conftest import PASSAGE
@@ -15,6 +16,80 @@ from test_note_versions import edit_and_run
 from open_learning.models import DiscoveredItem, Document, Feed, Insight, SavedItem, now
 
 API = "/api/v1"
+
+UNICODE_EQUIVALENTS = [
+    ("J\u030car", "ǰar"),
+    ("CAFE\u0301", "café"),
+    ("A\u0323\u0302bc", "ậbc"),
+    ("İstanbul", "i\u0307stanbul"),
+    ("ΣΟΦΟΣ", "σοφος"),
+    ("Kelvin", "kelvin"),
+]
+
+
+@pytest.mark.parametrize("original,equivalent", UNICODE_EQUIVALENTS)
+def test_unicode_normalization_is_idempotent_and_matches_items(original, equivalent):
+    from open_learning.topics import CorpusText, derive_topics, normalize_pin, score_item, words
+
+    normalized = normalize_pin(original)
+    assert normalize_pin(normalized) == normalized
+    assert normalize_pin(equivalent) == normalized
+    assert words(original) == words(equivalent) == words(normalized)
+    derived = derive_topics((CorpusText("a", original), CorpusText("b", equivalent)))
+    assert len(derived) == 1 and derived[0].term == normalized and derived[0].count == 2
+    for profile in (derived, derive_topics((), (normalized,))):
+        for field in ("title", "snippet"):
+            scores = [
+                score_item(SimpleNamespace(**{"title": "", "snippet": "", field: text}), profile)
+                for text in (original, equivalent, normalized)
+            ]
+            assert scores[0] == scores[1] == scores[2]
+            assert scores[0][0] > 0
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("J\u030car", "ǰar"), ("J\u030c" + "a" * 78, "ǰ" + "a" * 78), ("İ" * 40, "i\u0307" * 40)],
+)
+def test_pin_normalized_length_boundaries(value, expected):
+    from open_learning.topics import normalize_pin
+
+    assert normalize_pin(value) == expected
+    assert normalize_pin(expected) == expected
+
+
+@pytest.mark.parametrize("value", ["J\u030ca", "İ" * 41, "a" * 81])
+def test_pin_rejects_outside_normalized_length_boundaries(value):
+    from open_learning.topics import normalize_pin
+
+    with pytest.raises(ValueError):
+        normalize_pin(value)
+
+
+def test_equivalent_unicode_pins_remain_idempotent_at_cap(client, factory):
+    from sqlalchemy import select
+
+    from open_learning.models import PinnedTopic
+
+    first = client.post(API + "/topics/pinned", json={"term": "J\u030car"})
+    assert first.status_code == 201
+    pin = first.json()
+    for term in (pin["term"], "ǰar", "J\u030car"):
+        assert client.post(API + "/topics/pinned", json={"term": term}).json() == pin
+    assert client.get(API + "/topics").json()["pinned"] == [pin]
+    candidates(factory, titles=("ǰar", "J\u030car"))
+    ranked = client.get(API + "/discover", params={"sort": "relevance"}).json()["items"]
+    assert len(ranked) == 2 and ranked[0]["score"] == ranked[1]["score"] > 0
+    for i in range(29):
+        assert client.post(API + "/topics/pinned", json={"term": f"orchid {i}"}).status_code == 201
+    for term in (pin["term"], "ǰar", "J\u030car"):
+        response = client.post(API + "/topics/pinned", json={"term": term})
+        assert response.status_code == 201 and response.json() == pin
+    assert client.post(API + "/topics/pinned", json={"term": "volcano"}).status_code == 409
+    with factory() as db:
+        pins = db.scalars(select(PinnedTopic)).all()
+        assert len(pins) == 30
+        assert [row.term for row in pins].count("ǰar") == 1
 
 
 def topics(client):

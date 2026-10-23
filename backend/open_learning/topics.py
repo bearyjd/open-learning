@@ -51,7 +51,8 @@ class TopicWeight:
 def words(value: str) -> tuple[str, ...]:
     """Linear Unicode scanning; combining marks stay attached to their base letter."""
     result, token = [], []
-    for char in unicodedata.normalize("NFKC", value).lower():
+    normalized = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", value).lower())
+    for char in normalized:
         if char.isalnum() or (token and unicodedata.category(char).startswith("M")):
             token.append(char)
         elif token:

@@ -14,7 +14,70 @@ from test_topics import API, candidates
 from open_learning.models import DiscoveredItem
 
 
-def test_private_cache_middleware_preserves_upstream_message_and_headers():
+@pytest.mark.parametrize("root_path", ["", "/ol"])
+@pytest.mark.parametrize("authenticated", [True, False])
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/topics/"),
+        ("GET", "/discover/"),
+        ("GET", "/topics/pinned/"),
+        ("POST", "/topics/pinned/"),
+        ("DELETE", "/topics/pinned/missing/"),
+    ],
+)
+def test_private_slash_routes_never_redirect_queries(
+    client, root_path, authenticated, method, path
+):
+    marker = "private-slash-marker"
+    with TestClient(client.app, root_path=root_path) as mounted:
+        response = mounted.request(
+            method,
+            root_path + API + path,
+            params={"limit" if path == "/topics/" else "cursor": marker},
+            headers={"Authorization": "Bearer " + TOKEN if authenticated else ""},
+            follow_redirects=False,
+        )
+    assert response.status_code == 404
+    assert "Location" not in response.headers
+    assert marker not in response.text
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert response.headers.get("Pragma") == "no-cache"
+
+
+@pytest.mark.parametrize(
+    "method,path,status",
+    [
+        ("GET", "/topics/pinned", 405),
+        ("POST", "/topics/pinned", 422),
+        ("DELETE", "/topics/pinned/missing", 404),
+    ],
+)
+def test_pinned_route_errors_are_no_store(client, method, path, status):
+    response = client.request(method, API + path)
+    assert response.status_code == status
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert response.headers.get("Pragma") == "no-cache"
+
+
+def test_pin_writes_and_auth_errors_are_no_store(client):
+    response = client.post(API + "/topics/pinned", json={"term": "orchid"})
+    assert response.status_code == 201
+    pin_id = response.json()["id"]
+    responses = [response, client.delete(API + "/topics/pinned/" + pin_id)]
+    assert responses[-1].status_code == 204
+    for method, path in [("POST", "/topics/pinned"), ("DELETE", "/topics/pinned/missing")]:
+        response = client.request(method, API + path, headers={"Authorization": ""})
+        assert response.status_code == 401
+        responses.append(response)
+    for response in responses:
+        assert response.headers.get("Cache-Control") == "no-store"
+        assert response.headers.get("Pragma") == "no-cache"
+
+
+@pytest.mark.parametrize("root_path", ["", "/ol"])
+@pytest.mark.parametrize("path", ["/topics", "/topics/pinned", "/topics/pinned/example"])
+def test_private_cache_middleware_preserves_upstream_message_and_headers(root_path, path):
     from open_learning.topics_api import TopicReadPrivacyMiddleware
 
     headers = [(b"x-existing", b"preserved")]
@@ -29,7 +92,14 @@ def test_private_cache_middleware_preserves_upstream_message_and_headers():
 
     asyncio.run(
         TopicReadPrivacyMiddleware(upstream)(
-            {"type": "http", "method": "GET", "path": API + "/topics"}, None, collect
+            {
+                "type": "http",
+                "method": "GET",
+                "path": root_path + API + path,
+                "root_path": root_path,
+            },
+            None,
+            collect,
         )
     )
     assert original == {
@@ -41,6 +111,26 @@ def test_private_cache_middleware_preserves_upstream_message_and_headers():
     assert sent[0] is not original and sent[0]["headers"] is not headers
     assert dict(sent[0]["headers"])[b"x-existing"] == b"preserved"
     assert dict(sent[0]["headers"])[b"cache-control"] == b"no-store"
+
+
+def test_private_cache_middleware_preserves_unrelated_slash_routes():
+    from open_learning.topics_api import TopicReadPrivacyMiddleware
+
+    original = {"type": "http.response.start", "status": 307, "headers": [(b"location", b"/feeds")]}
+    sent = []
+
+    async def upstream(scope, receive, send):
+        await send(original)
+
+    async def collect(message):
+        sent.append(message)
+
+    asyncio.run(
+        TopicReadPrivacyMiddleware(upstream)(
+            {"type": "http", "method": "GET", "path": API + "/feeds/"}, None, collect
+        )
+    )
+    assert sent == [original] and sent[0] is original
 
 
 @pytest.mark.parametrize("root_path", ["", "/ol"])
