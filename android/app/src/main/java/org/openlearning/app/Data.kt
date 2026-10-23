@@ -8,6 +8,7 @@ import com.google.gson.FieldNamingPolicy
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -40,7 +41,9 @@ data class ChatRequest(val insightId: String, val message: String)
 data class Citation(val documentId: String = "", val sourceUrl: String = "", val passage: String = "",
     val sourceKind: String = "url", val sourceLabel: String = "")
 data class ChatReply(val answer: String = "", val question: String = "", val citations: List<Citation> = emptyList(), val reviewId: String = "")
-data class Review(val id: String, val insightId: String, val question: String, val dueAt: String, val intervalDays: Double, val insightTitle: String = "")
+data class Review(val id: String, val insightId: String, val question: String, val dueAt: String, val intervalDays: Double, val insightTitle: String = "",
+    /** Additive: servers that predate it send nothing. Gson can leave it null, so read it through [docId]. */
+    val documentId: String = "")
 data class Rating(val rating: String)
 
 /** DELETE succeeded, or the server already has nothing to delete. */
@@ -79,13 +82,15 @@ data class PendingIngest(
     // Note bodies are private: keep them out of logs and crash reports.
     override fun toString() = "PendingIngest(scope=$scope, id=$id, kind=$kind, jobId=$jobId, status=$status, text=${if (text == null) "null" else "<redacted>"})"
 }
-/** Reserved for offline forget (E2b-3); nothing reads or writes it yet. */
+/** A note forgotten on this device and waiting for the server DELETE. Ids and a fixed error only, never titles or text. */
 @Entity(primaryKeys = ["scope", "documentId"])
 data class PendingForget(val scope: String, val documentId: String, val createdAt: Long, val status: String, val error: String? = null)
 @Entity
 data class NoteDraft(@PrimaryKey val scope: String, val title: String, val label: String, val text: String) {
     override fun toString() = "NoteDraft(scope=$scope, text=<redacted>)"
 }
+data class CardFlag(val id: String, val inFeed: Boolean)
+
 @Dao
 interface LearningDao {
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope AND (saved = 1 OR inFeed = 1)")
@@ -118,10 +123,36 @@ interface LearningDao {
     @Query("SELECT * FROM NoteDraft WHERE scope = :scope") suspend fun draft(scope: String): NoteDraft?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putDraft(draft: NoteDraft)
     @Query("DELETE FROM NoteDraft WHERE scope = :scope") suspend fun deleteDraft(scope: String)
+    /** Only the flag a write needs, so a refresh does not load every payload. */
+    @Query("SELECT id, inFeed FROM CachedInsight WHERE scope = :scope") suspend fun cardFlags(scope: String): List<CardFlag>
     @Query("SELECT * FROM CachedInsight WHERE scope = :scope") suspend fun allInsights(scope: String): List<CachedInsight>
     @Query("DELETE FROM CachedInsight WHERE scope = :scope AND id IN (:ids)") suspend fun deleteInsights(scope: String, ids: List<String>)
+    // Idempotent: forgetting twice keeps the first row (and its failed state, until the person retries).
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun putForget(row: PendingForget): Long
+    // Upsert: a confirmation is recorded even when the row is missing or failed; also moves a row back to pending.
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun confirmForget(row: PendingForget)
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'confirmed'") suspend fun confirmedForgets(scope: String): List<PendingForget>
+    @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId IN (:ids)") suspend fun deleteForgets(scope: String, ids: List<String>)
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope") fun observeForgets(scope: String): Flow<List<PendingForget>>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope") suspend fun forgets(scope: String): List<PendingForget>
+    @Query("SELECT * FROM PendingForget WHERE scope != :scope AND status != 'confirmed'") suspend fun forgetsOutside(scope: String): List<PendingForget>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun forget(scope: String, documentId: String): PendingForget?
+    @Query("SELECT lower(documentId) FROM PendingForget WHERE scope = :scope") suspend fun hiddenIds(scope: String): List<String>
+    @Query("SELECT COUNT(*) FROM PendingForget WHERE scope = :scope AND status = 'pending'") fun pendingForgetCount(scope: String): Flow<Int>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'failed' ORDER BY createdAt") fun failedForgets(scope: String): Flow<List<PendingForget>>
+    @Query("SELECT * FROM PendingForget WHERE scope = :scope AND status = 'pending'") suspend fun pendingForgets(scope: String): List<PendingForget>
+    @Query("UPDATE PendingForget SET status = :status, error = :error WHERE scope = :scope AND documentId = :documentId")
+    suspend fun setForgetStatus(scope: String, documentId: String, status: String, error: String?): Int
+    @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId = :documentId") suspend fun deleteForget(scope: String, documentId: String)
+    // Compare-and-set: the status is checked in the statement itself, so a row that changed since it was read is left alone.
+    @Query("DELETE FROM PendingForget WHERE scope = :scope AND documentId = :documentId AND status = 'failed'")
+    suspend fun deleteForgetIfFailed(scope: String, documentId: String): Int
+    @Query("UPDATE PendingForget SET status = 'failed', error = :error WHERE scope = :scope AND documentId = :documentId AND status = 'pending'")
+    suspend fun failForgetIfPending(scope: String, documentId: String, error: String): Int
+    @Query("SELECT * FROM PendingIngest WHERE scope = :scope AND kind = 'note' AND lower(documentId) = lower(:documentId)")
+    suspend fun linkedNoteRows(scope: String, documentId: String): List<PendingIngest>
 }
-@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 3, exportSchema = true)
+@Database(entities = [CachedInsight::class, PendingIngest::class, NoteDraft::class, PendingForget::class], version = 4, exportSchema = true)
 abstract class LearningDatabase : RoomDatabase() { abstract fun dao(): LearningDao }
 
 // Overwrite deleted pages and flush the WAL so cleared note text does not linger on disk.
@@ -148,40 +179,24 @@ suspend fun LearningDatabase.checkpointBestEffort() {
 
 val apiGson: Gson = GsonBuilder().setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()
 
-class LearningRepository(val config: Connection, private val database: LearningDatabase, private val forgotten: ForgottenNotes = ForgottenNotes()) {
+class LearningRepository(val config: Connection, internal val database: LearningDatabase) {
     private val gson: Gson = apiGson
-    private val dao = database.dao()
+    internal val dao = database.dao()
     val api: LearningApi = Retrofit.Builder().baseUrl(config.server)
         .client(OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
             .connectTimeout(15, TimeUnit.SECONDS).readTimeout(90, TimeUnit.SECONDS)
             .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("Authorization", "Bearer ${config.token}").build()) }.build())
         .addConverterFactory(GsonConverterFactory.create(gson)).build().create(LearningApi::class.java)
-    val cached: Flow<List<CachedInsight>> = dao.observe(config.scope)
+    // Hidden at read time from the persisted queue, so a process death cannot bring a forgotten note back.
+    val cached: Flow<List<CachedInsight>> = dao.observe(config.scope).combine(dao.observeForgets(config.scope)) { rows, forgets ->
+        rows.hideForgotten(hiddenIds(forgets, config.scope)) { decode(it).documentId }
+    }
     val jobs = dao.jobs(config.scope)
     fun decode(row: CachedInsight): Insight = gson.fromJson(row.payload, Insight::class.java).copy(saved = row.saved)
-    suspend fun remember(insight: Insight, inFeed: Boolean? = null) {
-        if (forgotten.blocks(config.scope, insight)) return
-        val previous = dao.get(config.scope, insight.id)
-        dao.put(listOf(CachedInsight(config.scope, insight.id, gson.toJson(insight), insight.saved, inFeed ?: previous?.inFeed ?: false)))
-    }
-    suspend fun refreshFeed() {
-        val items = api.feed()
-        val dropped = database.withTransaction {
-            dao.clearFeed(config.scope)
-            for (item in items) remember(item, true)
-            dao.pruneCards(config.scope)
-        }
-        if (dropped > 0) database.checkpointBestEffort()
-    }
-    suspend fun refreshLibrary() {
-        val items = api.library()
-        val dropped = database.withTransaction {
-            dao.clearSaved(config.scope)
-            for (item in items) remember(item.copy(saved = true))
-            dao.pruneCards(config.scope)
-        }
-        if (dropped > 0) database.checkpointBestEffort()
-    }
+    suspend fun refreshFeed() { writeCards(api.feed(), CardList.FEED) }
+    suspend fun refreshLibrary() { writeCards(api.library(), CardList.LIBRARY) }
+    /** Every cache write goes through [writeCards], the only writer of CachedInsight. */
+    suspend fun remember(insight: Insight) { writeCards(listOf(insight)) }
     /** One transaction: queue the note and drop the draft, so a crash never loses or duplicates it. */
     suspend fun queueNote(note: ValidNote): PendingIngest {
         val row = PendingIngest(config.scope, java.util.UUID.randomUUID().toString(), "", kind = "note", title = note.title, label = note.label, text = note.text)
@@ -190,33 +205,8 @@ class LearningRepository(val config: Connection, private val database: LearningD
         return row
     }
     /**
-     * Deletes every cached card of this scope that belongs to the document, scanning all rows (not the feed/library
-     * filter), and only the completed, text-free import rows linked to that document ([purgeNoteLinkedRows]).
-     */
-    suspend fun purgeDocument(documentId: String, title: String? = null): List<String> {
-        val ids = database.withTransaction {
-            val found = dao.allInsights(config.scope).filter { decode(it).documentId == documentId }.map { it.id }
-            if (found.isNotEmpty()) dao.deleteInsights(config.scope, found)
-            deleteNoteRows(documentId, title)
-            found
-        }
-        database.checkpointBestEffort()
-        return ids
-    }
-    /** Targeted purge of the completed import rows of one note; see [noteRowsToPurge] for the pre-migration fallback. */
-    suspend fun purgeNoteLinkedRows(documentId: String, title: String? = null): Int {
-        val removed = database.withTransaction { deleteNoteRows(documentId, title) }
-        database.checkpointBestEffort()
-        return removed
-    }
-    private suspend fun deleteNoteRows(documentId: String, title: String?): Int {
-        val rows = noteRowsToPurge(dao.completedNoteRows(config.scope, COMPLETED_STATES), documentId, title)
-        rows.forEach { dao.deleteJob(it.scope, it.id) }
-        return rows.size
-    }
-    /**
      * Drops the cards and the completed, text-free import rows of other scopes. Unsent note text (queued, failed,
-     * waiting or paused rows) and note drafts of other scopes are never deleted: they stay hidden until that account
+     * waiting or paused rows), note drafts and PendingForget rows of other scopes are never deleted: they stay hidden until that account
      * is connected again. Does nothing when [isCurrent] says this connection is no longer the active one (A to B to A).
      * Returns the removed rows so their work can be cancelled.
      */
@@ -231,16 +221,15 @@ class LearningRepository(val config: Connection, private val database: LearningD
         database.checkpointBestEffort()
         return stale
     }
-    suspend fun save(item: Insight) { remember(api.save(item.id)) }
+    suspend fun save(item: Insight) { writeCards(listOf(api.save(item.id))) }
     suspend fun dismiss(item: Insight) { api.dismiss(item.id); dao.dismiss(config.scope, item.id) }
 }
-class AppContainer(context: Context) {
+class AppContainer(private val context: Context) {
     val credentials = Credentials(context)
     val database = Room.databaseBuilder(context, LearningDatabase::class.java, "learning.db")
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3).addCallback(SecureDeleteCallback).build()
-    /** Notes being forgotten: in-flight refreshes must not write their cards back. */
-    val forgotten = ForgottenNotes()
-    fun repository(connection: Connection) = LearningRepository(connection, database, forgotten)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).addCallback(SecureDeleteCallback).build()
+    val forgetQueue = ForgetQueue(database, { scope, id, enqueue -> ForgetWorker.schedule(context, scope, id, enqueue) }, { scope, id -> IngestWorker.cancel(context, scope, id) })
+    fun repository(connection: Connection) = LearningRepository(connection, database)
 }
 class LearningApplication : Application() {
     val container by lazy { AppContainer(this) }

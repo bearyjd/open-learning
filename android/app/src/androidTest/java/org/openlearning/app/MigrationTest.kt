@@ -56,5 +56,21 @@ class MigrationTest {
         db.execSQL("INSERT INTO NoteDraft VALUES('s','t','l','body')")
         db.execSQL("INSERT INTO PendingForget VALUES('s','doc-1',1,'pending',NULL)")
     }
+    @Test fun migrate3To4LowercasesForgetIdsAndMergesCollisions() {
+        helper.createDatabase(DB, 3).apply {
+            execSQL("INSERT INTO PendingForget VALUES('s','ABC-1',5,'failed','Could not delete (the server rejected the request)')")
+            execSQL("INSERT INTO PendingForget VALUES('s','abc-1',1,'pending',NULL)")
+            execSQL("INSERT INTO PendingForget VALUES('s','DEF-2',2,'confirmed',NULL)")
+            execSQL("INSERT INTO PendingForget VALUES('t','ABC-1',3,'pending',NULL)")
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(DB, 4, true, MIGRATION_3_4)
+        db.query("SELECT scope, documentId, createdAt, status, error FROM PendingForget ORDER BY scope, documentId").use {
+            assertEquals(3, it.count)
+            assertTrue(it.moveToNext()); assertEquals("abc-1", it.getString(1)); assertEquals("pending", it.getString(3)); assertTrue(it.isNull(4))
+            assertTrue(it.moveToNext()); assertEquals("def-2", it.getString(1)); assertEquals("confirmed", it.getString(3))
+            assertTrue(it.moveToNext()); assertEquals("t", it.getString(0)); assertEquals("abc-1", it.getString(1))
+        }
+    }
     private companion object { const val DB = "migration-test.db" }
 }

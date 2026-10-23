@@ -127,7 +127,7 @@ class NoteAcceptanceTest {
         assertTrue(compose.onAllNodesWithText("Open source article", substring = true).fetchSemanticsNodes().isEmpty())
         scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Cancel").performClick()
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/note-doc"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.NOTE_DOC}"))
         assertEquals(1, io { container.database.dao().allInsights(scope()).size })
     }
 
@@ -137,21 +137,27 @@ class NoteAcceptanceTest {
         waitText("Forget this note")
         scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Forget", substring = false).performClick()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/note-doc") == 1 }
+        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.NOTE_DOC}") == 1 }
         waitUntil { io { container.database.dao().allInsights(scope()).isEmpty() } }
-        waitText("Note forgotten.")
+        waitText("Note hidden on this device", substring = true)
     }
 
-    @Test fun offlineForgetKeepsEverything() {
+    // Not run on a device. Offline forget hides the note and the card now; the worker deletes it once the server is back.
+    @Test fun offlineForgetHidesNowThenDeletesOnReconnect() {
         completeOneNote()
         scrollTo("Your note: Lecture 3").performClick()
         waitText("Forget this note")
         fixture.down.set(true)
         scrollTo("Forget this note").performClick()
         compose.onNodeWithText("Forget", substring = false).performClick()
-        waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/note-doc"))
-        assertEquals(1, io { container.database.dao().allInsights(scope()).size })
+        waitText("Note hidden on this device", substring = true)
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.NOTE_DOC}"))
+        assertEquals(0, io { container.database.dao().allInsights(scope()).size })
+        assertEquals(listOf(TestIds.NOTE_DOC), io { container.database.dao().forgets(scope()).map { it.documentId } })
+        fixture.down.set(false)
+        // The first attempt failed with no answer: WorkManager backs off 30 s, so allow two periods.
+        waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.NOTE_DOC}") == 1 }
+        waitUntil { io { container.database.dao().forgets(scope()).isEmpty() } }
     }
 
     @Test fun removingAQueuedNoteBeforeSubmitSendsNothing() {
@@ -207,7 +213,7 @@ class NoteAcceptanceTest {
         return io { container.database.dao().jobs(scope()).first().first(predicate) }
     }
     private fun workInfo(row: PendingIngest): List<WorkInfo> = work.getWorkInfosForUniqueWork("ingest-${row.scope}-${row.id}").get(10, TimeUnit.SECONDS)
-    private fun waitText(text: String) = waitUntil { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitText(text: String, substring: Boolean = false) = waitUntil { compose.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty() }
     private fun waitUntil(timeout: Long = 15_000, condition: () -> Boolean) {
         try { compose.waitUntil(timeout, condition) } catch (error: Throwable) {
             // Fixture sentinels only: request counts and the semantics tree explain a timeout without real note text.
@@ -226,7 +232,7 @@ private class NoteFixture {
     val textStatus = AtomicInteger(200)
     private val gson = GsonBuilder().setFieldNamingPolicy(FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES).create()
     private val note = Insight("note-1", "Spacing", "Recall improves with spacing.", "Revisit an idea after a delay.", "", "Lecture 3",
-        "https://evil.example/not-a-link", "note-doc", "Spaced practice revisits an idea.", listOf("memory"), false, "full_source", false, "", "note", "Lecture 3")
+        "https://evil.example/not-a-link", TestIds.NOTE_DOC, "Spaced practice revisits an idea.", listOf("memory"), false, "full_source", false, "", "note", "Lecture 3")
     private val feedReady = AtomicBoolean(false)
 
     fun start() {
@@ -245,7 +251,7 @@ private class NoteFixture {
                     "GET" to "/api/v1/feed/today" -> if (feedReady.get()) listOf(note) else emptyList<Insight>()
                     "GET" to "/api/v1/library" -> emptyList<Insight>()
                     "GET" to "/api/v1/insights/note-1" -> note
-                    "DELETE" to "/api/v1/notes/note-doc", "DELETE" to "/api/v1/jobs/note-job-1" -> return MockResponse().setResponseCode(204)
+                    "DELETE" to "/api/v1/notes/${TestIds.NOTE_DOC}", "DELETE" to "/api/v1/jobs/note-job-1" -> return MockResponse().setResponseCode(204)
                     else -> return MockResponse().setResponseCode(404)
                 }
                 return MockResponse().addHeader("Content-Type", "application/json").setBody(gson.toJson(result))

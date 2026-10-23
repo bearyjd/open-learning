@@ -26,23 +26,20 @@ class NotesListStateTest {
     }
     @Test fun forgetSuccessRemovesOnlyThatNote() {
         val state = NotesListState().refreshed(listOf(a, b)).forgetStarted("a").forgetSucceeded("a")
-        assertEquals(listOf(b), state.items); assertTrue(state.forgetting.isEmpty()); assertEquals("Note forgotten.", state.message)
+        assertEquals(listOf(b), state.items); assertTrue(state.forgetting.isEmpty()); assertEquals(FORGET_QUEUED_MESSAGE, state.message)
     }
     @Test fun forgetFailureKeepsTheRowAndReportsIt() {
         val state = NotesListState().refreshed(listOf(a, b)).forgetStarted("a").forgetFailed("a", "no network")
         assertEquals(listOf(a, b), state.items); assertTrue(state.forgetting.isEmpty()); assertEquals("no network", state.message)
         assertNull(state.messageShown().message)
     }
-    @Test fun loadStartedBeforeDeleteCannotBringTheNoteBack() {
+    @Test fun aNoteBeingForgottenStaysOutOfALateAnswer() {
         val started = NotesListState().refreshed(listOf(a, b)).refreshStarted()
-        val generation = started.generation
-        val deleted = started.forgetStarted("a").forgetSucceeded("a")
-        val late = deleted.refreshed(listOf(a, b), generation)
-        assertEquals(listOf(b), late.items)
-        // Still hidden on a second stale answer, and only released once the server stops listing it.
-        assertEquals(listOf(b), late.refreshed(listOf(a, b)).items)
-        val next = late.refreshStarted().let { it.refreshed(listOf(b), it.generation) }
-        assertTrue(next.gone.isEmpty()); assertEquals(listOf(b), next.items)
+        val forgetting = started.forgetStarted("a")
+        assertEquals(listOf(b), forgetting.refreshed(listOf(a, b), started.generation).items)
+        // Once the forget is recorded the derived view hides it (HiddenViewTest), so the reducer holds no tombstone of its own.
+        val done = forgetting.forgetSucceeded("a")
+        assertEquals(listOf(b), done.items)
     }
     @Test fun olderResponseNeverOverwritesNewer() {
         val first = NotesListState().refreshStarted()
@@ -59,7 +56,7 @@ class NotesListStateTest {
     }
     @Test fun partialForgetStillRemovesTheRowWithItsOwnMessage() {
         val state = NotesListState().refreshed(listOf(a, b)).forgetStarted("a").forgetSucceeded("a", "partial")
-        assertEquals(listOf(b), state.items); assertEquals("partial", state.message); assertTrue("a" in state.gone)
+        assertEquals(listOf(b), state.items); assertEquals("partial", state.message);
     }
     @Test fun toStringNeverShowsTitlesOrLabels() {
         val secret = NoteSummary("d1", "SECRET-TITLE", "SECRET-LABEL", "2026-01-01", 1)
@@ -80,7 +77,7 @@ class NotesListStateTest {
     }
     @Test fun closeKeepsNothingButTheGeneration() {
         val closed = NotesListState().refreshed(listOf(a)).refreshStarted().closed()
-        assertTrue(closed.items.isEmpty()); assertFalse(closed.loaded); assertFalse(closed.loading); assertTrue(closed.gone.isEmpty())
+        assertTrue(closed.items.isEmpty()); assertFalse(closed.loaded); assertFalse(closed.loading);
         assertTrue(closed.generation > 0)
     }
 }

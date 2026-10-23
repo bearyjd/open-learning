@@ -2,22 +2,23 @@ package org.openlearning.app
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
 
 /**
  * The notes list and server limits, split out of the view model. The list is held in [state] (memory only) and
  * every transition goes through the pure reducers in NotesListState.kt.
- * [onForgotten] drops the tutor memory and open detail of a document that was just forgotten.
+ * [onForgotten] drops the tutor memory and open detail of a document that was just forgotten. Hidden documents are
+ * scrubbed from the published state by the view model's derived view, so nothing here checks the queue before publishing.
  */
 internal class NotesActions(
     private val scope: CoroutineScope,
-    private val forgotten: ForgottenNotes,
+    private val queue: ForgetQueue,
     private val repo: () -> LearningRepository?,
-    private val state: MutableStateFlow<ScreenState>,
+    private val state: ScreenPublisher,
     private val onForgotten: () -> Unit,
+    private val resume: suspend (scope: String) -> Unit,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     /** Best-effort: a failed or malformed answer yields the defaults, never an error. */
     suspend fun fetchLimits(repository: LearningRepository): EffectiveLimits {
@@ -27,69 +28,53 @@ internal class NotesActions(
 
     fun load() {
         val repository = repo() ?: return
-        state.update { it.copy(notes = it.notes.refreshStarted()) }
+        state.publishLocal { it.copy(notes = it.notes.refreshStarted()) }
         val generation = state.value.notes.generation
         scope.launch {
-            retryPurges(repository)
             try {
-                val fetched = repository.api.notes().toSummaries()
-                if (repo() === repository) state.update { it.copy(notes = it.notes.refreshed(fetched, generation)) }
+                // The clock is read before the request: a row confirmed while it is in flight is never judged by its answer.
+                val startedAt = clock()
+                val raw = repository.api.notes()
+                val page = serverPage(raw)
+                // Hidden notes are scrubbed by the derived view; the answer only settles confirmed rows and resumes pending ones.
+                launch { resume(repository.config.scope) }
+                try { queue.reconcile(repository.config.scope, page.ids, page.complete, startedAt) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { android.util.Log.w("OpenLearning", "Could not settle confirmed forgets") }
+                if (repo() === repository) state.publishFresh(repository.config.scope) { it.copy(notes = it.notes.refreshed(raw.toSummaries(), generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { if (repo() === repository) state.update { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
+            catch (error: Exception) { if (repo() === repository) state.publishLocal { it.copy(notes = it.notes.refreshFailed(error.userMessage(), generation)) } }
         }
     }
 
     /**
-     * Online-only: nothing is cleared locally unless the server confirms the note is gone (204 or 404, so a retry after a
-     * lost answer succeeds). The tombstone is set first so an in-flight refresh cannot write cards back; it is dropped only
-     * when the server did not delete. A cleanup error after the server delete keeps it (the note stays hidden).
+     * Offline-first: the note is hidden on this device at once (queued in Room, so it survives process death) and the
+     * server DELETE is replayed by [ForgetWorker] when a connection allows. Fails only if the local write fails.
      */
-    private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult {
-        val scopeKey = repository.config.scope
-        forgotten.add(scopeKey, documentId)
-        try {
-            val response = repository.api.forgetNote(documentId)
-            if (!response.isGone()) throw HttpException(response)
-        } catch (cancelled: CancellationException) { forgotten.remove(scopeKey, documentId); throw cancelled }
-        catch (error: Exception) { forgotten.remove(scopeKey, documentId); return ForgetResult.Failed(error) }
-        return try { ForgetResult.Done(repository.purgeDocument(documentId, title)) }
+    private suspend fun deleteAndPurge(repository: LearningRepository, documentId: String, title: String?): ForgetResult =
+        try { ForgetResult.Done(queue.forgetNoteOffline(repository.config.scope, documentId, title)) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) {
-            android.util.Log.w("OpenLearning", "Could not clean up a forgotten note on this device")
-            forgotten.purgeFailed(scopeKey, documentId, title)
-            ForgetResult.PurgeFailed
-        }
-    }
+        catch (error: Exception) { ForgetResult.Failed(error) }
 
-    /**
-     * Re-runs the local cleanup of notes the server deleted but this device could not clean (see [ForgottenNotes.purgeFailed]).
-     * Called on connect and whenever the list is opened. Memory only: a process death before a retry forgets the need.
-     */
-    suspend fun retryPurges(repository: LearningRepository) {
+    /** The outcome plus the queue state (waiting and failed counts, ids only) read from Room. */
+    private suspend fun banner(repository: LearningRepository, result: ForgetResult): String {
         val scopeKey = repository.config.scope
-        for (pending in forgotten.pendingPurges(scopeKey)) {
-            try {
-                val purged = repository.purgeDocument(pending.documentId, pending.title)
-                forgotten.purgeDone(scopeKey, pending.documentId)
-                if (repo() === repository) state.update { it.withoutDocument(pending.documentId, purged) }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { android.util.Log.w("OpenLearning", "Retrying the cleanup of a forgotten note failed") }
-        }
+        return forgetBanner(result, queue.pendingForgetCount(scopeKey).first(), queue.failedForgets(scopeKey).first().size)
     }
 
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
         if (note.documentId in state.value.notes.forgetting) return
-        state.update { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
+        state.publishLocal { it.copy(notes = it.notes.forgetStarted(note.documentId)) }
         scope.launch {
             val result = deleteAndPurge(repository, note.documentId, note.title)
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.update { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message().orEmpty())) }
-                else -> {
+                is ForgetResult.Failed -> state.publishLocal { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
+                is ForgetResult.Done -> {
                     onForgotten()
-                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
-                    state.update { it.withoutDocument(note.documentId, purged).copy(notes = it.notes.forgetSucceeded(note.documentId, result.message() ?: "Note forgotten.")) }
+                    val banner = banner(repository, result)
+                    state.publishLocal { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
         }
@@ -103,18 +88,34 @@ internal class NotesActions(
             val result = deleteAndPurge(repository, item.documentId, purgeTitle(item))
             if (repo() !== repository) return@launch
             when (result) {
-                is ForgetResult.Failed -> state.update { it.copy(error = result.message()) }
-                else -> {
+                is ForgetResult.Failed -> state.publishLocal { it.copy(error = result.message()) }
+                is ForgetResult.Done -> {
                     onForgotten()
-                    val purged = (result as? ForgetResult.Done)?.purged.orEmpty()
-                    state.update { it.withoutDocument(item.documentId, purged + item.id).copy(notice = Notice(result.message() ?: "Note forgotten.")) }
+                    val banner = banner(repository, result)
+                    state.publishLocal { it.copy(notice = Notice(banner)) }
                 }
             }
         }
     }
 
-    /** The list is memory-only and only kept while its screen is open. */
-    fun close() = state.update { it.copy(notes = it.notes.closed()) }
+    /** Failed rows only: the row goes back to pending and its worker is scheduled again. */
+    fun retryForget(documentId: String) {
+        val repository = repo() ?: return
+        scope.launch { queue.retryForget(repository.config.scope, documentId) }
+    }
 
-    fun messageShown() = state.update { it.copy(notes = it.notes.messageShown()) }
+    /** Failed rows only: the row is deleted, the note is shown again on the next refresh, and the server keeps it. */
+    fun stopTrying(documentId: String) {
+        val repository = repo() ?: return
+        scope.launch {
+            if (queue.stopTrying(repository.config.scope, documentId) && repo() === repository) {
+                load()
+            }
+        }
+    }
+
+    /** The list is memory-only and only kept while its screen is open. */
+    fun close() = state.publishLocal { it.copy(notes = it.notes.closed()) }
+
+    fun messageShown() = state.publishLocal { it.copy(notes = it.notes.messageShown()) }
 }

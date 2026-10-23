@@ -155,12 +155,123 @@ the defaults cannot reject a share the real limit allows. A "too long" rejection
 activity is recreated before it is shown. `FLAG_SECURE` on the editor and the notes list is reference-counted per
 window (`SecureWindow`): the first screen sets it and it is cleared only when the last one leaves.
 
-Forgetting a note on Android: when the server delete succeeded but the local cleanup threw, the note stays hidden and
-the cleanup is retried on the next connect and whenever the notes list is opened. The need is held in memory only
-(persisting it would need a new table). If the process dies before a retry, nothing re-runs the cleanup: the cached
-cards and completed import rows of that note stay on the device until it is cleaned some other way. Unlinked
+POLICY REVERSAL (E2b-3). Through E2b-2 the Android app cleared nothing locally unless the server confirmed the
+delete. That rule is gone. Forgetting a note on Android now means: HIDDEN ON THIS DEVICE IMMEDIATELY, DELETED ON THE SERVER
+LATER, when a connection is available. Until the server confirms, the server copy still exists. A device that never
+reconnects (lost, wiped before it reconnects, or offline for good) leaves the server copy in place. There is no undo
+and no cancel: once confirmed in the dialog, the note is hidden and the delete is queued.
+
+How it works: forgetting writes a `PendingForget` row in one Room transaction together with the local purge (cached
+cards of that document, the linked import rows, and any queued, running or failed import job linked to it, which is
+cancelled and its text deleted), then schedules a unique worker `forget-<scope>-<documentId>` (network required, 30 s
+exponential backoff). The row holds only the scope, the document id, a time (of the last move to pending or confirmed), a status
+(`pending`, `failed` or `confirmed`) and a fixed error string; never a title, text or server response body. Feed, library, search, reviews and the notes
+list are filtered against these rows at read time from Room, so a process death cannot bring a hidden note back.
+Replay: 2xx, 404 or 410 turn the row into a durable `confirmed` tombstone and repeat the local purge (see "Durable tombstone" below); 401 or 403 marks the row `failed` and it stays hidden
+(the notes list shows "Could not delete (the server rejected the request)" with a Retry button, which sets it back to
+pending); 429, 5xx and no network retry. The worker only runs for the connected account: while another account is
+active the row stays pending and is scheduled again when its account connects. The `purgeInactiveScopes` path and every
+other purge never delete `PendingForget` rows, like unsent note text; `forgetsOutside` (used for the notice) skips confirmed rows. A local cleanup that throws after the server
+confirmed is repeated by retrying the whole job (a repeated DELETE answers 404), at most `FORGET_MAX_ATTEMPTS` times, after which the row is marked failed.
+A 404 on the DELETE counts as "already gone" only after the notes list answered, was read completely and does not list the note;
+otherwise the job retries like any other transient failure.
+
+Limitation, token rotation: the queue and the hiding are keyed by the account scope, a hash of server and token. A note forgotten
+under one token or server is hidden only while that scope is connected. After connecting with another token or server the note is
+visible again on this device and has not yet been deleted on the server; its row waits until the original scope connects again, and
+the app shows a notice that says so. There is no migration of queued forgets between scopes, so rotating the token before the
+server DELETE ran can leave the server copy in place.
+The old in-memory retry of failed local cleanups is removed: the queue supersedes it. Unlinked
 (pre-migration) import rows are matched by the note's own title (the document title, not the idea headline); with no
 match and several unlinked rows none are deleted, so a title residue can remain rather than other notes' rows going.
+
+Durable tombstone and single writer (structural fix). There is no in-memory marker any more. A confirmed row stays in
+`PendingForget` with status `confirmed`, and the same table hides the note from every read, pending, failed or confirmed.
+`LearningRepository.writeCards` is the only code that writes `CachedInsight` (a JVM text scan fails if a DAO method that writes
+`CachedInsight` is called through `dao`, `dao()` or `dao::` anywhere else in the app sources; it is a source scan, not a runtime
+guarantee, and aliasing or reflection would evade it). It reads only the (id, inFeed) projection of the existing rows, not
+every payload. In ONE Room transaction it reads the durable set, clears the list being replaced, puts the allowed
+rows and prunes, so a feed, library, save or detail response that was in flight when a note was forgotten (or after the server
+confirmed, or after a process restart) cannot write its cards back, however late it lands. Nothing waits on the network inside
+that transaction. The screen state is a derived view: the published state combined with the live hidden set, with hidden
+documents removed from the feed, library, results, open detail, chat and its citations, review list, revealed source and notes
+list and Recent imports (completed import rows by document id) on every emission. A stale publication is scrubbed whenever it lands; the explicit checks that remain are the restore
+decision for a saved tutor selection and the card writer. The hidden set also PURGES the retained state: whenever it changes,
+the same removal is applied to the stored state, so when a confirmed row is later pruned nothing forgotten is still held in memory
+to reappear. The view and the purge use only the hidden set of the account that owns the state; during an account switch the
+view is blank until that account's set arrives. The ingest worker deletes, instead of saving, a completed import row whose
+document is hidden, so a delayed import cannot show a forgotten title.
+Single publication path: EVERY write to the retained screen state goes through `ScreenPublisher`, which purges the result with a
+hidden set inside the same atomic update before it is stored. Only Room-flow collectors (`publishFlow`) may use the collector's
+snapshot, and only when it belongs to the state's account (a snapshot of another account is unknown, so Room is read). Every user,
+network or restore-origin publication (`publishFresh`: select, restore, search, reviews, reveal, notes refresh, chat reply) reads
+the hidden ids from the DAO right then, and chat reads the selected note through that check before sending. `publishLocal` is for
+changes that add no document content. A publication is applied once; it is dropped when the state's account is no longer the one
+the response belongs to (a connection switch during the read); a hidden set arriving mid-publication is applied by purging, never
+by re-running the transform. When any note is newly hidden the whole tutor chat is cleared and the tutor memory dropped, and a late
+reply citing a hidden document is dropped with its question (this replaces the earlier accepted tutor-prose residual). Source scans
+(TEXT scans, not runtime proofs; aliasing and reflection are not caught) cover direct writes to any `MutableStateFlow<ScreenState>`,
+use of the removed `publish`, and content fields in `publishLocal`. This is best-effort against the interleavings known so far,
+found by seven adversarial review passes, not a guarantee. It is still NOT device-verified.
+Two-sided hidden protocol (sixth pass): a publication that read the hidden set before a forget committed could store the forgotten
+note before any Room-flow collector caught up. Forget side: `ForgetQueue.forgetNoteOffline` (and `confirmed`) calls `onHidden` right
+after its transaction commits and before returning, which is `ScreenPublisher.purgeNow(scope, ids)`: an atomic, idempotent purge of
+the retained state that also records the ids in a purge floor (ids age out as described in the release rules below). Read side: every `publishFresh`/`publishFreshWith` store also purges with the floor, and AFTER the store
+re-reads the DAO hidden ids and applies the idempotent purge only (never the transform again). Ordering argument, C = forget commit,
+P = its purge (after C), S = the atomic store, R = the publication's re-read (after S): S before P is removed by P; S after P is
+removed by the floor purge inside S; C before R makes R purge. So for every order of {first read, C, S} the id is gone once P and R
+ran. The derived view scrubs with the Room set united with the floor. The tutor chat generation is bumped only by
+`ChatSession.reset()`, which also clears the chat and the busy flag, so a double bump (collector, then forget completion) cannot
+leave the chat busy. Still best-effort and not device-verified; the `ScreenPublisher`, `ViewModel` and Room-flow wiring is untested at runtime.
+Floor release rules (seventh pass, one P2: forget commit, resumed worker marks the row failed, Room delivers the id before `onHidden`,
+`purgeNow` adds it at age 0, then "Stop trying" deletes the row and one arrival lacking the id only aged it to 1, so the floor hid a
+note the person wanted back, indefinitely). An id now leaves the floor on the first of: a Room arrival holding it; an explicit release
+(`ForgetQueue.onReleased`, wired to `ScreenPublisher.release`, called after EVERY delete of PendingForget rows: `stopTrying` and the
+TTL prune in `reconcile`; a text scan test checks this); two arrivals lacking it; or a 10-minute time bound (`PURGE_FLOOR_TTL_MS`,
+injected clock) so a missed release cannot hide a note forever. Releasing is safe because a pending, failed or confirmed row is also in
+the Room set, which hides the note independently of the floor. Best-effort and NOT device-verified.
+Ingest update is transactional: the worker reads the hidden ids and writes (or deletes) the job row in ONE Room transaction
+(`updateJobUnlessHidden`), so a forget that commits between a response naming the document and the update is still seen. A
+processing row that has no document id yet cannot be matched by `forgetNoteOffline` (titles are never stored or matched); the
+residual is that such a row stays until its worker answers, at which point the transactional update deletes it. A worker that
+never answers leaves the unlinked row, which holds only what the person typed or imported.
+Confirmation is one transaction too: the row is upserted as `confirmed` (even if it went missing or failed) and the cards and
+linked completed import rows are purged. Stop trying deletes the row (the person's override).
+Pruning, TTL 7 days: each `GET /notes` answer settles confirmed rows (`reconcile`). A confirmed row older than 7 days, measured
+from the START of the list request (so a row confirmed while it was in flight is never judged by it), is deleted only when the
+page was complete (fewer than 100 notes) and does not list it. If the server still lists it after 7 days it goes back to
+pending and its worker is enqueued again (the DELETE is idempotent). Anything else is kept, including every row after an
+incomplete page. Hidden rows therefore persist until a list answer reconciles them. With more than 100 notes (`NOTES_PAGE_LIMIT`) the page is
+never complete, so pruning never runs: confirmed rows then persist, which is safe (they only hide) but unbounded. A periodic unique work `forget-sweep`
+(every 6 hours, network required, KEEP) resumes pending rows and reconciles when a confirmed row is past its TTL.
+Document ids are validated before anything is committed (at most 64 characters of hex and dashes, what the server issues);
+anything else is refused with a local message and never queued, because an oversized id would make WorkManager throw on every
+launch. Scheduling is per row and exception safe, and it waits for WorkManager to accept the work: a request that cannot be
+built (a bad id) is permanent and the row is marked failed ("this device could not schedule it"), an enqueue operation that
+fails is transient and the row stays pending for the next resume (only a bad id ever marks a row failed). Work is enqueued
+with REPLACE for a new forget and for Retry and KEEP for the idempotent resume, which runs on every connect, every sweep and
+whenever Your notes opens. REPLACE is safe because the worker re-reads its row at start and exits cleanly when it is not
+pending, and the DELETE is idempotent. The worker never reports a failed result for a row outcome (a rejected row is marked
+failed and the work succeeds), so no failed work poisons a chain. The confirmation cleanup removes only rows linked to the
+document, never the title or legacy fallback. After the commit nothing can undo the forget: a failure to cancel an import or
+to schedule is recovered by the resume, not reported as "nothing was hidden"; the resume cannot crash the app.
+Reviews: a review carries its own `document_id` (additive on the server; an older server sends nothing, which reads as blank).
+A review with a blank id FAILS CLOSED always, whether or not a forget exists yet (so a later forget can still scrub it): its document is looked up (cache, then the
+server, at most 20 lookups, none after the first network failure) and a review that cannot be resolved is dropped (a blank id from the payload, the cache or the network counts as unresolved: a blank cached value falls through to the network and no blank mapping is ever stored); a 404 on one
+lookup drops only that review. The derived view removes reviews by their own id, the recorded id and the revealed source.
+Failing statuses: 2xx, 404 and 410 are done; 408, 425, 429, 5xx and no answer retry, giving up after 20 attempts (the row is
+failed with "gave up", still hidden); 401 and 403 fail as "rejected by the server"; every other status (3xx, other 4xx) fails
+as "server refused". Failed rows offer Retry and "Stop trying", which deletes the queue row and shows the note again on the
+next refresh; the note stays on the server. Error text is one of four fixed strings, never a title or server text.
+Notice: when pending or failed rows belong to a scope other than the connected one (another server, or another token), a notice
+says "Notes you forgot while connected to another server or token are visible again on this device and are not yet deleted on the server." once per app start. It
+names no server; the stored previous-server key of earlier builds is deleted. Reconnecting with that account finishes them;
+there is no other way to delete them from this device.
+Residuals: an import of the same text that is still in flight on the server can republish the note after a forget (the confirm
+dialog says "A note that is still being imported may reappear."). Reviews from older servers depend on
+the lookup, so offline they are hidden. Untested wiring (no device or Robolectric run): the ViewModel collectors, the worker's
+use of the hidden set and the Room helpers are compile-checked only; the pure functions behind them are unit-tested. Hidden rows persist until a list reconcile. A forgotten note cannot be un-hidden except
+through Stop trying on a failed row.
 
 The lock-order guarantees between forget and the worker's dedupe path are PostgreSQL-only.
 On SQLite with the API and the worker as separate processes, a forget can commit between
@@ -240,8 +351,8 @@ manifest and a JVM test parses the rules, but no real backup or device transfer 
 
 Local retention: a failed or waiting note keeps its text so you can retry; Remove on the job row
 deletes it (and the server job, unless another local row shares it). Completed notes have no Remove:
-forgetting the note is the way. Forgetting needs a connection to your server; nothing is cleared
-locally unless the server confirms. It then deletes every cached card of that document (scanning
+forgetting the note is the way. Forgetting hides the note on this device at once and queues the server delete
+(see the policy reversal above); it does not need a connection to start. It deletes every cached card of that document (scanning
 all rows, not only the feed or library) and the completed note entries in Recent imports that are linked
 to that document (the app stores the `document_id` the server links to the job when it completes).
 Entries made before the link existed (Room schema v3) cannot be matched: only when no entry is linked to
@@ -302,8 +413,10 @@ The rows live in view-model memory only and are re-fetched on every open and on 
 are never written to Room, and the list is empty after process death. `FLAG_SECURE` is set on the window
 while the list is shown (recents thumbnail and screenshots are blank) and the previous flag state is restored
 when it closes; the list has no text inputs, so no autofill handling applies. Forget from the list asks
-for confirmation, needs a connection, treats 204 and 404 as success and otherwise clears nothing (see above for
-which import rows go). Share-as-note: shared text that is not a link (an http(s) URL with at most 300
+for confirmation (the dialog says the note is hidden here now, deleted from the server when a connection is
+available, and that there is no undo), then hides the note and queues the delete (see the policy reversal above for what
+the queue stores and replays; see above for which import rows go). The list shows one line, "N forgotten notes waiting for
+the server" (hidden at 0), and one row per rejected delete with Retry; none of these rows carry a title. Share-as-note: shared text that is not a link (an http(s) URL with at most 300
 other characters) opens the note editor pre-filled, never submits, shows an over-limit share as over-limit
 instead of truncating it, and asks before replacing text already typed; links still fill the import field.
 The title is the first non-blank line cut to 80 code points. Retry-After: the server answers 429 with

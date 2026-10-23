@@ -21,6 +21,8 @@ fun NoteSummary.rowMeta(): String {
  * dialog says so instead of claiming every completed import is cleared.
  */
 const val FORGET_NOTE_MESSAGE =
-    "This deletes the note and the ideas made from it from your server and this device. It also removes this note's " +
-        "entry from Recent imports. Entries from before this update can't be matched to a note: if none is linked to " +
-        "this one, completed note entries without a link are removed too. It needs a connection and can't be undone."
+    "This hides the note and the ideas made from it on this device now, and deletes them from your server when a " +
+        "connection is available. Your server keeps its copy until then. There is no undo. A deletion the server " +
+        "rejects can be retried from Your notes. It also removes this note's entry from Recent imports. Entries from " +
+        "before this update can't be matched to a note: if none is linked to this one, completed note entries " +
+        "without a link are removed too. A note that is still being imported may reappear."

@@ -615,3 +615,155 @@ Test-side fixes after static diagnosis (compile-only, NOT re-run on a device; no
 
 Still unverified: all fixes above on a device, confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF
 picker via DocumentsUI, offline forget (E2b-3).
+
+## E2b-3 Android offline forget (NOT device-verified)
+
+Nothing in this slice has run on a device. The forget queue (`PendingForget`, `ForgetQueue`, `ForgetWorker`) is new, and the
+policy it implements reverses the earlier "nothing is cleared locally unless the server confirms" rule (see security.md).
+
+JVM tests (run in CI): replay decision table (200/204/404 done, 401/403 failed with fixed errors, 429/5xx/no answer retry,
+other 4xx failed), read-time filter predicate, scope isolation of hidden ids, which queued note jobs are cancelled, worker
+scope rule, work name and backoff constants, list copy (waiting line, failed line, queue summary, banner), forget-outcome copy,
+confirm-dialog copy. Python: `scripts/tests` cover the offline-forget helpers and the mock's offline mode.
+
+Compile-checked only (androidTest, not run): `ForgetQueueRoomTest` (PendingForget DAO insert idempotence, hidden ids, delete,
+scope isolation, purgeInactiveScopes keeps PendingForget, read-time hiding in feed, library, search, reviews and the notes list,
+forgetting cancels a queued ingest of the same note, retry and resume scheduling) and `ForgetQueueAcceptanceTest` (offline
+forget, restart, reconnect, exactly one DELETE; 404 counts as success; 401 gives a failed row with Retry and the note stays
+hidden; 5xx keeps the row pending and retries; another account's pending row survives a reconnect). The two earlier offline-forget
+tests were rewritten for the new behaviour. Their fixtures use the `peek()` / `DISCONNECT_AFTER_REQUEST` pattern.
+
+Behaviours with NO JVM test, because they are bound to Room, WorkManager or Compose and the JVM has none of them:
+the single Room transaction in `forgetNoteOffline` and `confirmed`; the DAO queries (insert-ignore, counts, status updates);
+the combined feed/library filter in `LearningRepository.cached`; `visibleReviews` fallback to the server; worker credential
+lookup and `Result.retry()` for a local cleanup failure; unique-work KEEP (sweep) and APPEND_OR_REPLACE (resume) and the network constraint; `resumePending` on connect;
+the Compose rows (waiting line, failed row, Retry); and the process-death survival claim. The instrumented tests above check
+these only once someone runs them.
+
+Device-acceptance script: `scripts/android_notes.py` has an offline-forget scenario (mock offline, forget the remaining listed
+note, expect the "forgotten note waiting for the server" line and no DELETE, then mock online and expect exactly one DELETE
+within 150 s and the line gone). Written, not run.
+
+E2b-3 review fixes (still NOT device-verified). New JVM tests (`ForgetHardeningTest`): marker kept after confirm and cleared by a
+fresh list, enqueue policy, id validation, per-row scheduling failure, linked-only confirmation purge, review resolution (cap,
+short circuit, hidden), restore of a hidden note, marker ordering, post-commit best effort, token-rotation copy, Stop trying
+state and copy, replay table (410, 408, 425, attempt cap), malformed payload, dialog residual copy. Untested: APPEND_OR_REPLACE
+chaining in real WorkManager, a late network response in flight, the Room transaction and `Credentials.takePreviousServer`,
+the Stop trying dialog, and the notice banner. Compile-only instrumented additions are in `ForgetQueueRoomTest`.
+
+E2b-3 structural fix (durable tombstone, single card writer, derived view): STILL NOT device-verified. JVM tests added or changed:
+`CardWriterTest` (`cardRows`: hidden, blank id, inFeed and saved flags), `ForgetPruneTest` (`confirmedDecisions` TTL edge, incomplete
+page, still listed, request start versus delivery, other scopes; `serverPage`; sweep trigger), `HiddenViewTest` (`withoutHidden` for
+every field, citations, identity), `ForgetStructuralTest` (enqueue policy table with REPLACE and APPEND_OR_REPLACE, enqueue error
+classification, `resolveReviews` with `documentId` and 404, review JSON from an old server, notice computation, and three
+source scans). The source scans are text checks, not behaviour: only `CardWriter.kt` may call `dao.put(`; no `ForgottenNotes`
+marker remains; `confirmed()` calls `confirmForget` and not `deleteForget`; `NotesActions` calls `queue.reconcile(`.
+Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the seven interleavings (forget then stale write; write then
+forget; confirm then stale write; simulated restart then stale write; reconcile inside the TTL and on an incomplete page;
+confirmed and still listed after the TTL flips to pending; `forgetsOutside` excludes confirmed). `ForgetQueueRoomTest` was updated.
+NOT tested at all: the `writeCards` transaction on a real database as it runs; `ForgetWorker` and `ForgetSweepWorker` in WorkManager
+(REPLACE versus a running worker, the awaited enqueue, the periodic schedule, never returning a failed result); the derived
+`state` flow in the view model (scope switch, combine timing); `NotesActions.load` wiring beyond the source scan; resume
+wrapping in the view model; the once-per-start notice; `Credentials` deleting the old previous-server key; the Compose screens;
+and the server's `document_id` on reviews (a backend change in a separate PR). The earlier `ForgetHardeningTest` marker tests
+were removed with the marker.
+
+E2b-3 fourth-pass fixes (still NOT device-verified). New JVM tests: `ReviewScrubTest` (blank id from cache, network or payload is
+dropped and never mapped; a blank cached value falls through to the network; non-blank resolves), `PublishTest` (`published`: a
+late search, review, notes, jobs, detail or chat publication for a hidden document is not stored; nothing returns after the
+tombstone is pruned; another account's set is not applied), `JobWriteDecisionTest` (`jobWriteDecision`), and
+`SingleWriterScanTest.onlyThePublisherWritesTheScreenState` (a TEXT scan: no direct write to a screen-state flow outside
+`ScreenPublisher.kt`). Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the transactional `updateJobUnlessHidden`
+(forget committing between the response and the update). Untested: `ScreenPublisher` itself (the snapshot re-check loop, the Room
+flow collector, `publishFresh` DAO read), its wiring in the view model and `NotesActions`, the real transaction on a device, and the
+residual of an unlinked processing row whose worker never answers.
+
+E2b-3 fifth-pass fixes (best-effort against known interleavings; found by 5 adversarial passes; still NOT device-verified). New JVM
+tests: `ScreenPublisherTest` (real publisher, fake hidden source: old-scope publication dropped, transform runs once, DAO-fresh read
+beats a lagging snapshot, other-scope snapshot read from Room, chat cleared on a gained id, reply with a hidden citation dropped with
+its question, hidden selection never chats), `SingleWriterScanTest` (TEXT scans: any `MutableStateFlow<ScreenState>` name, no `publish(`,
+no content fields in `publishLocal`, guarded manual retry). Compile-only: `ForgetGuardRoomTest` holds the update transaction open with a
+hook while a forget starts (it cannot prove Room's lock order). Untested: the view model wiring (`showDetail`, `chat`), Room flows.
+
+E2b-3 sixth-pass fixes (best-effort; found by 6 adversarial passes; still NOT device-verified). Two-sided protocol: the forget commit
+is followed at once by `ScreenPublisher.purgeNow` (via `ForgetQueue.onHidden`), and every `publishFresh*` store is followed by a DAO
+re-read and an idempotent purge (never a transform re-run); the ordering argument is in `docs/security.md` and the
+`ScreenPublisher.purgeNow` comment. New JVM tests (written first, run RED against stubs: 13 of 31 failed): `ScreenPublisherTest`
+(read, commit, store; commit between store and re-read; store then commit; commit, read, store; stale snapshot and read; purge
+idempotent and scope-checked; derived view includes the purge ids), `PurgeFloorTest`, `ChatSessionTest` (collector bump, new chat,
+forget-completion bump: not stuck busy; a late final never clears a newer chat's busy flag), and `SingleWriterScanTest` (TEXT scans:
+`ForgetQueue` calls `onHidden` after its transaction; the view model wires it to `purgeNow`; no `chatGeneration` outside `ChatSession`).
+Compile-only (androidTest, not run): `ForgetQueueRoomTest.forgetCommitCallsTheHiddenHookAfterTheCommit`.
+NOT tested: `ScreenPublisher` under real concurrency, the view model and `NotesActions` wiring at runtime, Room flows and their
+delivery order, and the floor's two-arrival aging against real Room emissions.
+
+E2b-3 seventh-pass fix (best-effort; found by 7 adversarial passes, the last found one P2; still NOT device-verified). Purge-floor
+release: `ForgetQueue.onReleased` (-> `ScreenPublisher.release`) runs after every PendingForget delete (`stopTrying`, `reconcile` prune),
+and floor entries also expire after 10 minutes (`PURGE_FLOOR_TTL_MS`, injected clock), besides the Room-arrival rules. New JVM tests
+(written first, RED: test compile failed on the missing API): `PurgeFloorTest` (release at once, the exact Codex sequence leaves the id
+out of the floor, the unreleased sequence stays hidden, fake-clock TTL, still-pending forget stays hidden via the Room set),
+`ScreenPublisherTest` (release shows the note again; clock TTL), `ForgetStructuralTest` (TEXT scan: every deleteForget(s) call in
+`ForgetQueue` is followed by `onReleased`). NOT tested: Room flows and delivery order, the view model wiring at runtime.
+
+### E2b-2 + E2b-3 device run (Pixel 10 Pro Fold, one run each, no retries, 2026-10-22)
+
+Supervised, ff78c64 (PR #22). No Bitwarden, autofill or save-password sheet, system dialog or foreign window appeared at any point
+(the script's overlay guard never fired; `ConnectAutofillTest` passed). The device never left the launcher or the acceptance app.
+
+`scripts/android_notes.py` CRASHED (exit 3) at step `list:forget one`; the offline-forget scenario was NOT reached (INCONCLUSIVE, still
+never run). PASS before the crash: draft survives process death (counter 145), submit posts once with the expected hash and no source
+link, forget Cancel sends 0 DELETEs. Not asserted: forget Confirm from the detail screen read 0 DELETEs and "list_rows_shown" was false,
+because the mock's document ids (`note-doc`, `list-doc-a`, `list-doc-b`) are not hex. E2b-3 rejects an id outside `[0-9a-fA-F-]` before
+queuing anything (`validForgetDocumentId`) and shows "This note has an id the server does not issue, so nothing was queued or hidden"
+(seen in the dumps). Script bug, not an app bug. Fixed in the mock (hex-uuid ids, JVM script tests pass) but NOT re-run on the device.
+The 429 and 413 scenarios did not run. The script's immediate-DELETE assertion after a detail forget may also be stale, because E2b-3
+sends the DELETE from a worker.
+
+Instrumented run (`am instrument --user 0`; ForgetQueueRoomTest, ForgetGuardRoomTest, ForgetQueueAcceptanceTest, NotesListAcceptanceTest,
+NoteAcceptanceTest, DeviceAcceptanceTest, MigrationTest, DatabaseHygieneTest, ConnectAutofillTest; LiveLearningLoopTest skipped): 70 run, 10
+failed, 60 passed. Full pass: ForgetGuardRoomTest 12/12, DeviceAcceptanceTest 6/6, MigrationTest 3/3, DatabaseHygieneTest 9/9,
+ConnectAutofillTest 1/1. ForgetQueueRoomTest 16/17, ForgetQueueAcceptanceTest 1/5, NotesListAcceptanceTest 4/7, NoteAcceptanceTest 8/10.
+Failures, all classified test bug (static diagnosis, no app code changed, not re-run):
+
+- Non-hex fixture ids (`doc-a`, `doc-b`, `doc-other`, `note-doc`) are refused by the forget id check, so nothing is hidden or queued:
+  ForgetQueueAcceptanceTest `offlineForgetSurvivesARestart...` (:51), `a404CountsAsSuccess` (:71), `aServerErrorKeepsTheRowPendingAndIsRetried`
+  (:95), `a401LeavesAFailedRow...` (:79); NotesListAcceptanceTest `forgetConfirmDeletes...` (:74), `serverErrorHidesTheNoteNow...` (:88),
+  `offlineForgetHidesNowAndShowsTheWaitingLine` (:101); NoteAcceptanceTest `forgetConfirmDeletesOnceAndPurgesRoom` (:140).
+- NoteAcceptanceTest `offlineForgetHidesNowThenDeletesOnReconnect` (:147 -> openEditor :194): "No compose hierarchies found", the activity
+  did not launch. Static diagnosis: it fails in `completeOneNote()` -> `launchEditor()`, before the test touches a forget or `note-doc`, so
+  the id is not the cause. The activity launch itself found no window, which points at ordering or device state left by the previous
+  failed test (activity not torn down, screen or focus), not at app code. Not reproducible without a device; no test change made.
+- ForgetQueueRoomTest `resumeMarksAThrowingRowFailedAndStillSchedulesTheRest` (:140): the test throws `IllegalStateException`, but
+  `scheduleFailureIsPermanent` treats only `IllegalArgumentException` as permanent, so the row correctly stays pending. Stale test;
+  now split into two tests (IllegalArgumentException marks the row failed, IllegalStateException leaves it pending). Not re-run on a device.
+
+So the offline forget queue, replay, 401/404/5xx handling and the waiting line have still never passed on a device: every test that
+exercises them failed on fixture ids before reaching the queue. Passing here: the Room guard interleavings, queue DAO behaviour (16 of 17
+ForgetQueueRoomTest cases), migration, hygiene and the autofill exclusion.
+
+The last Codex review pass was NOT re-run after ff78c64 (the purge-floor release and 10-minute backstop). Offline forget has NOT passed
+end to end on a device: the fixture ids are now uuid-shaped (`TestIds`) but the instrumented tests have not been re-run. The offline
+scenario of `android_notes.py` now also writes `dropped-offline-attempts.json` (method and path of requests the mock dropped while
+offline) and `offline_dropped_attempts` in the results; the request log itself stays free of them.
+
+Known limitation of the offline forget (404 verification and the sweep). A 404 on the DELETE is accepted as "already gone" only after
+the whole notes list was read (pages of 500, up to 10 pages) and the note was not on it. While paging, each page after the first starts
+one row early and must open with the row the previous page ended on; if it does not (another device deleted or added a note mid-scan),
+the scan is inconclusive and the worker retries. With roughly 5000 or more notes the list cannot be read inside that budget, so a note
+the server really deleted (404) can never be confirmed: the worker fails closed, retries up to the attempt cap and the row ends as
+"gave up" (still hidden, with Retry and Stop trying). The same budget keeps confirmed tombstones from expiring for such accounts.
+Closing this needs a server endpoint that answers "does note X exist" (for example GET /notes/{id} with a distinct 404 body), not a
+bigger scan. Covered by `ForgetPruneTest` (`scanNotes`); never run against a real server.
+
+Known limitation (stale responses after tombstone expiry). A confirmed tombstone is pruned by the 7-day TTL once a complete notes list
+no longer contains the note. `writeCards` only checks the hidden set at write time, so a network response that was already in flight
+before the forget and is delivered after the tombstone was pruned could persist the forgotten note again. Reaching this needs a
+response outliving the HTTP client timeouts, or a forward device clock jump between the forget and the delayed delivery. Found by the
+third Codex pass (P2) and accepted as a hardening gap, not fixed here. A fix needs a stale-response fence (for example a per-scope
+write epoch recorded when a request starts and compared when its result is stored).
+
+Codex review status: three adversarial passes ran on the final design (fc4b5a5, 56057a4, b8eea31). Findings from the first two were
+fixed; the third raised only the stale-response gap above. Static review only, no device and no Android runtime run by Codex.
+
+Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
+with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.

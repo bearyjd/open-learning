@@ -18,9 +18,11 @@ data class Connection(val server: String, val token: String) {
     // Scope includes the account credential as well as server, so account changes cannot expose old caches.
     val scope: String get() = MessageDigest.getInstance("SHA-256").digest("$server\u0000$token".toByteArray()).joinToString("") { "%02x".format(it) }
 }
+private const val LEGACY_PREVIOUS_SERVER = "previousServer"
 class Credentials(context: Context) {
     private val preferences = context.getSharedPreferences("connection", Context.MODE_PRIVATE)
-    private val mutable = MutableStateFlow(read())
+    // The previous-server key of earlier builds is deleted, so devices that stored it lose it.
+    private val mutable = MutableStateFlow(read().also { preferences.edit().remove(LEGACY_PREVIOUS_SERVER).apply() })
     val connection = mutable.asStateFlow()
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -43,7 +45,7 @@ class Credentials(context: Context) {
         require(token.isNotEmpty() && !token.contains('\n') && !token.contains('\r')) { "Enter a valid server token." }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()); updateAAD(server.toByteArray()) }
         val encrypted = cipher.doFinal(token.toByteArray())
-        check(preferences.edit().putString("server", server)
+        check(preferences.edit().putString("server", server).remove(LEGACY_PREVIOUS_SERVER)
             .putString("token", Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP)).commit()) { "Could not store the connection." }
         mutable.value = Connection(server, token)

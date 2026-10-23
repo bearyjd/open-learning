@@ -65,11 +65,12 @@ sealed interface RestoreDecision {
 /** Decides what to do once the saved item has been resolved, guarding against user actions that raced it. */
 fun decideRestore(
     saved: SavedTutor, repoScope: String, repoCurrent: Boolean, selectedId: String?,
-    remembered: SavedTutor?, resolved: ResolvedInsight,
+    remembered: SavedTutor?, resolved: ResolvedInsight, hidden: Set<String> = emptySet(),
 ): RestoreDecision = when {
     saved.scope != repoScope || !repoCurrent || selectedId != null || remembered != saved -> RestoreDecision.Skip
     else -> when (resolved) {
-        is ResolvedInsight.Found -> RestoreDecision.Restore(resolved.insight)
+        // A note forgotten on this device must not reopen from a saved selection, even if the server still holds it.
+        is ResolvedInsight.Found -> if (resolved.insight.isHiddenBy(hidden)) RestoreDecision.Clear else RestoreDecision.Restore(resolved.insight)
         ResolvedInsight.NotFound -> RestoreDecision.Clear
         ResolvedInsight.Unavailable -> RestoreDecision.Skip
     }

@@ -6,6 +6,8 @@ data class ScreenState(
     val results: List<Insight> = emptyList(), val searched: Boolean = false,
     val jobs: List<PendingIngest> = emptyList(), val reviews: List<Review> = emptyList(), val reviewsLoaded: Boolean = false,
     val scope: String = "", val selected: Insight? = null, val learning: Boolean = false, val chat: List<ChatLine> = emptyList(), val chatBusy: Boolean = false,
-    val revealed: Boolean = false, val reviewSource: Insight? = null, val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
+    val revealed: Boolean = false, val reviewSource: Insight? = null, val reviewDocs: Map<String, String> = emptyMap(), val busy: Boolean = false, val error: String? = null, val notice: Notice? = null,
     val notes: NotesListState = NotesListState(),
+    /** Offline forget queue of the active account (counts and ids only, never titles), kept in step with Room. */
+    val forgetWaiting: Int = 0, val forgetFailed: List<PendingForget> = emptyList(),
 )

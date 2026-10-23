@@ -6,21 +6,6 @@ import org.junit.Test
 class NoteLogicTest {
     private val note = PendingIngest("s", "j1", "", kind = "note", title = "Lecture", text = "body")
 
-    @Test fun tombstoneBlocksOnlyThatScopeAndDocument() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "d1")
-        assertTrue(forgotten.blocks("s", Insight(documentId = "d1")))
-        assertFalse(forgotten.blocks("other", Insight(documentId = "d1")))
-        assertFalse(forgotten.blocks("s", Insight(documentId = "d2")))
-        assertEquals(listOf("b"), forgotten.allowed("s", listOf(Insight(id = "a", documentId = "d1"), Insight(id = "b", documentId = "d2"))).map { it.id })
-    }
-    @Test fun tombstoneIgnoresBlankDocumentIdsAndCanBeRemoved() {
-        val forgotten = ForgottenNotes()
-        forgotten.add("s", "")
-        assertFalse(forgotten.blocks("s", Insight(documentId = "")))
-        forgotten.add("s", "d1"); forgotten.remove("s", "d1")
-        assertFalse(forgotten.blocks("s", Insight(documentId = "d1")))
-    }
     @Test fun counterCountsCodePointsWithThousandsSeparators() {
         assertEquals("0 / 60,000", noteCounter(""))
         assertEquals("1 / 60,000", noteCounter("😀"))
@@ -47,19 +32,10 @@ class NoteLogicTest {
         assertNull(next.jobId); assertEquals("queued", next.status); assertNull(next.error); assertEquals("body", next.text)
         assertNull(noteConflictPlan(note.copy(jobId = "srv", text = null)))
     }
-    @Test fun forgetDropsDocumentEverywhere() {
-        val gone = Insight(id = "a", documentId = "d1"); val keep = Insight(id = "b", documentId = "d2")
-        val state = ScreenState(feed = listOf(gone, keep), library = listOf(gone), results = listOf(keep, gone), selected = gone, learning = true,
-            reviews = listOf(Review("r1", "a", "q", "t", 1.0), Review("r2", "b", "q", "t", 1.0)), reviewSource = gone, revealed = true)
-        val next = state.withoutDocument("d1", listOf("a", "extra"))
-        assertEquals(listOf(keep), next.feed); assertEquals(emptyList<Insight>(), next.library); assertEquals(listOf(keep), next.results)
-        assertEquals(listOf("r2"), next.reviews.map { it.id })
-        assertNull(next.selected); assertNull(next.reviewSource); assertFalse(next.revealed); assertFalse(next.learning)
-    }
     @Test fun forgetFailureNeverEchoesErrorText() {
-        val offline = forgetFailureMessage(java.io.IOException("SECRET-BODY"))
+        val offline = forgetFailureMessage(java.io.IOException("SECRET-BODY"), "the note was not forgotten")
         assertTrue("not forgotten" in offline && "SECRET" !in offline)
-        assertFalse("SECRET" in forgetFailureMessage(IllegalStateException("SECRET-BODY")))
+        assertFalse("SECRET" in forgetFailureMessage(IllegalStateException("SECRET-BODY"), "the note was not forgotten"))
     }
     @Test fun fileReplacesOnlyAfterConfirmWhenTextIsTyped() {
         assertEquals(FilePlan.Apply, filePlan(NoteDraftFields(title = "t")))
@@ -128,22 +104,10 @@ class NoteLogicTest {
         assertEquals("Note queued.", queued.text)
     }
     @Test fun forgetOutcomeMapsToMessages() {
-        assertNull(ForgetResult.Done(listOf("x")).message())
-        assertEquals(FORGET_PARTIAL_MESSAGE, ForgetResult.PurgeFailed.message())
-        assertTrue(FORGET_PARTIAL_MESSAGE.startsWith("Deleted on the server") && "hidden" in FORGET_PARTIAL_MESSAGE)
-        val failed = ForgetResult.Failed(java.io.IOException("SECRET-BODY")).message()!!
-        assertEquals(forgetFailureMessage(java.io.IOException("x")), failed)
+        assertEquals(FORGET_QUEUED_MESSAGE, ForgetResult.Done(listOf("x")).message())
+        val failed = ForgetResult.Failed(java.io.IOException("SECRET-BODY")).message()
+        assertEquals(FORGET_LOCAL_FAILED_MESSAGE, failed)
         assertFalse("SECRET" in failed)
-    }
-
-    @Test fun failedPurgeIsRetriedForThatScopeUntilItSucceeds() {
-        val forgotten = ForgottenNotes()
-        forgotten.purgeFailed("s", "d1", "Lecture"); forgotten.purgeFailed("t", "d2", null)
-        assertEquals(listOf(ForgottenNotes.PendingPurge("d1", "Lecture")), forgotten.pendingPurges("s"))
-        assertEquals(listOf(ForgottenNotes.PendingPurge("d2", null)), forgotten.pendingPurges("t"))
-        forgotten.purgeDone("s", "d1")
-        assertTrue(forgotten.pendingPurges("s").isEmpty())
-        assertEquals(1, forgotten.pendingPurges("t").size)
     }
     @Test fun purgeTitleIsTheDocumentTitleNotTheInsightHeadline() {
         val item = Insight(title = "A model-written headline", sourceTitle = "My lecture note", sourceKind = "note")

@@ -118,7 +118,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                         if (state.learning) Tutor(state, model) else InsightDetail(state.selected!!, model)
                     } else when (destination) {
                         Destination.Discover -> if (composingNote) NoteEditor(model, state.busy) { composingNote = false }
-                            else if (showingNotes) NotesList(state.notes, model) { showingNotes = false }
+                            else if (showingNotes) NotesList(state.notes, state.forgetWaiting, state.forgetFailed, model) { showingNotes = false }
                             else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, { showingNotes = true }, model)
                         Destination.Library -> InsightList("Your library", "Keep the ideas you want to return to. Saved ideas stay readable offline.", state.library, "No saved ideas yet", "Save an idea from Discover to keep its explanation and source here.", model)
                         Destination.Learn -> InsightList("A little deeper", "Choose an idea. Your tutor explains it, then asks you to recall it in your own words.", state.library, "Choose something worth learning", "Save an idea first, then start a source-grounded conversation.", model, true)

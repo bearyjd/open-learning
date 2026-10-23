@@ -16,7 +16,9 @@ Scenarios: draft survives process death; submit posts exactly once with the expe
 hash and shows no source link; forget Cancel sends no DELETE and Confirm sends exactly one;
 notes list: open "Your notes", forget one of two listed notes (Confirm sends exactly one DELETE for it, none for the other)
 and the other note's list row remains; 429 (Retry-After, once) shows the fixed "busy, retrying automatically" message, then the retry is accepted (202) and the
-note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message. Evidence goes to --out (default .omc/notes/, ignored by Git).
+note completes with exactly 2 POSTs of the same body hash; 413 maps to the fixed message; offline forget
+(android_notes_forget.py): mock offline, forget the remaining listed note, the list shows "1 forgotten note waiting for the
+server" and the mock has seen no DELETE; mock online, within 150 s exactly one DELETE for it and the waiting line is gone. Evidence goes to --out (default .omc/notes/, ignored by Git).
 """
 
 import argparse
@@ -31,6 +33,8 @@ import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import android_notes_forget as offline_forget
+
 PACKAGE = "org.openlearning.app.acceptance"
 ACTIVITY = PACKAGE + "/org.openlearning.app.MainActivity"
 TOKEN = "notes-local-token"
@@ -40,13 +44,13 @@ NOTE_TITLE = "Acceptance note"
 NOTE = {
     "id": "note-1", "title": "Spacing keeps ideas available", "idea": "Revisit ideas after a delay.",
     "explanation": "Delayed review strengthens recall.", "why_it_matters": "", "source_title": NOTE_TITLE,
-    "source_url": "https://example.invalid/never-linked", "document_id": "note-doc", "evidence": "Spaced practice revisits an idea.",
+    "source_url": "https://example.invalid/never-linked", "document_id": "5eed0000-0000-4000-8000-00000000000c", "evidence": "Spaced practice revisits an idea.",
     "tags": ["memory"], "saved": False, "coverage": "full_source", "source_truncated": False, "model": "mock",
     "source_kind": "note", "source_label": "",
 }
 LIST_NOTES = {  # GET /notes fixture: newest first, as the server answers
-    "list-doc-a": {"document_id": "list-doc-a", "title": "Alpha list note", "label": "Lecture", "created_at": "2026-10-22T09:30:00Z", "char_count": 1234},
-    "list-doc-b": {"document_id": "list-doc-b", "title": "Beta list note", "label": None, "created_at": "2026-10-21T08:00:00Z", "char_count": 456},
+    "5eed0000-0000-4000-8000-0000000000a1": {"document_id": "5eed0000-0000-4000-8000-0000000000a1", "title": "Alpha list note", "label": "Lecture", "created_at": "2026-10-22T09:30:00Z", "char_count": 1234},
+    "5eed0000-0000-4000-8000-0000000000b1": {"document_id": "5eed0000-0000-4000-8000-0000000000b1", "title": "Beta list note", "label": None, "created_at": "2026-10-21T08:00:00Z", "char_count": 456},
 }
 ALLOWED_PACKAGES = {PACKAGE, "com.google.android.inputmethod.latin", "com.android.systemui"}
 FORBIDDEN_TEXT = re.compile(r"bitwarden|save password|autofill|use saved|password manager", re.I)
@@ -173,7 +177,7 @@ def find_last(root, pattern):
     return hits[-1] if hits else None
 
 
-def list_summary(log, texts, forgotten="list-doc-a", kept="list-doc-b", forgotten_title="Alpha list note", kept_title="Beta list note") -> dict:
+def list_summary(log, texts, forgotten="5eed0000-0000-4000-8000-0000000000a1", kept="5eed0000-0000-4000-8000-0000000000b1", forgotten_title="Alpha list note", kept_title="Beta list note") -> dict:
     """Notes-list verdicts from the mock log (counts only) and the final list texts."""
     gone = lambda t: not any(forgotten_title in x for x in t)
     return {"list_forget_deletes": count_requests(log, "DELETE", "/api/v1/notes/" + forgotten),
@@ -181,7 +185,7 @@ def list_summary(log, texts, forgotten="list-doc-a", kept="list-doc-b", forgotte
             "list_other_row_remains": any(kept_title in x for x in texts), "list_forgotten_row_gone": gone(texts)}
 
 
-STATE = {"log": [], "text_status": 200, "list_deleted": set(), "done": False, "rate_limit_once": False, "retried": False}
+STATE = {"log": [], "text_status": 200, "list_deleted": set(), "offline": False, "done": False, "rate_limit_once": False, "retried": False, "dropped": []}
 LOCK = threading.Lock()
 
 
@@ -210,10 +214,19 @@ def make_handler():
             path = self.path.split("?")[0]
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self._digest = None if path.startswith("/__ctl/") else body_digest(raw)
+            with LOCK:
+                offline = STATE["offline"]
+                if offline and not path.startswith("/__ctl/"):  # evidence the app tried; kept out of "log" so request counts stay exact
+                    STATE["dropped"].append({"t": round(time.time(), 1), "method": self.command, "path": path})
+            if offline and not path.startswith("/__ctl/"):  # drop the connection unanswered and unlogged, like a dead network
+                self.close_connection = True
+                return
             if path.startswith("/__ctl/"):
                 with LOCK:
                     if path == "/__ctl/text_status":
                         STATE["text_status"] = int(self.path.split("=")[1])
+                    elif path == "/__ctl/offline":
+                        STATE["offline"] = self.path.endswith("=1")
                     elif path == "/__ctl/rate_limit_once":
                         STATE["rate_limit_once"] = True
                     elif path == "/__ctl/log":
@@ -256,7 +269,7 @@ def make_handler():
                 with LOCK:
                     STATE["list_deleted"].add(path.rsplit("/", 1)[1])
                 return self._send(None, 204)
-            if method == "DELETE" and path == "/api/v1/notes/note-doc":
+            if method == "DELETE" and path == "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c":
                 return self._send(None, 204)
             return self._send({"detail": "not found"}, 404)
 
@@ -478,6 +491,11 @@ def mock_log():
         return list(STATE["log"])
 
 
+def mock_dropped():
+    with LOCK:
+        return list(STATE["dropped"])
+
+
 def rate_limit_summary(log, baseline) -> dict:
     """POSTs after `baseline` earlier ones: how many, their statuses, and whether every body had the same hash."""
     posts = [e for e in log if e["method"] == "POST" and e["path"] == "/api/v1/ingest/text"][baseline:]
@@ -534,13 +552,15 @@ def scenarios_pass(results) -> bool:
                 and results.get("list_other_row_remains") and results.get("list_forgotten_row_gone") and results.get("413_message")
                 and results.get("sentinel_body_in_ui") is False
                 and results.get("429_message") and results.get("429_posts") == 2 and results.get("429_same_body_hash")
-                and results.get("429_completed") and results.get("429_sentinel_in_ui") is False)
+                and results.get("429_completed") and results.get("429_sentinel_in_ui") is False
+                and offline_forget.forget_scenario_passes(results))
 
 
 def write_evidence(out, results):
     """Always persist the request log and print partial results, even after an abort or crash."""
     try:
         (out / "request-log.json").write_text(json.dumps(mock_log(), indent=1))
+        (out / "dropped-offline-attempts.json").write_text(json.dumps(mock_dropped(), indent=1))
     except OSError as exc:
         results["evidence_write_error"] = repr(exc)
     print(json.dumps(results, indent=1))
@@ -593,14 +613,16 @@ def main():
         results["no_link_nodes_on_detail"] = not link_labels_present(dev.texts(dev.dump("03-detail")))
         dev.tap("Forget this note")
         dev.tap(r"^Cancel\|")
-        results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
+        results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
         dev.tap("Forget this note")
         dev.tap(r"^Forget\|")
         dev.wait_for("Note forgotten")
         dev.dump("04-after-forget")
-        results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/note-doc")
+        results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
 
         run_notes_list(dev, results)
+        offline_forget.run_offline_forget(dev, lambda on: urllib_ctl(args.port, "offline", "?on=%d" % on), mock_log, STEP, results)
+        results["offline_dropped_attempts"] = len(mock_dropped())
 
         run_rate_limit(dev, args.port, results)
         if not results["429_completed"]:  # a half-finished retry would turn the next scenario's 413 into a second failure

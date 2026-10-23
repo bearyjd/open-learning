@@ -11,21 +11,13 @@ import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
-import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * E2b-2 notes list, targeted forget and share-as-note against a device-local fixture.
@@ -47,8 +39,8 @@ class NotesListAcceptanceTest {
         container.credentials.save(fixture.server.url("/").toString(), "alpha", true)
         io {
             val scope = scope()
-            container.database.dao().putJob(PendingIngest(scope, "row-a", "", kind = "note", status = "completed", title = "Alpha note", documentId = "doc-a"))
-            container.database.dao().putJob(PendingIngest(scope, "row-b", "", kind = "note", status = "completed", title = "Beta note", documentId = "doc-b"))
+            container.database.dao().putJob(PendingIngest(scope, "row-a", "", kind = "note", status = "completed", title = "Alpha note", documentId = TestIds.DOC_A))
+            container.database.dao().putJob(PendingIngest(scope, "row-b", "", kind = "note", status = "completed", title = "Beta note", documentId = TestIds.DOC_B))
         }
     }
 
@@ -70,7 +62,7 @@ class NotesListAcceptanceTest {
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         compose.onNodeWithText("Cancel").performClick()
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
         assertEquals(2, rows().size)
     }
 
@@ -79,33 +71,39 @@ class NotesListAcceptanceTest {
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         confirm()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/doc-a") == 1 }
-        waitUntil { rows().map { it.documentId } == listOf("doc-b") }
+        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") == 1 }
+        waitUntil { rows().map { it.documentId } == listOf(TestIds.DOC_B) }
         waitUntil { compose.onAllNodesWithText("Alpha note").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithText("Beta note").assertExists()
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-b"))
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_B}"))
     }
 
-    @Test fun failedDeleteKeepsRowsAndTheListEntry() {
+    // Not run on a device. A 5xx no longer blocks the forget: the note is hidden now and the DELETE is retried.
+    @Test fun serverErrorHidesTheNoteNowAndKeepsItQueued() {
         fixture.deleteStatus.set(500)
         openList(); waitText("Alpha note")
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         confirm()
-        waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        assertEquals(2, rows().size)
-        compose.onNodeWithText("Alpha note").assertExists()
+        waitUntil { compose.onAllNodesWithText("Alpha note").fetchSemanticsNodes().isEmpty() }
+        waitText("1 forgotten note waiting for the server")
+        assertEquals(listOf(FORGET_PENDING), io { container.database.dao().forgets(scope()).map { it.status } })
+        assertEquals(listOf(TestIds.DOC_B), rows().map { it.documentId })
     }
 
-    @Test fun offlineDeleteKeepsRows() {
+    // Not run on a device. Offline forget succeeds locally: hidden at once, no request, one queued row.
+    @Test fun offlineForgetHidesNowAndShowsTheWaitingLine() {
         openList(); waitText("Alpha note")
         fixture.down.set(true)
         compose.onAllNodesWithText("Forget")[0].performClick()
         waitText("Forget this note?")
         confirm()
-        waitUntil { compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/doc-a"))
-        assertEquals(2, rows().size)
+        waitText("1 forgotten note waiting for the server")
+        compose.onNodeWithText("Alpha note").assertDoesNotExist()
+        assertTrue(compose.onAllNodesWithText("was not forgotten", substring = true).fetchSemanticsNodes().isEmpty())
+        assertEquals(0, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
+        assertEquals(listOf(TestIds.DOC_A), io { container.database.dao().forgets(scope()).map { it.documentId } })
+        assertEquals(listOf(TestIds.DOC_B), rows().map { it.documentId })
     }
 
     // NOT device-verified. FLAG_SECURE is set while the list is shown and cleared again after it is closed.
@@ -142,45 +140,4 @@ class NotesListAcceptanceTest {
     private fun waitText(text: String) = waitUntil { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
     private fun waitUntil(timeout: Long = 15_000, condition: () -> Boolean) = compose.waitUntil(timeout, condition)
     private fun <T> io(block: suspend () -> T): T = runBlocking(Dispatchers.IO) { block() }
-}
-
-/** GET /notes, GET /limits and DELETE /notes/{id}. Records only method and path, never bodies. */
-private class ListFixture {
-    val server = MockWebServer()
-    val requests = CopyOnWriteArrayList<RecordedRequest>()
-    val down = AtomicBoolean(false)
-    val deleteStatus = AtomicInteger(204)
-    private val deleted = CopyOnWriteArrayList<String>()
-    private val notes = mapOf(
-        "doc-a" to """{"document_id":"doc-a","title":"Alpha note","label":"Lecture","created_at":"2026-10-22T09:30:00Z","char_count":1234}""",
-        "doc-b" to """{"document_id":"doc-b","title":"Beta note","label":null,"created_at":"2026-10-21T08:00:00Z","char_count":456}""",
-    )
-
-    fun start() {
-        server.dispatcher = object : Dispatcher() {
-            // DISCONNECT_AT_START is only honoured at accept time, via peek(); a pooled keep-alive connection never gets there.
-            override fun peek(): MockResponse = if (down.get()) downResponse() else super.peek()
-            override fun dispatch(request: RecordedRequest): MockResponse {
-                if (down.get()) return downResponse()
-                requests += request
-                if (request.getHeader("Authorization") != "Bearer alpha") return MockResponse().setResponseCode(401)
-                val path = request.path.orEmpty().substringBefore('?')
-                return when {
-                    request.method == "GET" && path == "/api/v1/notes" -> json("[" + notes.filterKeys { it !in deleted }.values.joinToString(",") + "]")
-                    request.method == "GET" && path == "/api/v1/limits" -> json("""{"max_document_chars":60000,"min_text_chars":100,"max_title_chars":100,"max_label_chars":100}""")
-                    request.method == "DELETE" && path.startsWith("/api/v1/notes/") -> {
-                        if (deleteStatus.get() in 200..299) deleted += path.substringAfterLast('/')
-                        MockResponse().setResponseCode(deleteStatus.get())
-                    }
-                    path == "/api/v1/feed/today" || path == "/api/v1/library" -> json("[]")
-                    else -> MockResponse().setResponseCode(404)
-                }
-            }
-        }
-        server.start()
-    }
-    private fun json(body: String) = MockResponse().addHeader("Content-Type", "application/json").setBody(body)
-    // DISCONNECT_AFTER_REQUEST drops requests that arrive on an already-open connection; peek() covers new connections.
-    private fun downResponse() = MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
-    fun count(method: String, path: String) = requests.count { it.method == method && it.path?.substringBefore('?') == path }
 }
