@@ -174,6 +174,9 @@ def test_0006_discovery_roundtrip(database_url):
     engine = create_engine(database_url)
     ok(database_url, "upgrade", "0006")
     assert {"feeds", "discovered_items"} <= set(inspect(engine).get_table_names())
+    indexes = {index["name"]: index["column_names"]
+               for index in inspect(engine).get_indexes("discovered_items")}
+    assert indexes["ix_discovered_items_status_created_at_id"] == ["status", "created_at", "id"]
     run(engine, "INSERT INTO feeds (id,url,title,created_at,consecutive_failures) VALUES "
         "('f1','https://example.com/feed','T',:n,0)", n=NOW)
     insert = "INSERT INTO discovered_items (id,feed_id,url,title,snippet,status,created_at) "
@@ -195,6 +198,11 @@ def test_0006_discovery_roundtrip(database_url):
     ok(database_url, "downgrade", "0005")
     assert {"feeds", "discovered_items"}.isdisjoint(inspect(engine).get_table_names())
     ok(database_url, "upgrade", "head")
+    # Refresh SQLite's pooled schema cache after the subprocess recreates tables.
+    engine.dispose()
+    indexes = {index["name"]: index["column_names"]
+               for index in inspect(engine).get_indexes("discovered_items")}
+    assert indexes["ix_discovered_items_status_created_at_id"] == ["status", "created_at", "id"]
     ok(database_url, "check")
     engine.dispose()
 

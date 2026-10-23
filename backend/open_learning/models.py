@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -52,6 +53,7 @@ class DiscoveredItem(Base):
         UniqueConstraint("feed_id", "url", name="uq_discovered_feed_url"),
         CheckConstraint("status IN ('new', 'ingested', 'dismissed')", name="ck_discovered_status"),
         CheckConstraint("length(snippet) <= 500", name="ck_discovered_snippet"),
+        Index("ix_discovered_items_status_created_at_id", "status", "created_at", "id"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
     feed_id: Mapped[str] = mapped_column(ForeignKey("feeds.id", ondelete="CASCADE"), index=True)
@@ -59,7 +61,7 @@ class DiscoveredItem(Base):
     title: Mapped[str] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     snippet: Mapped[str] = mapped_column(String(500))
-    status: Mapped[str] = mapped_column(String(16), default="new", server_default="new", index=True)
+    status: Mapped[str] = mapped_column(String(16), default="new", server_default="new")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

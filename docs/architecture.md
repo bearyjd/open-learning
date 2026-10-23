@@ -80,9 +80,18 @@ cap. Enqueueing an article job and marking its item ingested commit together.
 RSS 2.0 and Atom responses are bounded to 1 MiB and 50 items per fetch, with
 network deadlines and redirect limits. Discovery stores URLs, titles, publication
 times and plain-text snippets of at most 500 characters, never full article text.
+Each feed retains at most `MAX_STORED_ITEMS` (default 200), keeping the newest
+rows by creation time and UUID. Refresh prunes excess rows and dismissed/ingested
+metadata older than `ITEM_RETENTION_DAYS` (default 30, measured from discovery
+creation) in the same transaction as insertion, including on unchanged or failed
+fetches. Age pruning preserves `new` items; cap eviction preserves the newest
+configured number of rows. Article jobs and their document links survive metadata
+pruning. URL deduplication lasts while a row is retained; evicted URLs can be
+discovered again.
 Migration 0006 adds `feeds` and `discovered_items`, with per-feed URL deduplication,
 `new`/`ingested`/`dismissed` item states and cascading removal of a feed's queue
-items. Downgrade drops these discovery tables. Android subscription and queue UI
+items. Its `(status, created_at, id)` index serves newest-first queue pagination.
+Downgrade drops these discovery tables. Android subscription and queue UI
 are outside this backend slice. See [security](security.md) for fetch and XML
 boundaries and [verification](verification.md) for checks and remaining gaps.
 

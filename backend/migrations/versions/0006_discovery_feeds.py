@@ -45,7 +45,9 @@ def upgrade():
         sa.CheckConstraint("length(snippet) <= 500", name="ck_discovered_snippet"),
     )
     op.create_index("ix_discovered_items_feed_id", "discovered_items", ["feed_id"])
-    op.create_index("ix_discovered_items_status", "discovered_items", ["status"])
+    op.create_index(
+        "ix_discovered_items_status_created_at_id", "discovered_items", ["status", "created_at", "id"]
+    )
 
 
 def downgrade():

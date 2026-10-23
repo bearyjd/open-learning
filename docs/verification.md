@@ -773,7 +773,7 @@ fixes, limitations and pending Android work still apply.
 
 Verified on 2026-10-23 with Python 3.13.13 and frozen dependencies:
 `uv run --frozen ruff check .` passed; `uv run --frozen pytest -q` produced
-**461 passed, 48 skipped on SQLite** and **505 passed, 4 skipped on PostgreSQL**.
+**470 passed, 48 skipped on SQLite** and **514 passed, 4 skipped on PostgreSQL**.
 PostgreSQL 16.15 ran in a uniquely named disposable `pgvector/pgvector:pg16`
 container with tmpfs storage, a random localhost port and a separate migration
 database, matching CI's database separation. SQLite skips require PostgreSQL;
@@ -788,6 +788,15 @@ TDD failures preceded implementation; the SQLite double-ingest regression return
 two 202s before its fix and now returns 202/409 with one job. Independent security
 and integration reviews found no unresolved issues after that fix. The full suite
 emits one upstream Starlette TestClient deprecation warning; no dependency changed.
+
+The review fixes were also test-first: retention regressions produced eight
+failures before implementation, and the composite-index assertion failed before
+the schema change. Regressions cover rotating URLs bounded to the newest 200,
+configured caps, deterministic timestamp/ID ties, feed isolation, 30-day terminal
+expiry on parsed/304/failed refreshes, retained deduplication/status, ingestion
+continuing after metadata pruning, and rollback after insert/delete failures.
+Migration 0006 checks `(status, created_at, id)` on upgrade and re-upgrade after
+downgrade on both databases. Independent code review found no blocking issues.
 
 Still unverified: live RSS/Atom provider behavior and production polling timing,
 jitter/backoff and recovery over sustained operation. Android subscription and

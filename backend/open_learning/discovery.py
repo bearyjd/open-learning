@@ -14,6 +14,8 @@ from .models import DiscoveredItem, Feed, now
 
 MAX_FEEDS = 50
 MAX_ITEMS = 50
+MAX_STORED_ITEMS = 200
+ITEM_RETENTION_DAYS = 30
 PAUSE_FAILURES = 10
 
 
@@ -99,6 +101,31 @@ def _store_items(db, feed, parsed):
         )
 
 
+def _prune_items(db, feed):
+    # Flush admission first: response URLs were deduplicated against all retained
+    # rows, including expired terminal entries, before any metadata is removed.
+    # Jobs and their published documents are independent of discovery metadata.
+    db.flush()
+    db.execute(
+        delete(DiscoveredItem).where(
+            DiscoveredItem.feed_id == feed.id,
+            DiscoveredItem.status.in_(("dismissed", "ingested")),
+            DiscoveredItem.created_at < now() - timedelta(days=ITEM_RETENTION_DAYS),
+        )
+    )
+    newest = (
+        select(DiscoveredItem.id)
+        .where(DiscoveredItem.feed_id == feed.id)
+        .order_by(DiscoveredItem.created_at.desc(), DiscoveredItem.id.desc())
+        .limit(MAX_STORED_ITEMS)
+    )
+    db.execute(
+        delete(DiscoveredItem).where(
+            DiscoveredItem.feed_id == feed.id, DiscoveredItem.id.not_in(newest)
+        )
+    )
+
+
 def create_feed(factory, settings, url: str) -> dict:
     url = checked_url(url)
     # No transaction or lock spans remote I/O. Recheck both constraints after fetch.
@@ -135,6 +162,7 @@ def create_feed(factory, settings, url: str) -> dict:
         except IntegrityError as error:
             raise HTTPException(409, "Feed already subscribed") from error
         _store_items(db, feed, result.feed)
+        _prune_items(db, feed)
         return feed_output(feed)
 
 
@@ -203,6 +231,7 @@ def refresh_feed(factory, settings, feed_id, *, scheduled=False) -> dict:
             else:
                 feed.etag = result.etag or feed.etag
                 feed.last_modified = result.last_modified or feed.last_modified
+        _prune_items(db, feed)
         return feed_output(feed)
 
 
