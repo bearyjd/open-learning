@@ -73,6 +73,18 @@ def is_current(db: Session, document_id: str) -> bool:
     ) is not None
 
 
+def lock_current(db: Session, document_id: str) -> bool:
+    """Share-lock a document (lock level 1) and report whether it is still current.
+
+    Writers that act on an insight call this before locking the insight, so an edit cannot
+    publish a newer version (or a forget delete it) between this check and their commit.
+    """
+    superseded = db.scalar(
+        select(Document.superseded).where(Document.id == document_id).with_for_update(read=True)
+    )
+    return superseded is False
+
+
 def lock_replaced(db: Session, document_id: str) -> Document | None:
     """Lock the replaced document (lock level 1, before the job); None if it is gone."""
     return db.scalar(select(Document).where(Document.id == document_id).with_for_update())

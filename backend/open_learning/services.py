@@ -31,6 +31,7 @@ from .versions import (
     NoteStale,
     current_documents,
     is_current,
+    lock_current,
     lock_replaced,
 )
 
@@ -199,6 +200,9 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
         )
         if normalized(baseline).casefold() == normalized(result.question).casefold():
             raise ModelError("Model repeated the previous question")
+    if not lock_current(db, insight.document_id):
+        # An edit published a newer version (or a forget ran) during inference: no writes.
+        raise RowVanished("Insight not found")
     review = ensure_review(db, insight)  # Locks the insight before any write, after the model calls.
     review.question = result.question
     if message:

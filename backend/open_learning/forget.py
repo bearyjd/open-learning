@@ -18,7 +18,8 @@ ingest the replaced Document (1, held until its new job is committed, so a forge
 first and the ingest answers 404, or waits and then cancels the new job), then each takes a
 transaction-scoped advisory lock. That advisory lock is always the last lock taken, and its
 holder never waits for a row afterwards;
-review_answer, save, feedback and tutor take 4,5 only. No path acquires an earlier-numbered
+tutor takes no lock across its model call, then 1 (shared, to re-check that the note version is
+still current), 4, 5; review_answer, save and feedback take 4,5 only. No path acquires an earlier-numbered
 lock while holding a later one, so there is no cycle.
 
 The dedupe-job versus forget race is closed in two halves: jobs that exist when forget runs are
