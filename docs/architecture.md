@@ -83,7 +83,11 @@ such text, or a plain ingest whose text matches a superseded version, fails with
 fixed error "This text matches another note or version; change it or forget that note
 first". A plain ingest matching a current note still deduplicates as before. Two edits
 of the same version both queue; the first to complete wins and the other fails with
-"This note was changed or forgotten; edit its latest version".
+"This note was changed or forgotten; edit its latest version". If both carry identical
+text (a client retrying the same edit before the first ran), the second completes on the
+version the first published, or fails with that stale message once that version has been
+superseded. A retry POST sent after the new version is published still gets 409, because
+the version it names is no longer the latest.
 
 `GET /api/v1/notes/{id}/text` returns `document_id`, `title`, `label`, `version` and
 `text` for any note version, with `Cache-Control: no-store` (also on its 404). It

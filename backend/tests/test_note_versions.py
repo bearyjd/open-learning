@@ -208,3 +208,32 @@ def test_job_list_exposes_replaces_document_id(client, factory, settings):
     assert items[0]["replaces_document_id"] == v1
     assert items[1]["replaces_document_id"] is None
 
+
+
+def test_retried_identical_edit_completes_on_the_same_version(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    first = edit(client, v1).json()["id"]
+    retry = edit(client, v1).json()["id"]  # A client retry before the first one ran.
+    run_job(factory, settings)
+    run_job(factory, settings)
+    v2 = job(client, first)["document_id"]
+    body = job(client, retry)
+    assert (body["status"], body["error"], body["document_id"]) == ("completed", None, v2)
+    assert count(factory, Document) == 2
+    with factory() as db:
+        assert db.get(Job, retry).payload_text is None
+
+
+def test_retried_edit_after_a_newer_version_fails_stale(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    first = edit(client, v1).json()["id"]
+    retry = edit(client, v1).json()["id"]
+    run_job(factory, settings)
+    v2 = job(client, first)["document_id"]
+    with factory.begin() as db:  # The duplicate failed transiently and waits for a retry.
+        db.get(Job, retry).status = "failed"
+    edit_and_run(client, factory, settings, v2, EDITED_AGAIN)
+    assert client.post(f"{API}/jobs/{retry}/retry").status_code == 200
+    run_job(factory, settings)
+    body = job(client, retry)
+    assert (body["status"], body["error"], body["document_id"]) == ("failed", STALE, None)

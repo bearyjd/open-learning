@@ -385,19 +385,25 @@ def _complete_from_existing(
     first) either finishes before we look, or waits for us and then deletes the job we linked.
     An edit, or a match on a superseded version, raises NoteConflict instead: the text already
     exists as a document and cannot become a new version (or silently land on a hidden one).
+    The exception is a repeated edit (a client retry): if the match is the version this same
+    edit already published, the job completes on it, or fails stale once it is superseded.
+    The match is the only document locked here, before the job, as on the dedupe path.
     """
     existing = _note_imported(db, key, digest)
     if existing is None:
         return False
-    if replaces is not None:
-        raise NoteConflict(NOTE_CONFLICT)
-    superseded = db.scalar(
-        select(Document.superseded).where(Document.id == existing).with_for_update(read=True)
-    )
-    if superseded is None:
+    row = db.execute(
+        select(Document.superseded, Document.replaces_document_id)
+        .where(Document.id == existing)
+        .with_for_update(read=True)
+    ).first()
+    if row is None:
         return False  # Forgotten while we waited for the lock: treat as a fresh import.
-    if superseded:
+    superseded, existing_replaces = row
+    if replaces is not None and existing_replaces != replaces:
         raise NoteConflict(NOTE_CONFLICT)
+    if superseded:
+        raise NoteStale(NOTE_STALE) if replaces is not None else NoteConflict(NOTE_CONFLICT)
     if (job := _lease_holder(db, job_id, token)) is not None:
         _complete(job)
         job.document_id = existing
