@@ -801,10 +801,28 @@ on insights and tutor citations; tutor on a superseded insight is 404 with no mo
 the edit's model call runs) and `test_0005_document_versions_roundtrip` in `tests/test_migrations.py`.
 Four existing exact-shape tests were widened for the additive fields.
 
+Review fixes (adversarial review of PR #24), same environment: `tests/test_note_version_races.py` (forget
+committed before an edit's job insert gives 404 and no job; threaded PostgreSQL test where forget waits on
+the edit request's document lock and then cancels the new job and clears its text; stale and target-gone
+edit jobs drop their text at once; the tutor writes nothing when an edit publishes during inference),
+`tests/test_note_lineage.py` (versions share the root `note_id`; DELETE with any version's id forgets the
+whole note, including a pending edit of the latest; `?version_only=true`; lineage after a version-only
+forget of the root; threaded PostgreSQL test where a version published while forget waits on the lineage
+locks is forgotten too), history and save/feedback/review answers on superseded insights, idempotent
+retried edits, finished job outcomes kept on forget, `Pragma: no-cache`, and the 0005 `note_id` backfill,
+indexes and failed-edit-job downgrade guard. The new behaviour tests were seen failing before their fix,
+except `test_version_only_forget_keeps_other_versions` and `test_whole_note_forget_unknown_and_article_are_404`
+(regression guards that passed before) and the `note_id`/index assertions in `test_0005` (written with the
+migration). Mutation checks: removing the lineage re-select pass fails the lineage threaded test, and
+removing the tutor's post-inference check fails the tutor test, every time. Committing right after the edit
+request's document lock (releasing it before the insert) fails the edit-versus-forget threaded test in 3 of
+5 runs only, because forget's job scan can still land after the request commits; that test proves the
+fixed path is correct, not that every regression is caught.
+
 NOT verified:
 
-- No true concurrent (threaded) PostgreSQL race test for two edit workers or edit versus forget; the lock
-  order is reasoned about (replaced document, job, source) and the interleavings are tested sequentially.
+- No threaded PostgreSQL race test for two edit workers of one version; that interleaving is tested
+  sequentially. Edit versus forget is covered by the two threaded tests above.
 - Android does not use any of this yet. Gson ignores unknown fields, so the additive fields should not
   break the current app, but no Android build or device run was done for this slice.
 - Forget locks hash-matching jobs and unfinished edit jobs in one pass ordered by id, then linked

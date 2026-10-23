@@ -2,7 +2,8 @@
 
 Global lock order (every transaction that takes more than one of these must follow it):
 
-    1. the Document row (forget and PATCH exclusive, the worker's dedupe path shared)
+    1. the Document row (forget, PATCH, edit ingest and the worker's note edit exclusive; the
+       worker's dedupe path, tutor, save, feedback and review_answer shared)
     2. note Job rows, by id
     3. the Source row (PATCH locks it right after the document; forget deletes it last; the
        worker's fresh import takes it after its own job, which is safe because nothing that

@@ -155,7 +155,9 @@ The tutor answers 404 for a superseded insight before any model call, and again 
 writes) if an edit publishes a newer version while the model runs. Save, feedback and review
 answers on a superseded insight answer 404, and `GET /api/v1/history` omits its tutor messages. An edit or a plain
 import whose text matches an existing version fails with a fixed message that never echoes
-the text; like other failed note jobs it keeps its text until the bounded retention purge.
+the text; like other failed note jobs it keeps its text until the bounded retention purge. An
+edit that fails because its version was superseded or forgotten (a retry cannot succeed) drops
+its title, text and label at once.
 
 `GET /api/v1/limits` (authenticated) returns `max_document_chars` (`OL_MAX_DOCUMENT_CHARS`),
 `min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
