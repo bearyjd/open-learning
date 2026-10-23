@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, or_, select
 
@@ -18,10 +18,13 @@ from .discovery import (
     lock_sqlite_writes,
     refresh_feed,
 )
+from .discovery_ranking import relevance_page
 from .fetching import FetchError
 from .models import DiscoveredItem, Feed
 from .schemas import DiscoveryPage, FeedOutput, JobOutput
 from .services import enqueue_url
+from .topics import profile, score_item
+from .versions import NO_STORE
 
 
 class FeedInput(BaseModel):
@@ -83,11 +86,17 @@ def mount_discovery(api, database):
 
     @api.get("/discover", response_model=DiscoveryPage)
     def discover(
+        response: Response,
         status: Literal["new", "ingested", "dismissed"] = "new",
+        sort: Literal["newest", "relevance"] = "newest",
         limit: int = Query(default=50, ge=1, le=100),
         cursor: str | None = None,
         db=Depends(database),
     ):
+        response.headers.update(NO_STORE)
+        topics, _, signature = profile(db)
+        if sort == "relevance":
+            return relevance_page(db, status, limit, cursor, topics, signature)
         query = select(DiscoveredItem).where(DiscoveredItem.status == status)
         if cursor is not None:
             date, ident = _decode(cursor)
@@ -116,6 +125,8 @@ def mount_discovery(api, database):
                     snippet=item.snippet,
                     status=item.status,
                     created_at=item.created_at,
+                    score=score_item(item, topics)[0],
+                    matched_topics=score_item(item, topics)[1],
                 )
                 for item in items[:limit]
             ],

@@ -40,7 +40,8 @@ not establish logical entailment.
 
 The daily insight feed is bounded to ten cards from imported material. RSS/Atom
 subscriptions also populate a separate discovery queue, described below. Neither
-path learns a recommendation profile or guarantees ten new cards per day. Review
+path guarantees ten new cards per day. Discovery can derive topics from current
+library content and rank queued items as described below. Review
 ratings update a simple deterministic schedule with stored history. Later ranking
 can add topic diversity without replacing document provenance or the review API.
 
@@ -93,7 +94,42 @@ Migration 0006 adds `feeds` and `discovered_items`, with per-feed URL deduplicat
 items. Its `(status, created_at, id)` index serves newest-first queue pagination.
 Downgrade drops these discovery tables. Android subscription and queue UI
 are outside this backend slice. See [security](security.md) for fetch and XML
-boundaries and [verification](verification.md) for checks and remaining gaps.
+boundaries and [discovery verification](verification-discovery.md) for checks and remaining gaps.
+
+## Discovery topics and relevance (backend only)
+
+Authenticated `GET /api/v1/topics?limit=20` derives topics at read time, with a
+limit from 1 to 50. Its data contains `topics` (`term`, `weight`, `count`) and
+`pinned` (`id`, `term`, `created_at`). Extraction reuses `current_documents()` so
+forgotten and superseded documents do not contribute. Reads are bounded to the
+newest 500 current documents and 500 current insights, with text truncated in SQL.
+Unicode tokenization, English stopwords, unigrams and bigrams produce deterministic
+frequency-based weights; saved insights and explicit pins receive extra weight.
+Derived topics are never stored, so the next read reflects forgetting or version
+changes without a profile-cleanup job.
+
+`POST /api/v1/topics/pinned` accepts `{term}` and returns 201, including when the
+normalized term is already pinned. Terms contain at most five normalized Unicode
+words and 80 characters; at most 30 pins are retained. Deleting a pin through
+`DELETE /api/v1/topics/pinned/{id}` returns 204, or 404 for an unknown ID.
+Migration 0007 adds only the explicit `pinned_topics` table; downgrade removes it.
+Pins are independent user choices and persist until explicitly deleted.
+
+`GET /api/v1/discover` accepts `sort=newest|relevance`; newest remains the default
+with the existing ordering and cursor. Items expose `score` and `matched_topics`
+(at most five). Relevance scores weighted topic overlap in title and snippet,
+with title matches weighted higher, then breaks ties by newest creation time and
+ID. It ranks only a bounded window of the newest 500 matching queue items.
+The first page anchors that window by `(created_at, id)`; later inserts above the
+anchor are excluded from subsequent pages. Relevance cursors bind the status,
+sort, corpus and candidate ranking using hashes without plaintext topic terms.
+A changed corpus or ranking returns a fixed 409 error requiring pagination to
+restart. This is a bounded queue ranking, not a ranking of the entire archive.
+Both topic and discovery responses use `Cache-Control: no-store`.
+
+No model, embedding, paid API or external search call is involved. Ranking does
+not fetch or automatically ingest articles. Android topics and ranking UI are
+outside this slice. See [discovery verification](verification-discovery.md).
 
 ## Note versions (E2b-4)
 

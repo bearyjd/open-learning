@@ -53,6 +53,7 @@ from .services import (
     today_feed,
     tutor_chat,
 )
+from .topics_api import mount_topics
 from .versions import NO_STORE, current_documents, lock_current, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
@@ -96,8 +97,10 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         # Never echo submitted request bodies back (notes carry private text).
+        private_query = request.url.path in {"/api/v1/topics", "/api/v1/discover"}
         errors = [
-            {k: v for k, v in e.items() if k not in {"input", "ctx"}} if e["loc"][:1] == ("body",) else e
+            {k: v for k, v in e.items() if k not in {"input", "ctx"}}
+            if e["loc"][:1] == ("body",) or private_query else e
             for e in exc.errors()
         ]
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
@@ -398,6 +401,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         ]
 
     mount_discovery(api, database)
+    mount_topics(api, database)
     app.include_router(api)
     return app
 

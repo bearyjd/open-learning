@@ -65,6 +65,16 @@ class DiscoveredItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class PinnedTopic(Base):
+    __tablename__ = "pinned_topics"
+    __table_args__ = (
+        CheckConstraint("length(term) >= 3 AND length(term) <= 80", name="ck_pinned_topic_length"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
+    term: Mapped[str] = mapped_column(String(80), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Source(Base):
     __tablename__ = "sources"
     __table_args__ = (

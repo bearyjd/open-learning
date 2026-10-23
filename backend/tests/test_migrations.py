@@ -65,6 +65,26 @@ def seed_url_rows(engine):
         "('j1', 'https://a.example/x', 'completed', 1, :n)", n=NOW)
 
 
+def test_0007_pinned_topics_roundtrip(database_url):
+    engine = create_engine(database_url)
+    ok(database_url, "upgrade", "head")
+    assert "pinned_topics" in inspect(engine).get_table_names()
+    run(engine, "INSERT INTO pinned_topics (id,term,created_at) VALUES ('p1','orchid',:n)", n=NOW)
+    for ident, term in (("p2", "orchid"), ("p3", ""), ("p4", "x" * 81)):
+        with pytest.raises((IntegrityError, DataError)):
+            run(engine, "INSERT INTO pinned_topics (id,term,created_at) VALUES (:i,:t,:n)",
+                i=ident, t=term, n=NOW)
+    ok(database_url, "check")
+    ok(database_url, "downgrade", "0006")
+    assert "pinned_topics" not in inspect(engine).get_table_names()
+    assert {"feeds", "discovered_items"} <= set(inspect(engine).get_table_names())
+    ok(database_url, "upgrade", "head")
+    engine.dispose()
+    assert run(engine, "SELECT count(*) FROM pinned_topics").scalar() == 0
+    ok(database_url, "check")
+    engine.dispose()
+
+
 def seed_note_rows(engine):
     run(engine, "INSERT INTO sources (id, url, title, kind, label, created_at) VALUES "
         "('s2', 'note:abc', 'Note', 'note', 'lbl', :n)", n=NOW)
@@ -92,7 +112,7 @@ def test_upgrade_downgrade_roundtrip(database_url):
     assert refused.returncode != 0
     assert "note jobs" in refused.stdout + refused.stderr
     # PostgreSQL rolls the whole run back (still head); SQLite keeps the completed 0004 downgrade.
-    expected = "0006" if database_url.startswith("postgresql") else "0003"
+    expected = "0007" if database_url.startswith("postgresql") else "0003"
     assert ok(database_url, "current").stdout.split()[0] == expected
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
 
@@ -172,7 +192,7 @@ def seed_versioned_notes(engine):
 
 def test_0006_discovery_roundtrip(database_url):
     engine = create_engine(database_url)
-    ok(database_url, "upgrade", "0006")
+    ok(database_url, "upgrade", "head")
     assert {"feeds", "discovered_items"} <= set(inspect(engine).get_table_names())
     indexes = {index["name"]: index["column_names"]
                for index in inspect(engine).get_indexes("discovered_items")}
@@ -228,7 +248,7 @@ def test_0005_document_versions_roundtrip(database_url):
     refused = alembic(database_url, "downgrade", "0004")
     assert refused.returncode != 0
     assert "superseded" in refused.stdout + refused.stderr
-    expected = "0006" if database_url.startswith("postgresql") else "0005"
+    expected = "0007" if database_url.startswith("postgresql") else "0005"
     assert ok(database_url, "current").stdout.split()[0] == expected
 
     run(engine, "DELETE FROM documents WHERE id = 'd1'")

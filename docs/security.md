@@ -49,9 +49,21 @@ failures use fixed codes; remote response bodies, parser exception text, URL
 credentials and secrets must never enter API errors or logs. Stored feed URLs,
 item metadata and snippets remain private library data and occur in backups.
 
+Discovery topic terms and matches can reveal private note content. Topic and
+queue responses use `Cache-Control: no-store`; cursors contain hashes rather than
+plaintext terms. Terms must not enter logs or error messages, and pin validation
+uses fixed errors without echoing submitted content. Derivation reads bounded,
+SQL-truncated current document and insight text, with no persisted derived
+profile. Forgotten and superseded sources lose their influence on the next read;
+explicitly pinned terms remain until deleted and occur in database backups.
+Pin admission is capped at 30, with normalized terms limited to 80 characters and
+five Unicode words. Ranking is limited to a 500-item queue window. These local,
+authenticated operations introduce no network fetch or SSRF surface.
+
 Only extracted plain text is rendered; scripts and HTML are not displayed in a
 WebView. There is no file upload endpoint; the only endpoint accepting user-supplied
-content is `POST /api/v1/ingest/text`, described below. Future upload
+note content is `POST /api/v1/ingest/text`, described below; topic pins also accept
+short plain-text terms. Future upload
 adapters must enforce compressed and decompressed limits and prevent archive
 path traversal. Source text can contain malicious model instructions; the AI
 prompt treats it as data. Insight output selects a known source-span ID, which
