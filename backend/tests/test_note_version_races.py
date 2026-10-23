@@ -7,7 +7,7 @@ import pytest
 from conftest import FixtureModel
 from sqlalchemy import create_engine, event, select, text
 from test_note_forget import count, import_note, insight_of
-from test_note_versions import EDITED, MARKER, edit, run_job
+from test_note_versions import EDITED, MARKER, STALE, edit, run_job
 
 from open_learning import main
 from open_learning.forget import forget_note
@@ -130,6 +130,47 @@ def test_edit_job_whose_note_was_forgotten_drops_its_text(client, factory, setti
         assert job.status == "failed"
         assert job.payload_text is None and job.payload_title is None
         assert db.scalar(select(Job.id).where(Job.payload_text.is_not(None))) is None
+
+
+def delete_document_graph(factory, document_id):
+    """Delete a note version and its rows without touching jobs (a forget that missed the job)."""
+    from open_learning.forget import _delete_graph, _lock_graph
+
+    with factory.begin() as db:
+        source_id = db.get(Document, document_id).source_id
+        _lock_graph(db, {document_id})
+        _delete_graph(db, document_id, source_id)
+
+
+def assert_stale_without_text(factory, job_id):
+    with factory() as db:
+        job = db.get(Job, job_id)
+        assert (job.status, job.error) == ("failed", STALE)
+        assert (job.payload_text, job.payload_title, job.payload_label) == (None, None, None)
+
+
+def test_edit_job_whose_target_was_deleted_before_it_ran_drops_its_text(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    pending = edit(client, v1, EDITED + MARKER).json()["id"]
+    delete_document_graph(factory, v1)
+    run_job(factory, settings)
+    assert_stale_without_text(factory, pending)
+
+
+def test_edit_job_whose_target_was_deleted_during_inference_drops_its_text(
+    client, factory, settings
+):
+    v1 = import_note(client, factory, settings)
+    pending = edit(client, v1, EDITED + MARKER).json()["id"]
+
+    class Deleting(FixtureModel):
+        def insights(self, chunks):
+            delete_document_graph(factory, v1)
+            return super().insights(chunks)
+
+    assert run_once(factory, settings, model=Deleting())
+    assert_stale_without_text(factory, pending)
+    assert count(factory, Document) == 0
 
 
 def queue_edit(factory, replaces, text=EDITED):
