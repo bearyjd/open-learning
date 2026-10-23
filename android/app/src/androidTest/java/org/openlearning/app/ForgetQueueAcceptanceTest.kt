@@ -57,8 +57,8 @@ class ForgetQueueAcceptanceTest {
         fixture.down.set(false)
         openList()
         waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") == 1 }
-        waitUntil { forgets().isEmpty() }
-        waitUntil { compose.onAllNodesWithText("waiting for the server", substring = true).fetchSemanticsNodes().isEmpty() }
+        waitUntil { forgets().map { it.status } == listOf(FORGET_CONFIRMED) }
+        waitUntil { compose.onAllNodesWithText("1 forgotten note waiting for the server").fetchSemanticsNodes().isEmpty() }
         Thread.sleep(2_000)
         assertEquals(1, fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}"))
     }
@@ -67,7 +67,7 @@ class ForgetQueueAcceptanceTest {
         fixture.deleteStatus.set(404)
         openList(); waitText("Alpha note")
         forgetFirst()
-        waitUntil(90_000) { forgets().isEmpty() }
+        waitUntil(90_000) { forgets().map { it.status } == listOf(FORGET_CONFIRMED) }
         compose.onNodeWithText("Alpha note").assertDoesNotExist()
         assertTrue(compose.onAllNodesWithText("Could not delete", substring = true).fetchSemanticsNodes().isEmpty())
     }
@@ -85,17 +85,19 @@ class ForgetQueueAcceptanceTest {
         // Retry once the server accepts: the row goes pending, the worker deletes it.
         fixture.deleteStatus.set(204)
         compose.onNodeWithText("Retry").performClick()
-        waitUntil(90_000) { forgets().isEmpty() }
+        waitUntil(90_000) { forgets().map { it.status } == listOf(FORGET_CONFIRMED) }
     }
 
     @Test fun aServerErrorKeepsTheRowPendingAndIsRetried() {
         fixture.deleteStatus.set(503)
         openList(); waitText("Alpha note")
         forgetFirst()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") >= 1 }
+        // Switch only after the fixture has decided the first 503, otherwise that request could become a success.
+        waitUntil { fixture.deleteStatusesServed.contains(503) }
         assertEquals(listOf(FORGET_PENDING), forgets().map { it.status })
         fixture.deleteStatus.set(204)
-        waitUntil(90_000) { forgets().isEmpty() }
+        waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") >= 2 }
+        waitUntil(90_000) { forgets().map { it.status } == listOf(FORGET_CONFIRMED) }
     }
 
     @Test fun anotherAccountsPendingRowSurvivesReconnect() {

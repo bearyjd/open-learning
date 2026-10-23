@@ -15,6 +15,8 @@ internal class ListFixture {
     val requests = CopyOnWriteArrayList<RecordedRequest>()
     val down = AtomicBoolean(false)
     val deleteStatus = AtomicInteger(204)
+    /** DELETE statuses in the order they were decided; recorded only after the status was read, so a later change cannot alter them. */
+    val deleteStatusesServed = CopyOnWriteArrayList<Int>()
     private val deleted = CopyOnWriteArrayList<String>()
     private val notes = mapOf(
         TestIds.DOC_A to """{"document_id":"${TestIds.DOC_A}","title":"Alpha note","label":"Lecture","created_at":"2026-10-22T09:30:00Z","char_count":1234}""",
@@ -34,8 +36,10 @@ internal class ListFixture {
                     request.method == "GET" && path == "/api/v1/notes" -> json("[" + notes.filterKeys { it !in deleted }.values.joinToString(",") + "]")
                     request.method == "GET" && path == "/api/v1/limits" -> json("""{"max_document_chars":60000,"min_text_chars":100,"max_title_chars":100,"max_label_chars":100}""")
                     request.method == "DELETE" && path.startsWith("/api/v1/notes/") -> {
-                        if (deleteStatus.get() in 200..299) deleted += path.substringAfterLast('/')
-                        MockResponse().setResponseCode(deleteStatus.get())
+                        val status = deleteStatus.get()
+                        if (status in 200..299 || status == 404) deleted += path.substringAfterLast('/')
+                        deleteStatusesServed += status
+                        MockResponse().setResponseCode(status)
                     }
                     path == "/api/v1/feed/today" || path == "/api/v1/library" -> json("[]")
                     else -> MockResponse().setResponseCode(404)

@@ -16,16 +16,22 @@ class ForgetUiTest {
         assertEquals(FORGET_REFUSED_ERROR, forgetFailedLine(PendingForget("s", "d1", 1, FORGET_FAILED, "SECRET-BODY")))
         assertEquals(FORGET_REFUSED_ERROR, forgetFailedLine(PendingForget("s", "d1", 1, FORGET_FAILED, null)))
     }
-    @Test fun summaryDescribesWaitingAndFailedForgets() {
-        assertNull(forgetQueueSummary(0, 0))
-        assertEquals("1 forgotten note waiting for the server.", forgetQueueSummary(1, 0))
-        assertEquals("2 forgotten notes could not be deleted. Retry from Your notes.", forgetQueueSummary(0, 2))
-        assertEquals("1 forgotten note waiting for the server. 1 forgotten note could not be deleted. Retry from Your notes.", forgetQueueSummary(1, 1))
+    @Test fun bannerNeverCountsWaitingRows() {
+        val rows = listOf(PendingForget("s", "d1", 1, FORGET_PENDING, null), PendingForget("s", "d2", 2, FORGET_PENDING, null))
+        assertEquals(FORGET_QUEUED_MESSAGE, forgetBanner(ForgetResult.Done(emptyList()), rows))
+        assertEquals(FORGET_QUEUED_MESSAGE, forgetBanner(ForgetResult.Done(emptyList()), emptyList()))
     }
-    @Test fun bannerJoinsOutcomeAndSummary() {
-        assertEquals(FORGET_QUEUED_MESSAGE, forgetBanner(ForgetResult.Done(emptyList()), 0, 0))
-        assertEquals("$FORGET_QUEUED_MESSAGE 2 forgotten notes waiting for the server.", forgetBanner(ForgetResult.Done(emptyList()), 2, 0))
-        assertEquals(FORGET_LOCAL_FAILED_MESSAGE, forgetBanner(ForgetResult.Failed(RuntimeException("x")), 0, 0))
+    @Test fun bannerKeepsFailedForgetGuidance() {
+        val rows = listOf(PendingForget("s", "d1", 1, FORGET_PENDING, null), PendingForget("s", "d2", 2, FORGET_FAILED, "SECRET-BODY"))
+        val banner = forgetBanner(ForgetResult.Done(emptyList()), rows)
+        assertEquals("$FORGET_QUEUED_MESSAGE 1 forgotten note could not be deleted. Retry from Your notes.", banner)
+        assertFalse(banner.contains("SECRET-BODY"))
+        assertFalse(banner.contains("waiting for the server"))
+        assertTrue(forgetBanner(ForgetResult.Done(emptyList()), rows + rows[1].copy(documentId = "d3")).contains("2 forgotten notes could not"))
+    }
+    @Test fun failedLocalSaveBannerHasNoQueueText() {
+        val rows = listOf(PendingForget("s", "d2", 2, FORGET_FAILED, null))
+        assertEquals(FORGET_LOCAL_FAILED_MESSAGE, forgetBanner(ForgetResult.Failed(RuntimeException("x")), rows))
     }
     @Test fun copyStatesHiddenNowDeletedLaterNoUndo() {
         assertTrue(FORGET_QUEUED_MESSAGE.contains("hidden on this device"))

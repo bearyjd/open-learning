@@ -11,6 +11,7 @@ import time
 
 DOC = "5eed0000-0000-4000-8000-0000000000b1"
 TITLE = "Beta list note"
+# fullmatch per text node: the forget banner also says "... waiting for the server" inside a longer sentence.
 WAITING = re.compile(r"(\d+) forgotten notes? waiting for the server")
 REPLAY_TIMEOUT = 150  # seconds: the first failed attempt backs off 30 s, the next one may back off 60 s
 POLL_GAP = 3.0        # mirrors MIN_POLL_GAP in android_notes.py
@@ -23,10 +24,15 @@ def deletes_for(log, doc=DOC) -> int:
 def waiting_count(texts):
     """The N in the list's waiting line, or None when the line is not shown."""
     for text in texts:
-        match = WAITING.search(text)
+        match = WAITING.fullmatch(text.strip())
         if match:
             return int(match.group(1))
     return None
+
+
+def list_visible(texts) -> bool:
+    """True only on the notes list: its title and its subtitle (the Discover button alone also says "Your notes")."""
+    return any(t.strip() == "Your notes" for t in texts) and any(t.strip().startswith("The notes on your server") for t in texts)
 
 
 def offline_summary(log, texts) -> dict:
@@ -36,8 +42,8 @@ def offline_summary(log, texts) -> dict:
 
 
 def online_summary(log, texts) -> dict:
-    """After reconnecting: exactly one DELETE for the document and no waiting line."""
-    return {"online_deletes": deletes_for(log), "online_waiting_gone": waiting_count(texts) is None}
+    """After reconnecting: exactly one DELETE and no waiting line, on a dump that really shows the list."""
+    return {"online_deletes": deletes_for(log), "online_waiting_gone": list_visible(texts) and waiting_count(texts) is None}
 
 
 def forget_scenario_passes(results) -> bool:

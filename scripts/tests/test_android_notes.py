@@ -149,11 +149,30 @@ class SubmitHashTests(unittest.TestCase):
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
                 "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
                 "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
-                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forget_deletes": 1, "list_other_deletes": 0,
+                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forgotten_message": True, "list_forget_deletes": 1, "list_other_deletes": 0,
                 "list_other_row_remains": True, "list_forgotten_row_gone": True,
                 "offline_waiting_count": 1, "offline_deletes": 0, "offline_row_hidden": True, "online_deletes": 1, "online_waiting_gone": True}
         self.assertFalse(notes.scenarios_pass({**good, **r}))
         self.assertTrue(notes.scenarios_pass({**good, "submit_hash_match": True}))
+
+
+class WaitForDeletesTests(unittest.TestCase):
+    DOC = "5eed0000-0000-4000-8000-0000000000a1"
+
+    def test_polls_until_the_delete_arrives_then_returns(self):
+        log, ticks = [], [0]
+        def sleep(_):
+            ticks[0] += 1
+            if ticks[0] == 3:
+                log.append({"method": "DELETE", "path": "/api/v1/notes/" + self.DOC})
+        got = notes.wait_for_deletes(lambda: log, self.DOC, timeout=30, clock=lambda: ticks[0], sleep=sleep)
+        self.assertEqual((1, 3), (got, ticks[0]))
+
+    def test_gives_up_at_the_timeout_with_zero(self):
+        ticks = [0]
+        def sleep(_): ticks[0] += 1
+        self.assertEqual(0, notes.wait_for_deletes(lambda: [], self.DOC, timeout=5, clock=lambda: ticks[0], sleep=sleep))
+        self.assertEqual(5, ticks[0])
 
 
 class ReverseSwipeTests(unittest.TestCase):
@@ -170,12 +189,12 @@ class EvidenceTests(unittest.TestCase):
                 "no_link_nodes_on_list": True, "no_link_nodes_on_detail": True, "forget_cancel_deletes": 0,
                 "forget_confirm_deletes": 1, "413_message": True, "sentinel_body_in_ui": False,
                 "429_message": True, "429_posts": 2, "429_same_body_hash": True, "429_completed": True,
-                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forget_deletes": 1, "list_other_deletes": 0,
+                "429_sentinel_in_ui": False, "list_rows_shown": True, "list_forgotten_message": True, "list_forget_deletes": 1, "list_other_deletes": 0,
                 "list_other_row_remains": True, "list_forgotten_row_gone": True,
                 "offline_waiting_count": 1, "offline_deletes": 0, "offline_row_hidden": True, "online_deletes": 1, "online_waiting_gone": True}
         self.assertTrue(notes.scenarios_pass(good))
         for key, bad in (("429_message", False), ("429_posts", 1), ("429_posts", 3), ("429_same_body_hash", False),
-                         ("429_completed", False), ("429_sentinel_in_ui", True), ("list_forget_deletes", 0),
+                         ("429_completed", False), ("429_sentinel_in_ui", True), ("list_forgotten_message", False), ("list_forget_deletes", 0),
                          ("list_other_deletes", 1), ("list_other_row_remains", False), ("list_forgotten_row_gone", False),
                          ("offline_deletes", 1), ("online_deletes", 2), ("online_waiting_gone", False)):
             self.assertFalse(notes.scenarios_pass({**good, key: bad}), key)
@@ -284,15 +303,28 @@ class OfflineForgetHelperTests(unittest.TestCase):
         self.assertEqual(3, forget.waiting_count(["3 forgotten notes waiting for the server"]))
         self.assertIsNone(forget.waiting_count(["Your notes", "Beta list note"]))
 
+    def test_waiting_count_ignores_banner_text_that_merely_contains_the_phrase(self):
+        banner = "Note hidden on this device. 1 forgotten note waiting for the server."
+        self.assertIsNone(forget.waiting_count([banner]))
+        self.assertTrue(forget.online_summary([self.DELETE], self.LIST + [banner])["online_waiting_gone"])
+
     def test_offline_summary(self):
         got = forget.offline_summary([], ["1 forgotten note waiting for the server"])
         self.assertEqual({"offline_waiting_count": 1, "offline_deletes": 0, "offline_row_hidden": True}, got)
         self.assertFalse(forget.offline_summary([], ["Beta list note"])["offline_row_hidden"])
         self.assertEqual(1, forget.offline_summary([self.DELETE], [])["offline_deletes"])
 
+    LIST = ["Your notes", "The notes on your server. This list is only kept while this screen is open."]
+
+    def test_waiting_gone_is_not_vacuous_when_the_list_is_not_on_screen(self):
+        self.assertFalse(forget.online_summary([self.DELETE], ["Write or import a note", "Your notes"])["online_waiting_gone"])
+        self.assertFalse(forget.online_summary([self.DELETE], [])["online_waiting_gone"])
+        self.assertTrue(forget.online_summary([self.DELETE], self.LIST)["online_waiting_gone"])
+        self.assertFalse(forget.online_summary([self.DELETE], self.LIST + ["1 forgotten note waiting for the server"])["online_waiting_gone"])
+
     def test_online_summary_counts_only_this_documents_deletes(self):
         other = {**self.DELETE, "path": "/api/v1/notes/5eed0000-0000-4000-8000-0000000000a1"}
-        self.assertEqual({"online_deletes": 1, "online_waiting_gone": True}, forget.online_summary([self.DELETE, other], ["Your notes"]))
+        self.assertEqual({"online_deletes": 1, "online_waiting_gone": True}, forget.online_summary([self.DELETE, other], self.LIST))
         self.assertFalse(forget.online_summary([self.DELETE], ["1 forgotten note waiting for the server"])["online_waiting_gone"])
 
     def test_scenario_verdict_needs_every_part(self):
