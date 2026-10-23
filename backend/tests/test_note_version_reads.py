@@ -78,6 +78,7 @@ def test_note_text_returns_stored_text_no_store(client, factory, settings):
     response = client.get(f"{API}/notes/{v1}/text")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
     assert response.json() == {
         "document_id": v1,
         "title": "My note",

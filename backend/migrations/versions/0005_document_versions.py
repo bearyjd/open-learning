@@ -52,6 +52,13 @@ def downgrade():
     if pending:
         # Older code would import them as separate notes beside the version they replace.
         raise RuntimeError("Finish or fail queued or running note edit jobs before downgrading below 0005")
+    retained = bind.execute(sa.text(
+        "SELECT COUNT(*) FROM jobs WHERE kind = 'note' AND replaces_document_id IS NOT NULL "
+        "AND status = 'failed' AND payload_text IS NOT NULL"
+    )).scalar()
+    if retained:
+        # Older code would retry them as separate notes beside the version they replace.
+        raise RuntimeError("Delete failed note edit jobs that still hold text before downgrading below 0005")
     op.drop_index("ix_jobs_replaces_document_id", table_name="jobs")
     op.drop_index("ix_documents_note_id", table_name="documents")
     with op.batch_alter_table("documents") as batch:

@@ -202,6 +202,11 @@ def test_0005_document_versions_roundtrip(database_url):
     assert "edit jobs" in refused.stdout + refused.stderr
 
     run(engine, "UPDATE jobs SET status = 'failed' WHERE id = 'je'")
+    refused = alembic(database_url, "downgrade", "0004")
+    assert refused.returncode != 0  # Older code would retry it as a separate note.
+    assert "failed note edit jobs" in refused.stdout + refused.stderr
+
+    run(engine, "UPDATE jobs SET payload_title = NULL, payload_text = NULL WHERE id = 'je'")
     ok(database_url, "downgrade", "0004")
     columns = {column["name"] for column in inspect(engine).get_columns("documents")}
     assert columns.isdisjoint({"version", "replaces_document_id", "superseded", "note_id"})

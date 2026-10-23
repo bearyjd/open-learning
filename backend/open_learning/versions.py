@@ -23,7 +23,7 @@ from .models import Document, Source
 
 NOTE_CONFLICT = "This text matches another note or version; change it or forget that note first"
 NOTE_STALE = "This note was changed or forgotten; edit its latest version"
-NO_STORE = {"Cache-Control": "no-store"}
+NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
 class NoteConflict(Exception):

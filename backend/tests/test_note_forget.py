@@ -159,11 +159,14 @@ def test_matching_jobs_cancelled_and_payload_cleared_others_untouched(client, fa
     failed_note_job(factory, NOTE, "same-failed")
     failed_note_job(factory, NOTE, "same-queued", status="queued")
     failed_note_job(factory, OTHER, "other-failed")
+    with factory.begin() as db:
+        db.get(Job, "same-failed").error = "Model unavailable"
     assert client.delete(f"{API}/notes/{doc}").status_code == 204
     with factory() as db:
-        for job_id in ("same-failed", "same-queued"):
+        expected = {"same-failed": ("failed", "Model unavailable"), "same-queued": ("cancelled", "Note deleted")}
+        for job_id, outcome in expected.items():
             job = db.get(Job, job_id)
-            assert (job.status, job.error) == ("cancelled", "Note deleted")
+            assert (job.status, job.error) == outcome  # A finished job keeps its outcome.
             assert job.payload_text is job.payload_title is job.payload_label is None
             assert job.lease_token is None and job.lease_until is None
         other = db.get(Job, "other-failed")

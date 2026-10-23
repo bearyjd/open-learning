@@ -186,9 +186,10 @@ def _cancel_matching_jobs(db: Session, content_hashes: set[str], document_ids: s
             continue  # Purged while we waited for the lock.
         if not is_edit and _hash(job.payload_text) not in content_hashes:
             continue
-        job.status, job.error = "cancelled", "Note deleted"
         job.payload_title = job.payload_text = job.payload_label = None
-        job.lease_token = job.lease_until = None
+        if job.status in PENDING_STATUSES:  # A failed or cancelled job keeps its outcome.
+            job.status, job.error = "cancelled", "Note deleted"
+            job.lease_token = job.lease_until = None
 
 
 def _delete_linked_jobs(db: Session, document_ids: set[str]) -> None:

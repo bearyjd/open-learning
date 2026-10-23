@@ -99,14 +99,27 @@ superseded. A retry POST sent after the new version is published still gets 409,
 the version it names is no longer the latest.
 
 `GET /api/v1/notes/{id}/text` returns `document_id`, `title`, `label`, `version` and
-`text` for any note version, with `Cache-Control: no-store` (also on its 404). It
-returns 404 for article documents.
+`text` for any note version, with `Cache-Control: no-store` and `Pragma: no-cache`
+(also on its 404). It returns 404 for article documents.
+
+Edits orphan the old version's study state: saved items, review items and tutor history
+stay attached to the superseded version's insights, which are hidden, and are not carried
+over to the new version's insights. Whether to migrate them is a product decision that is
+still pending; today an edit effectively resets saves and reviews for that note.
+
+Forget keeps the outcome of a job that already finished: a failed or cancelled job whose
+text matches (or an unfinished-edit job of a forgotten version that has already failed)
+keeps its status and error but has its title, text and label cleared; only queued and
+running jobs become `cancelled`.
 
 Additive response fields: `NoteOutput.version`, `.replaces_document_id`,
 `.superseded`; `InsightOutput.source_version` and `Citation.source_version` (1 for
 articles and unedited notes); `replaces_document_id` on job responses and the note job
-list. Migration 0005 adds `documents.version` (default 1), `documents.replaces_document_id`
-and `documents.superseded` (default false). Its downgrade refuses while superseded
-versions or queued/running edit jobs exist, because older code would show hidden
-versions again or import edits as separate notes. A failed edit job that survives a
-downgrade would import as a separate note if retried on older code.
+list. Migration 0005 adds `documents.version` (default 1), `documents.replaces_document_id`,
+`documents.superseded` (default false) and `documents.note_id` (backfilled to the
+document's own id), plus indexes on `documents.note_id` and `jobs.replaces_document_id`.
+Its downgrade refuses while superseded versions, queued/running edit jobs, or failed edit
+jobs that still hold text exist, because older code would show hidden versions again or
+import edits as separate notes. Upgrading again after a downgrade resets lineage: every
+document becomes its own root (`note_id = id`), which is harmless because the downgrade
+only succeeds when no superseded version exists.
