@@ -211,6 +211,18 @@ def _delete_linked_jobs(db: Session, document_ids: set[str]) -> None:
         db.delete(job)
 
 
+def _unlink_replaced(db: Session, document_ids: set[str]) -> None:
+    """Clear forgotten ids from edit jobs that remain (finished, failed or just cancelled)."""
+    jobs = db.scalars(
+        select(Job)
+        .where(Job.kind == "note", Job.replaces_document_id.in_(document_ids))
+        .order_by(Job.id)
+        .with_for_update()
+    ).all()
+    for job in jobs:
+        job.replaces_document_id = None
+
+
 def _lock_graph(db: Session, document_ids: set[str]) -> None:
     insight_ids = select(Insight.id).where(Insight.document_id.in_(document_ids))
     db.execute(
@@ -321,6 +333,7 @@ def forget_note(db: Session, document_id: str, version_only: bool = False) -> No
         _refuse_partial_forget(db, document_id, note_key)
     _cancel_matching_jobs(db, {row[2] for row in rows}, ids)
     _delete_linked_jobs(db, ids)
+    _unlink_replaced(db, ids)
     _lock_graph(db, ids)
     for id_, source_id, _ in rows:
         _delete_graph(db, id_, source_id)

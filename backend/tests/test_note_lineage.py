@@ -206,3 +206,26 @@ def test_overlapping_whole_note_forgets_with_a_publish_do_not_deadlock_on_postgr
     assert fired == {"a", "worker"}
     assert results["a"] == 204 and results["b"] in (204, 404), results
     assert note_documents(factory) == set()
+
+
+def test_forget_clears_forgotten_ids_from_edit_jobs(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    publishing = edit(client, v1).json()["id"]
+    stale = edit(client, v1, EDITED + MARKER).json()["id"]
+    from test_note_versions import run_job
+
+    run_job(factory, settings)
+    run_job(factory, settings)  # The second edit of v1 fails stale.
+    with factory() as db:
+        v2 = db.get(Job, publishing).document_id
+    pending = edit(client, v2, EDITED_AGAIN).json()["id"]
+    assert client.delete(f"{API}/notes/{v1}", params={"version_only": True}).status_code == 204
+    with factory() as db:
+        assert db.get(Job, publishing).replaces_document_id is None  # Completed, v1 forgotten.
+        assert db.get(Job, stale).replaces_document_id is None  # Failed edit of v1.
+        assert db.get(Job, pending).replaces_document_id == v2  # v2 still exists.
+    assert client.delete(f"{API}/notes/{v2}").status_code == 204
+    with factory() as db:
+        job = db.get(Job, pending)
+        assert (job.status, job.replaces_document_id) == ("cancelled", None)
+        assert db.scalar(select(Job.id).where(Job.replaces_document_id.is_not(None))) is None

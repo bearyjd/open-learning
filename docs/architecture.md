@@ -75,7 +75,9 @@ Every version carries a lineage id, `documents.note_id`: the root version's id, 
 to each new version. **`DELETE /api/v1/notes/{id}` with any version's id forgets the
 whole note**: every version in the lineage, their insights, saved items, reviews and
 tutor history, their linked jobs, and unfinished edit jobs of any version (cancelled,
-text cleared), in one transaction that locks the versions in id order. A version
+text cleared), in one transaction that locks the versions in id order. Edit jobs that
+remain (cancelled, failed, or completed on a version that is kept) have the forgotten id
+cleared from `replaces_document_id`, so job metadata keeps no forgotten ids. A version
 published while the forget waits for those locks is found by a second pass and forgotten
 too. Forgets of one note are serialised by a transaction-scoped PostgreSQL advisory lock on
 the lineage id, taken before any document lock, so two overlapping forgets cannot deadlock
