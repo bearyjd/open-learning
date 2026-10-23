@@ -767,3 +767,27 @@ fixed; the third raised only the stale-response gap above. Static review only, n
 
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
+
+## E2b-4 note versions (backend only)
+
+Run on SQLite and on a disposable `pgvector/pgvector:pg16` container with a separate migration
+database, as CI does: `ruff check .`, `alembic upgrade head`, `alembic check`, downgrade to 0002 and
+back, and the full pytest suite. New tests: `tests/test_note_versions.py` (edit creates a linked version
+and supersedes the old one, version chain, submitted title/label, malformed/unknown/article/superseded
+ids, unchanged text, edit to another note's or an old version's text, plain ingest matching a superseded
+version, dedupe against the current version, two queued edits of one version, forget cancelling a pending
+edit, forget of the latest version not resurrecting the previous one, forget of an old version, list
+fields, job list field), `tests/test_note_version_reads.py` (feed including today's cached feed, library,
+search and due reviews hide superseded insights; superseded insight still readable by id; `source_version`
+on insights and tutor citations; note text endpoint with `no-store`, 404s and auth; forget committed while
+the edit's model call runs) and `test_0005_document_versions_roundtrip` in `tests/test_migrations.py`.
+Four existing exact-shape tests were widened for the additive fields.
+
+NOT verified:
+
+- No true concurrent (threaded) PostgreSQL race test for two edit workers or edit versus forget; the lock
+  order is reasoned about (replaced document, job, source) and the interleavings are tested sequentially.
+- Android does not use any of this yet. Gson ignores unknown fields, so the additive fields should not
+  break the current app, but no Android build or device run was done for this slice.
+- The forget path now locks note jobs in three passes (hash matches, edit jobs, linked completed jobs),
+  each ordered by id but not globally ordered; the pre-existing two-pass pattern had the same shape.

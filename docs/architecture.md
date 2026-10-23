@@ -24,8 +24,8 @@ publish path. A note is a `Source` of kind `note`, keyed internally by `note:`
 plus the SHA-256 of its normalized text, so identical text is imported once (the
 first title and label win and a repeat makes no model call), while different text
 under the same title becomes a separate source. API responses expose
-`source_kind` and `source_label`, and `source_url` is empty for notes. Notes have
-no edit, version or delete support yet. Downgrading migration 0003 needs the API
+`source_kind` and `source_label`, and `source_url` is empty for notes. Note
+forgetting, metadata edit and versions are described below. Downgrading migration 0003 needs the API
 and worker stopped; it discards failed-note text and labels (retry then returns
 409) and leaves `note:<sha256>` keys visible as `source_url` to older code.
 Model errors become retryable failed jobs rather than fabricated fallback cards.
@@ -47,3 +47,48 @@ document provenance or the review API.
 See [future adapters](../integrations/README.md) for Kobo/Libby boundaries. The
 database includes extension points for topics, collections, preferences, and
 embeddings; schema presence alone does not imply complete user-facing features.
+
+## Note versions (E2b-4)
+
+Editing a note's text creates a new version; old versions are kept, not destroyed.
+The client resubmits through `POST /api/v1/ingest/text` with the usual `title`,
+`text` and optional `label` plus `replaces_document_id` (a UUID). The same body cap
+(413), pending-job cap (429), validation and no-echo rules apply. The API rejects an
+unknown or non-note id (404), a superseded version (409, only the latest version can
+be edited) and normalized text identical to the replaced version (422). The job is
+queued with `jobs.replaces_document_id`. When it completes, the new document gets
+`version` N+1 and `replaces_document_id`, and the replaced document is marked
+`superseded` in the same transaction (lock order: replaced document, job, source).
+
+Superseded versions keep their text and derived insights but are hidden from the
+feed (including today's cached feed), library, search, due reviews and
+`GET /api/v1/notes`. `GET /api/v1/notes?include_superseded=true` lists them. A
+superseded insight stays readable by id. `superseded` is a stored flag, not derived
+from "has a successor". Each version is forgotten on its own with
+`DELETE /api/v1/notes/{id}`. **Forgetting the latest version does not make the
+previous version current again**: it stays superseded and hidden until it is forgotten
+too. That is the privacy-safe choice: text the user replaced never comes back by
+itself. Forgetting a version also cancels unfinished edit jobs that would replace it
+and clears their text. A newer version's `replaces_document_id` may then point to a
+forgotten id; it is a plain id without a foreign key.
+
+Note keys are content hashes, so text identical to any existing note document
+(current or superseded, the same note or another) cannot become a version. An edit to
+such text, or a plain ingest whose text matches a superseded version, fails with the
+fixed error "This text matches another note or version; change it or forget that note
+first". A plain ingest matching a current note still deduplicates as before. Two edits
+of the same version both queue; the first to complete wins and the other fails with
+"This note was changed or forgotten; edit its latest version".
+
+`GET /api/v1/notes/{id}/text` returns `document_id`, `title`, `label`, `version` and
+`text` for any note version, with `Cache-Control: no-store` (also on its 404). It
+returns 404 for article documents.
+
+Additive response fields: `NoteOutput.version`, `.replaces_document_id`,
+`.superseded`; `InsightOutput.source_version` and `Citation.source_version` (1 for
+articles and unedited notes); `replaces_document_id` on job responses and the note job
+list. Migration 0005 adds `documents.version` (default 1), `documents.replaces_document_id`
+and `documents.superseded` (default false). Its downgrade refuses while superseded
+versions or queued/running edit jobs exist, because older code would show hidden
+versions again or import edits as separate notes. A failed edit job that survives a
+downgrade would import as a separate note if retried on older code.
