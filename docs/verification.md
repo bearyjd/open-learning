@@ -765,6 +765,24 @@ write epoch recorded when a request starts and compared when its result is store
 Codex review status: three adversarial passes ran on the final design (fc4b5a5, 56057a4, b8eea31). Findings from the first two were
 fixed; the third raised only the stale-response gap above. Static review only, no device and no Android runtime run by Codex.
 
+### E2b-3 device re-run after the tombstone change (2026-10-22, one run, no retries)
+
+Instrumented suite: 72 tests run, 4 failed: three `ForgetQueueAcceptanceTest` cases (restart, 401-retry, 5xx) and
+`NoteAcceptanceTest.offlineForgetHidesNowThenDeletesOnReconnect`. Script `scripts/android_notes.py`: exit 1 with
+`online_waiting_gone` false and `list_forgotten_message` false. Diagnosis (static, read-only agent, high confidence): stale tests and
+script, not app bugs. Since 8f8467b a successful delete leaves a CONFIRMED `PendingForget` tombstone (7-day TTL), so the tests that
+waited for `forgets().isEmpty()` could never pass, and the script matched the waiting phrase inside the forget banner and waited
+for the removed "Note forgotten" text. The 404 case (`a404CountsAsSuccess`) was not among the device failures; it was changed the
+same way as a precaution, because it had the same stale wait.
+
+Fixes (code only, NOT re-run on a device): those waits now expect `[FORGET_CONFIRMED]`; the 5xx test switches the fixture to 204 only
+after the first 503 was served, then waits for a second DELETE; `ListFixture` records a 404 DELETE as deleted so the 404 check sees
+the note gone; the script matches the whole live waiting line only (and only on a dump that shows the list), waits for the DELETE
+before counting it, and requires "Note hidden on this device". The forget banner no longer embeds a waiting count (it went stale).
+It still tells the person when earlier forgets failed ("N forgotten notes could not be deleted. Retry from Your notes."), because
+failed rows need manual action; they stay visible, with Retry and Stop trying, only inside Your notes. Offline forget is not yet
+re-verified on a device after these fixes.
+
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
 

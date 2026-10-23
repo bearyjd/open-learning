@@ -185,6 +185,14 @@ def list_summary(log, texts, forgotten="5eed0000-0000-4000-8000-0000000000a1", k
             "list_other_row_remains": any(kept_title in x for x in texts), "list_forgotten_row_gone": gone(texts)}
 
 
+def wait_for_deletes(read_log, doc, minimum=1, timeout=30.0, gap=1.0, clock=time.time, sleep=time.sleep):
+    """Poll the mock log until [minimum] DELETEs for [doc] arrived or [timeout] passes; the worker sends after the local enqueue."""
+    end = clock() + timeout
+    while count_requests(read_log(), "DELETE", "/api/v1/notes/" + doc) < minimum and clock() < end:
+        sleep(gap)
+    return count_requests(read_log(), "DELETE", "/api/v1/notes/" + doc)
+
+
 STATE = {"log": [], "text_status": 200, "list_deleted": set(), "offline": False, "done": False, "rate_limit_once": False, "retried": False, "dropped": []}
 LOCK = threading.Lock()
 
@@ -536,8 +544,9 @@ def run_notes_list(dev, results):
     dev.tap(r"^Forget\|")  # the first row is the newest note
     dev.wait_for("Forget this note")
     dev.tap_last(r"^Forget\|")
-    results["list_forgotten_message"] = dev.wait_for("Note forgotten")
+    results["list_forgotten_message"] = dev.wait_for("Note hidden on this device")
     texts = dev.texts(dev.dump("04c-notes-list-after-forget"))
+    wait_for_deletes(mock_log, "5eed0000-0000-4000-8000-0000000000a1")
     results.update(list_summary(mock_log(), texts))
     dev.tap(r"^Close\|")
     dev.wait_for("Write or import a note")
@@ -548,6 +557,7 @@ def scenarios_pass(results) -> bool:
                 and results.get("submit_shows_note_card") and results.get("no_link_nodes_on_list")
                 and results.get("no_link_nodes_on_detail") and results.get("forget_cancel_deletes") == 0
                 and results.get("forget_confirm_deletes") == 1 and results.get("list_rows_shown")
+                and results.get("list_forgotten_message")
                 and results.get("list_forget_deletes") == 1 and results.get("list_other_deletes") == 0
                 and results.get("list_other_row_remains") and results.get("list_forgotten_row_gone") and results.get("413_message")
                 and results.get("sentinel_body_in_ui") is False
@@ -616,8 +626,9 @@ def main():
         results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
         dev.tap("Forget this note")
         dev.tap(r"^Forget\|")
-        dev.wait_for("Note forgotten")
+        dev.wait_for("Note hidden on this device")
         dev.dump("04-after-forget")
+        wait_for_deletes(mock_log, "5eed0000-0000-4000-8000-00000000000c")
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
 
         run_notes_list(dev, results)

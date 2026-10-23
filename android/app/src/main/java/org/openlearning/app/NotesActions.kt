@@ -56,11 +56,9 @@ internal class NotesActions(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { ForgetResult.Failed(error) }
 
-    /** The outcome plus the queue state (waiting and failed counts, ids only) read from Room. */
-    private suspend fun banner(repository: LearningRepository, result: ForgetResult): String {
-        val scopeKey = repository.config.scope
-        return forgetBanner(result, queue.pendingForgetCount(scopeKey).first(), queue.failedForgets(scopeKey).first().size)
-    }
+    /** The outcome plus guidance for failed forgets (a count only, read from Room at forget time). */
+    private suspend fun banner(repository: LearningRepository, result: ForgetResult): String =
+        forgetBanner(result, queue.failedForgets(repository.config.scope).first())
 
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
