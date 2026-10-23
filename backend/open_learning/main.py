@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select, text
@@ -53,7 +53,7 @@ from .services import (
     today_feed,
     tutor_chat,
 )
-from .topics_api import TopicReadPrivacyMiddleware, mount_topics, private_topic_read
+from .topics_api import TopicPrivacyMiddleware, mount_topics, private_topic_request
 from .versions import NO_STORE, current_documents, lock_current, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
@@ -82,6 +82,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        redirect_slashes=False,
     )
 
     def body_limit(scope) -> int:
@@ -93,12 +94,21 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         return DEFAULT_BODY_LIMIT
 
     app.add_middleware(BodyLimitMiddleware, limit=body_limit)
-    app.add_middleware(TopicReadPrivacyMiddleware)
+    app.add_middleware(TopicPrivacyMiddleware)
+
+    @app.exception_handler(Exception)
+    async def server_error(request: Request, exc: Exception):
+        # ServerErrorMiddleware sends this outside user middleware; keep its generic body.
+        return PlainTextResponse(
+            "Internal Server Error",
+            status_code=500,
+            headers=NO_STORE if private_topic_request(request.scope) else None,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         # Never echo submitted request bodies back (notes carry private text).
-        private_query = private_topic_read(request.scope)
+        private_query = private_topic_request(request.scope)
         errors = [
             {k: v for k, v in e.items() if k not in {"input", "ctx"}}
             if e["loc"][:1] == ("body",) or private_query else e
@@ -150,7 +160,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         except RowVanished as error:
             raise HTTPException(404, "Not found") from error
 
-    api = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)])
+    api = APIRouter(prefix="/api/v1", dependencies=[Depends(authenticate)], redirect_slashes=False)
 
     @app.get("/health")
     def health():

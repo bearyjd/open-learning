@@ -13,6 +13,149 @@ from test_topics import API, candidates
 
 from open_learning.models import DiscoveredItem
 
+PRIVATE_QUERY_MARKER = "private-query-marker"
+PRIVATE_PATHS = (
+    "/topics",
+    "/topics/pinned",
+    "/topics/pinned/missing",
+    "/topics/unknown",
+    "/topics/unknown/deep",
+    "/discover",
+    "/discover/missing/ingest",
+    "/discover/missing/dismiss",
+    "/discover/unknown",
+    "/discover/unknown/deep",
+)
+
+
+def assert_private_response(response):
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert response.headers.get("Pragma") == "no-cache"
+    assert not response.is_redirect
+    assert "Location" not in response.headers
+    assert PRIVATE_QUERY_MARKER not in response.text
+    assert all(PRIVATE_QUERY_MARKER not in value for value in response.headers.values())
+
+
+@pytest.mark.parametrize("root_path", ["", "/ol"])
+@pytest.mark.parametrize("authenticated", [True, False])
+@pytest.mark.parametrize(
+    "method", ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"]
+)
+def test_private_namespace_method_path_matrix(client, root_path, authenticated, method):
+    matching_methods = {
+        "/topics": "GET",
+        "/topics/pinned": "POST",
+        "/topics/pinned/missing": "DELETE",
+        "/discover": "GET",
+        "/discover/missing/ingest": "POST",
+        "/discover/missing/dismiss": "POST",
+    }
+    authenticated_statuses = {
+        "/topics": 200,
+        "/topics/pinned": 422,
+        "/topics/pinned/missing": 404,
+        "/discover": 422,
+        "/discover/missing/ingest": 404,
+        "/discover/missing/dismiss": 404,
+    }
+    with TestClient(client.app, root_path=root_path) as mounted:
+        for path in PRIVATE_PATHS:
+            for slash in ("", "/"):
+                response = mounted.request(
+                    method,
+                    root_path + API + path + slash,
+                    params={"cursor": PRIVATE_QUERY_MARKER},
+                    headers={"Authorization": "Bearer " + TOKEN if authenticated else ""},
+                    follow_redirects=False,
+                )
+                if slash or path not in matching_methods:
+                    expected = 404
+                elif method != matching_methods[path]:
+                    expected = 405
+                else:
+                    expected = authenticated_statuses[path] if authenticated else 401
+                assert response.status_code == expected, (
+                    method,
+                    root_path + API + path + slash,
+                    authenticated,
+                    response.text,
+                )
+                assert_private_response(response)
+
+
+@pytest.mark.parametrize("root_path", ["", "/ol"])
+@pytest.mark.parametrize(
+    "module,attribute,method,path",
+    [
+        ("topics_api", "profile", "GET", "/topics"),
+        ("discovery_api", "profile", "GET", "/discover"),
+        ("discovery_api", "_lock_item", "POST", "/discover/missing/ingest"),
+        ("discovery_api", "_lock_item", "POST", "/discover/missing/dismiss"),
+    ],
+)
+def test_private_unhandled_failures_are_generic_no_store(
+    client, monkeypatch, root_path, module, attribute, method, path
+):
+    from importlib import import_module
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(PRIVATE_QUERY_MARKER)
+
+    monkeypatch.setattr(import_module("open_learning." + module), attribute, fail)
+    with TestClient(client.app, root_path=root_path, raise_server_exceptions=False) as mounted:
+        response = mounted.request(
+            method,
+            root_path + API + path,
+            params={"cursor": PRIVATE_QUERY_MARKER},
+            headers={"Authorization": "Bearer " + TOKEN},
+        )
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    assert_private_response(response)
+
+
+@pytest.mark.parametrize("root_path", ["", "/ol"])
+@pytest.mark.parametrize("path", PRIVATE_PATHS)
+def test_private_oversized_body_is_no_store(client, path, root_path):
+    from open_learning.main import DEFAULT_BODY_LIMIT
+
+    with TestClient(client.app, root_path=root_path) as mounted:
+        response = mounted.post(
+            root_path + API + path,
+            params={"cursor": PRIVATE_QUERY_MARKER},
+            headers={"Content-Length": str(DEFAULT_BODY_LIMIT + 1)},
+            content=b"{}",
+        )
+    assert response.status_code == 413
+    assert_private_response(response)
+
+
+def test_all_api_routers_disable_slash_redirects(client, monkeypatch, factory, settings):
+    from open_learning import main
+
+    routers = []
+    original_router = main.APIRouter
+
+    def record_router(*args, **kwargs):
+        router = original_router(*args, **kwargs)
+        routers.append(router)
+        return router
+
+    monkeypatch.setattr(main, "APIRouter", record_router)
+    app = main.create_app(settings, factory)
+    assert app.router.redirect_slashes is False
+    assert routers and all(router.redirect_slashes is False for router in routers)
+    for path in ("/health/", API + "/health/", API + "/feeds/"):
+        response = client.get(path, params={"cursor": PRIVATE_QUERY_MARKER}, follow_redirects=False)
+        assert response.status_code == 404
+        assert "Location" not in response.headers
+        assert PRIVATE_QUERY_MARKER not in response.text
+    for path in ("/health", API + "/health", API + "/feeds"):
+        assert client.get(path).status_code == 200
+        response = client.get(path, headers={"Authorization": ""})
+        assert response.status_code == (200 if path == "/health" else 401)
+
 
 @pytest.mark.parametrize("root_path", ["", "/ol"])
 @pytest.mark.parametrize("authenticated", [True, False])
@@ -61,24 +204,24 @@ def test_pinned_route_errors_are_no_store(client, method, path, status):
 
 
 def test_pin_writes_and_auth_errors_are_no_store(client):
-    response = client.post(API + "/topics/pinned", json={"term": "orchid"})
+    params = {"cursor": PRIVATE_QUERY_MARKER}
+    response = client.post(API + "/topics/pinned", json={"term": "orchid"}, params=params)
     assert response.status_code == 201
     pin_id = response.json()["id"]
-    responses = [response, client.delete(API + "/topics/pinned/" + pin_id)]
+    responses = [response, client.delete(API + "/topics/pinned/" + pin_id, params=params)]
     assert responses[-1].status_code == 204
     for method, path in [("POST", "/topics/pinned"), ("DELETE", "/topics/pinned/missing")]:
-        response = client.request(method, API + path, headers={"Authorization": ""})
+        response = client.request(method, API + path, headers={"Authorization": ""}, params=params)
         assert response.status_code == 401
         responses.append(response)
     for response in responses:
-        assert response.headers.get("Cache-Control") == "no-store"
-        assert response.headers.get("Pragma") == "no-cache"
+        assert_private_response(response)
 
 
 @pytest.mark.parametrize("root_path", ["", "/ol"])
 @pytest.mark.parametrize("path", ["/topics", "/topics/pinned", "/topics/pinned/example"])
 def test_private_cache_middleware_preserves_upstream_message_and_headers(root_path, path):
-    from open_learning.topics_api import TopicReadPrivacyMiddleware
+    from open_learning.topics_api import TopicPrivacyMiddleware
 
     headers = [(b"x-existing", b"preserved")]
     original = {"type": "http.response.start", "status": 200, "headers": headers}
@@ -91,7 +234,7 @@ def test_private_cache_middleware_preserves_upstream_message_and_headers(root_pa
         sent.append(message)
 
     asyncio.run(
-        TopicReadPrivacyMiddleware(upstream)(
+        TopicPrivacyMiddleware(upstream)(
             {
                 "type": "http",
                 "method": "GET",
@@ -113,8 +256,9 @@ def test_private_cache_middleware_preserves_upstream_message_and_headers(root_pa
     assert dict(sent[0]["headers"])[b"cache-control"] == b"no-store"
 
 
-def test_private_cache_middleware_preserves_unrelated_slash_routes():
-    from open_learning.topics_api import TopicReadPrivacyMiddleware
+@pytest.mark.parametrize("path", ["/feeds/", "/topics-extra/", "/discoverable/", "/discovery/"])
+def test_private_cache_middleware_preserves_unrelated_slash_routes(path):
+    from open_learning.topics_api import TopicPrivacyMiddleware
 
     original = {"type": "http.response.start", "status": 307, "headers": [(b"location", b"/feeds")]}
     sent = []
@@ -126,8 +270,8 @@ def test_private_cache_middleware_preserves_unrelated_slash_routes():
         sent.append(message)
 
     asyncio.run(
-        TopicReadPrivacyMiddleware(upstream)(
-            {"type": "http", "method": "GET", "path": API + "/feeds/"}, None, collect
+        TopicPrivacyMiddleware(upstream)(
+            {"type": "http", "method": "GET", "path": API + path}, None, collect
         )
     )
     assert sent == [original] and sent[0] is original
@@ -139,13 +283,11 @@ def test_mounted_private_query_errors_are_redacted_and_no_store(client, root_pat
     with TestClient(client.app, root_path=root_path) as mounted:
         response = mounted.get(
             root_path + API + path,
-            params={parameter: "private-adversarial-marker"},
+            params={parameter: PRIVATE_QUERY_MARKER, "cursor": PRIVATE_QUERY_MARKER},
             headers={"Authorization": "Bearer " + TOKEN},
         )
     assert response.status_code == 422
-    assert "private-adversarial-marker" not in response.text
-    assert response.headers.get("Cache-Control") == "no-store"
-    assert response.headers.get("Pragma") == "no-cache"
+    assert_private_response(response)
 
 
 @pytest.mark.parametrize(
