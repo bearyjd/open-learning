@@ -92,7 +92,8 @@ class ForgetQueueAcceptanceTest {
         fixture.deleteStatus.set(503)
         openList(); waitText("Alpha note")
         forgetFirst()
-        waitUntil { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") >= 1 }
+        // Switch only after the fixture has decided the first 503, otherwise that request could become a success.
+        waitUntil { fixture.deleteStatusesServed.contains(503) }
         assertEquals(listOf(FORGET_PENDING), forgets().map { it.status })
         fixture.deleteStatus.set(204)
         waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.DOC_A}") >= 2 }
