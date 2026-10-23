@@ -175,7 +175,8 @@ def test_forget_original_cancels_pending_edit(client, factory, settings):
 def test_forget_latest_does_not_resurrect_previous(client, factory, settings):
     v1 = import_note(client, factory, settings)
     v2 = edit_and_run(client, factory, settings, v1)
-    assert client.delete(f"{API}/notes/{v2}").status_code == 204
+    only = {"version_only": True}
+    assert client.delete(f"{API}/notes/{v2}", params=only).status_code == 204
     assert client.get(API + "/notes").json() == []
     assert document(factory, v1).superseded is True
     hidden = client.get(API + "/notes", params={"include_superseded": True}).json()
@@ -187,7 +188,7 @@ def test_forget_latest_does_not_resurrect_previous(client, factory, settings):
 def test_forget_old_version_keeps_latest(client, factory, settings):
     v1 = import_note(client, factory, settings)
     v2 = edit_and_run(client, factory, settings, v1)
-    assert client.delete(f"{API}/notes/{v1}").status_code == 204
+    assert client.delete(f"{API}/notes/{v1}", params={"version_only": True}).status_code == 204
     listed = client.get(API + "/notes").json()
     assert [n["document_id"] for n in listed] == [v2]
     assert listed[0]["version"] == 2 and listed[0]["replaces_document_id"] == v1

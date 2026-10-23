@@ -318,7 +318,10 @@ def _publish(
         if on_existing is not None:
             raise on_existing
         return existing
+    document_id = ident()
     document = Document(
+        id=document_id,
+        note_id=document_id if replaces is None else (replaces.note_id or replaces.id),
         source_id=source.id,
         title=title,
         text=text,

@@ -69,13 +69,22 @@ messages, and save, feedback, review answers and the tutor on it answer 404 with
 writing anything. These writers share-lock the document and re-check that it is current
 before locking the insight, so an edit published mid-request cannot slip a write onto the
 superseded version; the tutor re-checks after its model call. `superseded` is a stored flag, not derived
-from "has a successor". Each version is forgotten on its own with
-`DELETE /api/v1/notes/{id}`. **Forgetting the latest version does not make the
-previous version current again**: it stays superseded and hidden until it is forgotten
-too. That is the privacy-safe choice: text the user replaced never comes back by
-itself. Forgetting a version also cancels unfinished edit jobs that would replace it
-and clears their text. A newer version's `replaces_document_id` may then point to a
-forgotten id; it is a plain id without a foreign key.
+from "has a successor".
+
+Every version carries a lineage id, `documents.note_id`: the root version's id, copied
+to each new version. **`DELETE /api/v1/notes/{id}` with any version's id forgets the
+whole note**: every version in the lineage, their insights, saved items, reviews and
+tutor history, their linked jobs, and unfinished edit jobs of any version (cancelled,
+text cleared), in one transaction that locks the versions in id order. A version
+published while the forget waits for those locks is found by a second pass and forgotten
+too. This is a client-facing change from the first E2b-4 draft, where DELETE removed
+one version only: forgetting a note must not silently leave its other versions behind.
+`DELETE /api/v1/notes/{id}?version_only=true` keeps the old per-version behaviour.
+**Forgetting only the latest version does not make the previous version current
+again**: it stays superseded and hidden until it is forgotten too. That is the
+privacy-safe choice: text the user replaced never comes back by itself. A newer
+version's `replaces_document_id` may then point to a forgotten id; it is a plain id
+without a foreign key, and the lineage id keeps working after its root is forgotten.
 
 Note keys are content hashes, so text identical to any existing note document
 (current or superseded, the same note or another) cannot become a version. An edit to

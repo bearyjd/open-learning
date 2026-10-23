@@ -25,6 +25,13 @@ def upgrade():
         "documents",
         sa.Column("superseded", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Lineage key: every version of a note carries the root version's id, so forgetting a note
+    # can forget all of its versions. Existing documents are their own root.
+    op.add_column("documents", sa.Column("note_id", sa.String(36), nullable=True))
+    op.execute("UPDATE documents SET note_id = id")
+    op.create_index("ix_documents_note_id", "documents", ["note_id"])
+    # Forget looks up unfinished edits of a version by the id they replace.
+    op.create_index("ix_jobs_replaces_document_id", "jobs", ["replaces_document_id"])
 
 
 def downgrade():
@@ -45,7 +52,10 @@ def downgrade():
     if pending:
         # Older code would import them as separate notes beside the version they replace.
         raise RuntimeError("Finish or fail queued or running note edit jobs before downgrading below 0005")
+    op.drop_index("ix_jobs_replaces_document_id", table_name="jobs")
+    op.drop_index("ix_documents_note_id", table_name="documents")
     with op.batch_alter_table("documents") as batch:
+        batch.drop_column("note_id")
         batch.drop_column("superseded")
         batch.drop_column("replaces_document_id")
         batch.drop_column("version")

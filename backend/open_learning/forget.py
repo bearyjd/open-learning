@@ -10,7 +10,8 @@ Global lock order (every transaction that takes more than one of these must foll
     4. Insight rows, by id
     5. ReviewItem rows, by id
 
-Per path: forget = 1,2,4,5 then deletes (including the Source); PATCH edit_note = 1,3; worker
+Per path: forget = 1 (every version of the note, see _lock_lineage, or one version with
+version_only),2,4,5 then deletes (including the Sources); PATCH edit_note = 1,3; worker
 dedupe = 1,2; worker note edit (versions.py) = 1 (only the replaced document, never a second
 one),2,3; worker fresh import = 2,3 and never waits for a document (if an identical document
 appears it rolls back and restarts through the dedupe path); retry takes one job, and an edit
@@ -34,7 +35,7 @@ import hashlib
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .config import Settings
@@ -147,52 +148,54 @@ def list_note_jobs(db: Session, limit: int, offset: int) -> list[dict]:
     ]
 
 
-def _matching_job_ids(db: Session, content_hash: str) -> list[str]:
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _matching_job_ids(db: Session, content_hashes: set[str]) -> list[str]:
     rows = db.execute(
         select(Job.id, Job.payload_text).where(Job.kind == "note", Job.payload_text.is_not(None))
     )
-    return [
-        job_id for job_id, text in rows if hashlib.sha256(text.encode()).hexdigest() == content_hash
-    ]
+    return [job_id for job_id, text in rows if _hash(text) in content_hashes]
 
 
-def _edit_job_ids(db: Session, document_id: str) -> list[str]:
-    """Unfinished edits of this version; they carry the new text, so the hash pass misses them."""
+def _edit_job_ids(db: Session, document_ids: set[str]) -> list[str]:
+    """Unfinished edits of these versions; they carry new text, so the hash pass misses them."""
     return list(
         db.scalars(
             select(Job.id).where(
                 Job.kind == "note",
-                Job.replaces_document_id == document_id,
+                Job.replaces_document_id.in_(document_ids),
                 Job.status != "completed",
             )
         )
     )
 
 
-def _cancel_matching_jobs(db: Session, content_hash: str, document_id: str) -> None:
-    """Cancel jobs carrying this text and unfinished edits of this version, in one locked pass."""
-    ids = set(_matching_job_ids(db, content_hash)) | set(_edit_job_ids(db, document_id))
+def _cancel_matching_jobs(db: Session, content_hashes: set[str], document_ids: set[str]) -> None:
+    """Cancel jobs carrying this text and unfinished edits of these versions, in one locked pass."""
+    ids = set(_matching_job_ids(db, content_hashes)) | set(_edit_job_ids(db, document_ids))
     if not ids:
         return
     jobs = db.scalars(select(Job).where(Job.id.in_(ids)).order_by(Job.id).with_for_update())
     for job in jobs:
         if job.status == "completed":
             continue  # Completed while we waited for the lock.
-        is_edit = job.replaces_document_id == document_id
+        is_edit = job.replaces_document_id in document_ids
         if not is_edit and job.payload_text is None:
             continue  # Purged while we waited for the lock.
-        if not is_edit and hashlib.sha256(job.payload_text.encode()).hexdigest() != content_hash:
+        if not is_edit and _hash(job.payload_text) not in content_hashes:
             continue
         job.status, job.error = "cancelled", "Note deleted"
         job.payload_title = job.payload_text = job.payload_label = None
         job.lease_token = job.lease_until = None
 
 
-def _delete_linked_jobs(db: Session, document_id: str) -> None:
-    """Delete completed note jobs that produced this document (null-link jobs are untouched)."""
+def _delete_linked_jobs(db: Session, document_ids: set[str]) -> None:
+    """Delete completed note jobs that produced these documents (null-link jobs are untouched)."""
     jobs = db.scalars(
         select(Job)
-        .where(Job.kind == "note", Job.status == "completed", Job.document_id == document_id)
+        .where(Job.kind == "note", Job.status == "completed", Job.document_id.in_(document_ids))
         .order_by(Job.id)
         .with_for_update()
     ).all()
@@ -200,11 +203,11 @@ def _delete_linked_jobs(db: Session, document_id: str) -> None:
         db.delete(job)
 
 
-def _lock_graph(db: Session, document_id: str) -> None:
-    insight_ids = select(Insight.id).where(Insight.document_id == document_id)
+def _lock_graph(db: Session, document_ids: set[str]) -> None:
+    insight_ids = select(Insight.id).where(Insight.document_id.in_(document_ids))
     db.execute(
         select(Insight.id)
-        .where(Insight.document_id == document_id)
+        .where(Insight.document_id.in_(document_ids))
         .order_by(Insight.id)
         .with_for_update()
     ).all()
@@ -229,22 +232,61 @@ def _delete_graph(db: Session, document_id: str, source_id: str) -> None:
     db.execute(delete(Source).where(Source.id == source_id))
 
 
-def forget_note(db: Session, document_id: str) -> None:
-    """Hard-delete a note document and everything derived from it in one transaction."""
-    locked = db.execute(
-        select(Document.source_id, Document.content_hash)
+def _lock_note_documents(db: Session, *where) -> list:
+    """Lock matching note documents in id order; rows are (id, source_id, content_hash)."""
+    return db.execute(
+        select(Document.id, Document.source_id, Document.content_hash)
+        .join(Source, Source.id == Document.source_id)
+        .where(Source.kind == "note", *where)
+        .order_by(Document.id)
+        .with_for_update(of=Document)
+    ).all()
+
+
+def _lock_lineage(db: Session, note_id: str) -> list:
+    """Lock every version of a note, re-selecting until no newer version appears.
+
+    Under READ COMMITTED a version committed while we waited (an edit that held the version it
+    replaced) is missing from the first result, so we select again and lock the new ids. That
+    later pass can lock a lower id after a higher one; it cannot deadlock because lineage forget
+    is the only path that ever holds more than one document row.
+    """
+    held: dict[str, tuple] = {}
+    lineage = or_(Document.note_id == note_id, Document.id == note_id)
+    while True:
+        rows = _lock_note_documents(db, lineage, Document.id.not_in(list(held)))
+        if not rows:
+            return list(held.values())
+        held.update({row[0]: tuple(row) for row in rows})
+
+
+def forget_note(db: Session, document_id: str, version_only: bool = False) -> None:
+    """Hard-delete a note and everything derived from it in one transaction.
+
+    By default every version of the note (its lineage) is forgotten; version_only forgets just
+    this version and leaves the others as they are.
+    """
+    found = db.execute(
+        select(Document.note_id)
         .join(Source, Source.id == Document.source_id)
         .where(Document.id == document_id, Source.kind == "note")
-        .with_for_update(of=Document)
     ).first()
-    if locked is None:
+    if found is None:
         db.rollback()
         raise HTTPException(404, "Note not found")
-    source_id, content_hash = locked
-    _cancel_matching_jobs(db, content_hash, document_id)
-    _delete_linked_jobs(db, document_id)
-    _lock_graph(db, document_id)
-    _delete_graph(db, document_id, source_id)
+    if version_only:
+        rows = _lock_note_documents(db, Document.id == document_id)
+    else:
+        rows = _lock_lineage(db, found[0] or document_id)
+    ids = {row[0] for row in rows}
+    if document_id not in ids:  # Forgotten between the lookup and the lock.
+        db.rollback()
+        raise HTTPException(404, "Note not found")
+    _cancel_matching_jobs(db, {row[2] for row in rows}, ids)
+    _delete_linked_jobs(db, ids)
+    _lock_graph(db, ids)
+    for id_, source_id, _ in rows:
+        _delete_graph(db, id_, source_id)
     db.commit()
 
 

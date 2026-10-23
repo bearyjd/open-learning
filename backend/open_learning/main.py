@@ -253,8 +253,9 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         }
 
     @api.delete("/notes/{document_id}", status_code=204)
-    def delete_note(document_id: str, db=Depends(database)):
-        forget_note(db, document_id)
+    def delete_note(document_id: str, version_only: bool = False, db=Depends(database)):
+        # Forgets every version of the note unless version_only is set (privacy-safe default).
+        forget_note(db, document_id, version_only)
 
     @api.get("/feed/today", response_model=list[InsightOutput])
     def feed(db=Depends(database)):

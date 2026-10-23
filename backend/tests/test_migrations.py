@@ -176,9 +176,12 @@ def test_0005_document_versions_roundtrip(database_url):
     seed_versioned_notes(engine)
     ok(database_url, "upgrade", "head")
     columns = {column["name"] for column in inspect(engine).get_columns("documents")}
-    assert {"version", "replaces_document_id", "superseded"} <= columns
+    assert {"version", "replaces_document_id", "superseded", "note_id"} <= columns
     row = run(engine, "SELECT version, replaces_document_id, superseded FROM documents WHERE id = 'd1'").one()
     assert (row[0], row[1], bool(row[2])) == (1, None, False)
+    assert run(engine, "SELECT note_id FROM documents WHERE id = 'd1'").scalar() == "d1"
+    assert "ix_documents_note_id" in {i["name"] for i in inspect(engine).get_indexes("documents")}
+    assert "ix_jobs_replaces_document_id" in {i["name"] for i in inspect(engine).get_indexes("jobs")}
     ok(database_url, "check")
 
     run(engine, "INSERT INTO documents (id, source_id, title, text, content_hash, "
@@ -201,9 +204,11 @@ def test_0005_document_versions_roundtrip(database_url):
     run(engine, "UPDATE jobs SET status = 'failed' WHERE id = 'je'")
     ok(database_url, "downgrade", "0004")
     columns = {column["name"] for column in inspect(engine).get_columns("documents")}
-    assert columns.isdisjoint({"version", "replaces_document_id", "superseded"})
+    assert columns.isdisjoint({"version", "replaces_document_id", "superseded", "note_id"})
+    assert "ix_jobs_replaces_document_id" not in {i["name"] for i in inspect(engine).get_indexes("jobs")}
     assert run(engine, "SELECT COUNT(*) FROM documents").scalar() == 1
     ok(database_url, "upgrade", "head")
     assert run(engine, "SELECT version FROM documents WHERE id = 'd2'").scalar() == 1
+    assert run(engine, "SELECT note_id FROM documents WHERE id = 'd2'").scalar() == "d2"
     ok(database_url, "check")
     engine.dispose()

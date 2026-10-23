@@ -146,8 +146,11 @@ endpoint that returns stored note text, on purpose, for any version of a note (c
 superseded) and never for article documents. It sends `Cache-Control: no-store`, including
 on its 404. Editing text creates a new version; the replaced version stays stored but is
 hidden from the feed, library, search, due reviews and the default notes list, and is NOT
-made visible again when the newer version is forgotten. Forget each version separately to
-remove its text. Forgetting a version cancels unfinished edits of it and clears their text.
+made visible again when the newer version is forgotten. `DELETE /api/v1/notes/{id}` forgets
+every version of the note (lineage id `documents.note_id`), including unfinished edit jobs and
+their text; `?version_only=true` forgets one version. An edit request holds the version it
+replaces locked until its job is committed, so a concurrent forget either answers first (the
+edit gets 404) or cancels the new job and clears its text.
 The tutor answers 404 for a superseded insight before any model call, and again (without
 writes) if an edit publishes a newer version while the model runs. Save, feedback and review
 answers on a superseded insight answer 404, and `GET /api/v1/history` omits its tutor messages. An edit or a plain

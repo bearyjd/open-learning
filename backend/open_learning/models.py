@@ -64,6 +64,10 @@ class Document(Base):
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     replaces_document_id: Mapped[str | None] = mapped_column(String(36))
     superseded: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Lineage key shared by every version of a note: the root version's id. Forgetting a note
+    # forgets the whole lineage. Nullable so rows written outside _publish still work (a NULL
+    # lineage is the document on its own).
+    note_id: Mapped[str | None] = mapped_column(String(36), index=True)
 
 
 class Chunk(Base):
@@ -182,7 +186,7 @@ class Job(Base):
     # Set when a note job completes; no foreign key (forget_note deletes linked jobs itself).
     document_id: Mapped[str | None] = mapped_column(String(36), index=True)
     # Set on a note edit: the note version this job's text replaces once it completes.
-    replaces_document_id: Mapped[str | None] = mapped_column(String(36))
+    replaces_document_id: Mapped[str | None] = mapped_column(String(36), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     lease_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

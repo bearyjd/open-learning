@@ -3,9 +3,10 @@
 An edit is a note job with ``replaces_document_id``. When it completes, the new document gets
 ``version`` N+1 and ``replaces_document_id``, and the replaced document is marked
 ``superseded``. Superseded versions keep their text and derived rows but are hidden from the
-feed, library, search, due reviews and the default notes list. Each version is forgotten on its
-own; forgetting the latest version does NOT make the previous one current again (privacy-safe:
-text the user replaced never reappears by itself).
+feed, library, search, due reviews and the default notes list. Every version carries the root
+version's id as ``note_id``; forgetting a note forgets all of its versions unless the caller
+asks for one version only. Forgetting only the latest version does NOT make the previous one
+current again (privacy-safe: text the user replaced never reappears by itself).
 
 Text identical to any existing note document (current or superseded, the same note or another)
 cannot become a version: the note key is its content hash. Such jobs fail with a fixed message.
