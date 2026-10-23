@@ -2,11 +2,13 @@
 
 import uuid
 
+from sqlalchemy import select
 from test_note_forget import count, import_note
 from test_note_version_races import queue_edit
 from test_note_versions import EDITED, MARKER, edit, run_job
 
-from open_learning.models import Document, Job
+from open_learning.models import Document, Job, Source
+from open_learning.notes import NOTE_KEY_PREFIX
 from open_learning.versions import MAX_NOTE_VERSIONS, NOTE_VERSION_LIMIT
 
 API = "/api/v1"
@@ -15,11 +17,14 @@ API = "/api/v1"
 def fill_lineage(factory, v1, total):
     """Give the note rooted at v1 `total` versions; v1 stays the current one."""
     with factory.begin() as db:
-        source_id = db.get(Document, v1).source_id
         for number in range(total - 1):
+            digest = uuid.uuid4().hex + uuid.uuid4().hex  # One source per version, as in _publish.
+            source = Source(url=NOTE_KEY_PREFIX + digest, kind="note", title="old")
+            db.add(source)
+            db.flush()
             db.add(Document(
-                source_id=source_id, title="old", text="old", note_id=v1, superseded=True,
-                content_hash=uuid.uuid4().hex + uuid.uuid4().hex, version=number + 2,
+                source_id=source.id, title="old", text="old", note_id=v1, superseded=True,
+                content_hash=digest, version=number + 2,
             ))
 
 
@@ -59,7 +64,7 @@ def test_worker_fails_an_edit_that_would_exceed_the_cap_and_drops_its_text(
     fill_lineage(factory, v1, MAX_NOTE_VERSIONS)  # Concurrent edits filled it meanwhile.
     run_job(factory, settings)
     with factory() as db:
-        pending = db.scalar(Job.__table__.select().with_only_columns(Job.id))
+        pending = db.scalar(select(Job.id).where(Job.replaces_document_id == v1))
     assert_limit_without_text(factory, pending)
     assert count(factory, Document, Document.note_id == v1) == MAX_NOTE_VERSIONS
 
