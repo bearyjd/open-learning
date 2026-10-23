@@ -30,6 +30,11 @@ def waiting_count(texts):
     return None
 
 
+def list_visible(texts) -> bool:
+    """True only on the notes list: its title and its subtitle (the Discover button alone also says "Your notes")."""
+    return any(t.strip() == "Your notes" for t in texts) and any(t.strip().startswith("The notes on your server") for t in texts)
+
+
 def offline_summary(log, texts) -> dict:
     """After the offline forget: one waiting note, the title gone from the list, and no DELETE has reached the mock."""
     return {"offline_waiting_count": waiting_count(texts), "offline_deletes": deletes_for(log),
@@ -37,8 +42,8 @@ def offline_summary(log, texts) -> dict:
 
 
 def online_summary(log, texts) -> dict:
-    """After reconnecting: exactly one DELETE for the document and no waiting line."""
-    return {"online_deletes": deletes_for(log), "online_waiting_gone": waiting_count(texts) is None}
+    """After reconnecting: exactly one DELETE and no waiting line, on a dump that really shows the list."""
+    return {"online_deletes": deletes_for(log), "online_waiting_gone": list_visible(texts) and waiting_count(texts) is None}
 
 
 def forget_scenario_passes(results) -> bool:
