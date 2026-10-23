@@ -78,10 +78,6 @@ def run_race(factory, hooks, actions):
     return results
 
 
-def locks(statement, table):
-    return "FOR UPDATE" in statement and f"FROM {table}" in statement
-
-
 def test_review_answer_racing_note_delete_no_deadlock_on_postgresql(client, factory, settings):
     require_postgres(factory)
     doc = import_note(client, factory, settings)
@@ -114,7 +110,8 @@ def test_feedback_racing_note_delete_on_postgresql(client, factory, settings):
     results = run_race(
         factory,
         {
-            "feedback": lambda s, p: locks(s, "insights") and insight in p,
+            # Meet at the first (unlocked) insight read, before the document share lock.
+            "feedback": lambda s, p: "FROM insights" in s and insight in p,
             "delete": lambda s, p: "FOR UPDATE OF documents" in s and doc in p,
         },
         {

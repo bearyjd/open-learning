@@ -51,7 +51,7 @@ from .services import (
     today_feed,
     tutor_chat,
 )
-from .versions import NO_STORE, current_documents, lock_replaceable, note_text
+from .versions import NO_STORE, current_documents, lock_current, lock_replaceable, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
 # Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
@@ -119,6 +119,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         if item is None:
             raise HTTPException(404, "Insight not found")
         return item
+
+    def lock_current_insight(db, insight_id):
+        """Lock order document (shared), then insight; superseded versions answer 404."""
+        document_id = db.scalar(select(Insight.document_id).where(Insight.id == insight_id))
+        if document_id is None or not lock_current(db, document_id):
+            raise HTTPException(404, "Insight not found")
+        return find_insight(db, insight_id, lock=True)
 
     def visible(db, items, serialize):
         """Serialize rows, skipping any deleted while the request was running."""
@@ -270,7 +277,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/insights/{insight_id}/save", response_model=InsightOutput)
     def save(insight_id: str, db=Depends(database)):
-        item = find_insight(db, insight_id, lock=True)
+        item = lock_current_insight(db, insight_id)
         if db.get(SavedItem, item.id) is None:
             db.add(SavedItem(insight_id=item.id))
             db.add(Interaction(insight_id=item.id, action="save"))
@@ -283,7 +290,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/insights/{insight_id}/feedback", status_code=204)
     def feedback(insight_id: str, payload: FeedbackInput, db=Depends(database)):
-        item = find_insight(db, insight_id, lock=True)
+        item = lock_current_insight(db, insight_id)
         item.dismissed = True
         db.add(Interaction(insight_id=item.id, action=payload.action))
         db.commit()
@@ -335,10 +342,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
 
     @api.post("/reviews/{review_id}/answer", response_model=ReviewOutput)
     def review_answer(review_id: str, payload: AnswerInput, db=Depends(database)):
-        # Lock order is insight, then review item (see forget.py); a delete holds them in that order.
+        # Lock order is document (shared), insight, then review item (see forget.py).
         insight_id = db.scalar(select(ReviewItem.insight_id).where(ReviewItem.id == review_id))
         if insight_id is None:
             raise HTTPException(404, "Review not found")
+        document_id = db.scalar(select(Insight.document_id).where(Insight.id == insight_id))
+        if document_id is None or not lock_current(db, document_id):
+            raise HTTPException(404, "Review not found")  # Forgotten or superseded.
         if db.scalar(select(Insight.id).where(Insight.id == insight_id).with_for_update()) is None:
             raise HTTPException(404, "Review not found")
         item = db.scalar(select(ReviewItem).where(ReviewItem.id == review_id).with_for_update())
@@ -369,7 +379,16 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
                 "message": item.message,
                 "created_at": item.created_at.isoformat(),
             }
-            for item in db.scalars(select(History).order_by(History.created_at.desc()).limit(200))
+            for item in db.scalars(
+                select(History)
+                .where(
+                    History.insight_id.in_(
+                        select(Insight.id).where(Insight.document_id.in_(current_documents()))
+                    )
+                )
+                .order_by(History.created_at.desc())
+                .limit(200)
+            )
         ]
 
     app.include_router(api)

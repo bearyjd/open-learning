@@ -1,7 +1,7 @@
 """Superseded note versions are hidden from listings; note text and version attribution."""
 
 from conftest import FixtureModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from test_note_forget import NOTE, import_note, url_job
 from test_note_versions import EDITED, MARKER, edit_and_run
 
@@ -144,3 +144,41 @@ def test_tutor_on_superseded_insight_is_404_without_model_call(client, factory, 
         from open_learning.models import History
 
         assert db.scalar(select(History.id)) is None
+
+
+def test_history_hides_tutor_messages_of_superseded_versions(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    (old,) = insight_ids(factory, v1)
+    client.post(API + "/tutor/chat", json={"insight_id": old, "message": "Why?"})
+    assert {h["insight_id"] for h in client.get(API + "/history").json()} == {old}
+    v2 = edit_and_run(client, factory, settings, v1)
+    assert client.get(API + "/history").json() == []
+    (new,) = insight_ids(factory, v2)
+    client.post(API + "/tutor/chat", json={"insight_id": new, "message": "Why?"})
+    assert {h["insight_id"] for h in client.get(API + "/history").json()} == {new}
+
+
+def test_writes_on_superseded_insight_are_404_without_writes(client, factory, settings):
+    from open_learning.models import Interaction, ReviewHistory, ReviewItem, SavedItem
+
+    v1 = import_note(client, factory, settings)
+    (old,) = insight_ids(factory, v1)
+    assert client.post(f"{API}/insights/{old}/save").status_code == 200
+    with factory() as db:
+        review = db.scalar(select(ReviewItem.id).where(ReviewItem.insight_id == old))
+        interactions = db.scalar(select(func.count()).select_from(Interaction))
+    edit_and_run(client, factory, settings, v1)
+    with factory.begin() as db:  # Clear the save so a repeat save would have to write.
+        db.execute(SavedItem.__table__.delete())
+    not_found = {"detail": "Insight not found"}
+    response = client.post(f"{API}/insights/{old}/save")
+    assert (response.status_code, response.json()) == (404, not_found)
+    response = client.post(f"{API}/insights/{old}/feedback", json={"action": "dismiss"})
+    assert (response.status_code, response.json()) == (404, not_found)
+    response = client.post(f"{API}/reviews/{review}/answer", json={"rating": "easy"})
+    assert (response.status_code, response.json()) == (404, {"detail": "Review not found"})
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Interaction)) == interactions
+        assert db.scalar(select(func.count()).select_from(SavedItem)) == 0
+        assert db.scalar(select(func.count()).select_from(ReviewHistory)) == 0
+        assert db.get(Insight, old).dismissed is False

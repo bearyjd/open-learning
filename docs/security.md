@@ -148,7 +148,9 @@ on its 404. Editing text creates a new version; the replaced version stays store
 hidden from the feed, library, search, due reviews and the default notes list, and is NOT
 made visible again when the newer version is forgotten. Forget each version separately to
 remove its text. Forgetting a version cancels unfinished edits of it and clears their text.
-The tutor answers 404 for a superseded insight before any model call. An edit or a plain
+The tutor answers 404 for a superseded insight before any model call, and again (without
+writes) if an edit publishes a newer version while the model runs. Save, feedback and review
+answers on a superseded insight answer 404, and `GET /api/v1/history` omits its tutor messages. An edit or a plain
 import whose text matches an existing version fails with a fixed message that never echoes
 the text; like other failed note jobs it keeps its text until the bounded retention purge.
 

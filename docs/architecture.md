@@ -63,7 +63,12 @@ queued with `jobs.replaces_document_id`. When it completes, the new document get
 Superseded versions keep their text and derived insights but are hidden from the
 feed (including today's cached feed), library, search, due reviews and
 `GET /api/v1/notes`. `GET /api/v1/notes?include_superseded=true` lists them. A
-superseded insight stays readable by id. `superseded` is a stored flag, not derived
+superseded insight stays readable by id (`GET /api/v1/insights/{id}`, kept on purpose so
+an old link or citation still resolves), but `GET /api/v1/history` omits its tutor
+messages, and save, feedback, review answers and the tutor on it answer 404 without
+writing anything. These writers share-lock the document and re-check that it is current
+before locking the insight, so an edit published mid-request cannot slip a write onto the
+superseded version; the tutor re-checks after its model call. `superseded` is a stored flag, not derived
 from "has a successor". Each version is forgotten on its own with
 `DELETE /api/v1/notes/{id}`. **Forgetting the latest version does not make the
 previous version current again**: it stays superseded and hidden until it is forgotten
