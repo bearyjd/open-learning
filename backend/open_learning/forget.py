@@ -11,7 +11,8 @@ Global lock order (every transaction that takes more than one of these must foll
     5. ReviewItem rows, by id
 
 Per path: forget = 1,2,4,5 then deletes (including the Source); PATCH edit_note = 1,3; worker
-dedupe = 1,2; worker fresh import = 2,3 and never waits for a document (if an identical document
+dedupe = 1,2; worker note edit (versions.py) = 1 (only the replaced document, never a second
+one),2,3; worker fresh import = 2,3 and never waits for a document (if an identical document
 appears it rolls back and restarts through the dedupe path); retry and ingest take one job (or
 none) then a transaction-scoped advisory lock that nothing else holds while waiting for rows;
 review_answer, save, feedback and tutor take 4,5 only. No path acquires an earlier-numbered
@@ -62,6 +63,9 @@ def _note_query(*where):
             Source.label,
             Document.created_at,
             func.length(Document.text),
+            Document.version,
+            Document.replaces_document_id,
+            Document.superseded,
         )
         .join(Source, Source.id == Document.source_id)
         .where(Source.kind == "note", *where)
@@ -69,18 +73,24 @@ def _note_query(*where):
 
 
 def _note_dict(row) -> dict:
-    id_, title, label, created_at, chars = row
+    id_, title, label, created_at, chars, version, replaces, superseded = row
     return {
         "document_id": id_,
         "title": title,
         "label": label,
         "created_at": created_at,
         "char_count": chars,
+        "version": version,
+        "replaces_document_id": replaces,
+        "superseded": superseded,
     }
 
 
-def list_notes(db: Session, limit: int = NOTE_LIMIT, offset: int = 0) -> list[dict]:
-    query = _note_query().order_by(Document.created_at.desc(), Document.id.desc())
+def list_notes(
+    db: Session, limit: int = NOTE_LIMIT, offset: int = 0, include_superseded: bool = False
+) -> list[dict]:
+    where = () if include_superseded else (Document.superseded.is_(False),)
+    query = _note_query(*where).order_by(Document.created_at.desc(), Document.id.desc())
     return [_note_dict(row) for row in db.execute(query.limit(limit).offset(offset))]
 
 
@@ -114,15 +124,21 @@ def edit_note(db: Session, document_id: str, changes: dict) -> dict:
 def list_note_jobs(db: Session, limit: int, offset: int) -> list[dict]:
     """Identify note jobs without exposing their text, title, label or error."""
     rows = db.execute(
-        select(Job.id, Job.status, Job.created_at, Job.document_id)
+        select(Job.id, Job.status, Job.created_at, Job.document_id, Job.replaces_document_id)
         .where(Job.kind == "note")
         .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(limit)
         .offset(offset)
     )
     return [
-        {"id": id_, "status": status, "created_at": created, "document_id": document_id}
-        for id_, status, created, document_id in rows
+        {
+            "id": id_,
+            "status": status,
+            "created_at": created,
+            "document_id": document_id,
+            "replaces_document_id": replaces,
+        }
+        for id_, status, created, document_id, replaces in rows
     ]
 
 
@@ -145,6 +161,24 @@ def _cancel_matching_jobs(db: Session, content_hash: str) -> None:
             continue  # Completed or purged while we waited for the lock.
         if hashlib.sha256(job.payload_text.encode()).hexdigest() != content_hash:
             continue
+        job.status, job.error = "cancelled", "Note deleted"
+        job.payload_title = job.payload_text = job.payload_label = None
+        job.lease_token = job.lease_until = None
+
+
+def _cancel_edit_jobs(db: Session, document_id: str) -> None:
+    """Cancel unfinished edits of this version; they carry the new text, so the hash pass misses them."""
+    jobs = db.scalars(
+        select(Job)
+        .where(
+            Job.kind == "note",
+            Job.replaces_document_id == document_id,
+            Job.status != "completed",
+        )
+        .order_by(Job.id)
+        .with_for_update()
+    ).all()
+    for job in jobs:
         job.status, job.error = "cancelled", "Note deleted"
         job.payload_title = job.payload_text = job.payload_label = None
         job.lease_token = job.lease_until = None
@@ -204,6 +238,7 @@ def forget_note(db: Session, document_id: str) -> None:
         raise HTTPException(404, "Note not found")
     source_id, content_hash = locked
     _cancel_matching_jobs(db, content_hash)
+    _cancel_edit_jobs(db, document_id)
     _delete_linked_jobs(db, document_id)
     _lock_graph(db, document_id)
     _delete_graph(db, document_id, source_id)

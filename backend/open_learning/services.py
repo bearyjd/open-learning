@@ -24,6 +24,14 @@ from .models import (
     now,
 )
 from .notes import NOTE_KEY_PREFIX
+from .versions import (
+    NOTE_CONFLICT,
+    NOTE_STALE,
+    NoteConflict,
+    current_documents,
+    is_current,
+    lock_replaced,
+)
 
 
 class RowVanished(LookupError):
@@ -67,6 +75,7 @@ def serialize_insight(db: Session, insight: Insight) -> dict:
         "source_title": document.title,
         **source_fields(source),
         "document_id": document.id,
+        "source_version": document.version,
         "evidence": insight.evidence,
         "tags": insight.tags,
         "saved": db.get(SavedItem, insight.id) is not None,
@@ -109,16 +118,22 @@ def today_feed(db: Session) -> list[dict]:
     candidates = list(
         db.scalars(
             select(Insight)
-            .where(Insight.dismissed.is_(False))
+            .where(Insight.dismissed.is_(False), Insight.document_id.in_(current_documents()))
             .order_by(Insight.created_at.desc())
             .limit(10)
         )
     )
-    valid_ids = [
-        key
-        for key in feed.insight_ids
-        if (item := db.get(Insight, key)) is not None and not item.dismissed
-    ]
+    # Cached ids drop out once dismissed, forgotten, or superseded by a newer note version.
+    keep = set(
+        db.scalars(
+            select(Insight.id).where(
+                Insight.id.in_(feed.insight_ids),
+                Insight.dismissed.is_(False),
+                Insight.document_id.in_(current_documents()),
+            )
+        )
+    )
+    valid_ids = [key for key in feed.insight_ids if key in keep]
     ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:10]
     feed.insight_ids = ids
     db.commit()
@@ -197,7 +212,12 @@ def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) 
         "assessment": result.assessment,
         "review_id": review.id,
         "citations": [
-            {"document_id": document.id, **source_fields(source), "passage": result.evidence}
+            {
+                "document_id": document.id,
+                **source_fields(source),
+                "source_version": document.version,
+                "passage": result.evidence,
+            }
         ],
     }
 
@@ -276,7 +296,7 @@ def _upsert_source(db: Session, key: str, **fields) -> Source:
 
 def _publish(
     db: Session, settings: Settings, source: Source, *, title, text, digest, texts, batch, truncated,
-    on_existing: type[Exception] | None = None,
+    on_existing: type[Exception] | None = None, replaces: Document | None = None,
 ) -> str:
     """Store the document and its insights; return the document id (existing one on a race).
 
@@ -297,7 +317,11 @@ def _publish(
         content_hash=digest,
         extraction_truncated=truncated,
         generation_coverage="excerpt",
+        version=1 if replaces is None else replaces.version + 1,
+        replaces_document_id=None if replaces is None else replaces.id,
     )
+    if replaces is not None:
+        replaces.superseded = True
     db.add(document)
     db.flush()
     chunks = [Chunk(document_id=document.id, position=i, text=part) for i, part in enumerate(texts)]
@@ -321,14 +345,15 @@ def _publish(
     return document.id
 
 
-def _load_note(factory, job_id: str, token: str) -> tuple[str, str, str | None] | None:
+def _load_note(factory, job_id: str, token: str):
+    """Return (title, text, label, replaces_document_id), or None if the lease was lost."""
     with factory() as db:
         job = db.scalar(select(Job).where(Job.id == job_id))
         if job is None or job.status != "running" or job.lease_token != token:
             return None
         if job.payload_text is None or job.payload_title is None:
             raise RuntimeError("Note payload is missing")
-        return job.payload_title, job.payload_text, job.payload_label
+        return job.payload_title, job.payload_text, job.payload_label, job.replaces_document_id
 
 
 def _note_imported(db: Session, key: str, digest: str) -> str | None:
@@ -343,20 +368,28 @@ class _DocumentAppeared(Exception):
     """A matching document was committed after the dedupe check; retry from the lock order."""
 
 
-def _complete_from_existing(db: Session, job_id: str, token: str, key: str, digest: str) -> bool:
+def _complete_from_existing(
+    db: Session, job_id: str, token: str, key: str, digest: str, replaces: str | None
+) -> bool:
     """Complete a note job from an already imported identical note; False means import afresh.
 
     The document is share-locked before the job so a concurrent forget (which holds the document
     first) either finishes before we look, or waits for us and then deletes the job we linked.
+    An edit, or a match on a superseded version, raises NoteConflict instead: the text already
+    exists as a document and cannot become a new version (or silently land on a hidden one).
     """
     existing = _note_imported(db, key, digest)
     if existing is None:
         return False
-    still_there = db.scalar(
-        select(Document.id).where(Document.id == existing).with_for_update(read=True)
+    if replaces is not None:
+        raise NoteConflict(NOTE_CONFLICT)
+    superseded = db.scalar(
+        select(Document.superseded).where(Document.id == existing).with_for_update(read=True)
     )
-    if still_there is None:
+    if superseded is None:
         return False  # Forgotten while we waited for the lock: treat as a fresh import.
+    if superseded:
+        raise NoteConflict(NOTE_CONFLICT)
     if (job := _lease_holder(db, job_id, token)) is not None:
         _complete(job)
         job.document_id = existing
@@ -368,26 +401,33 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
     note = _load_note(factory, job_id, token)
     if note is None:
         return
-    title, text, label = note
+    title, text, label, replaces = note
     digest = hashlib.sha256(text.encode()).hexdigest()
     key = NOTE_KEY_PREFIX + digest
     with factory.begin() as db:
-        if _complete_from_existing(db, job_id, token, key, digest):
+        if _complete_from_existing(db, job_id, token, key, digest, replaces):
             return  # Same content: first import wins, no model call.
+        if replaces is not None and not is_current(db, replaces):
+            raise NoteConflict(NOTE_STALE)  # Fail before spending a model call.
     texts = chunk_text(text)
     batch = (model or ModelClient(settings, factory)).insights(texts[:8])
     for _ in range(2):
         try:
             with factory.begin() as db:
-                if _complete_from_existing(db, job_id, token, key, digest):
+                if _complete_from_existing(db, job_id, token, key, digest, replaces):
                     return  # Another worker imported it while the model ran.
+                # Lock order: the replaced document, then the job, then the source.
+                replaced = lock_replaced(db, replaces) if replaces is not None else None
                 job = _lease_holder(db, job_id, token)
                 if job is None:
-                    return
+                    return  # Cancelled (e.g. its note was forgotten) or lease lost.
+                if replaces is not None and (replaced is None or replaced.superseded):
+                    raise NoteConflict(NOTE_STALE)
                 source = _upsert_source(db, key, kind="note", title=title, label=label)
                 job.document_id = _publish(
                     db, settings, source, title=title, text=text, digest=digest, texts=texts,
                     batch=batch, truncated=False, on_existing=_DocumentAppeared,
+                    replaces=replaced,
                 )
                 _complete(job)
             return

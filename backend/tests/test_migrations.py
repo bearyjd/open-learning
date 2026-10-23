@@ -91,8 +91,8 @@ def test_upgrade_downgrade_roundtrip(database_url):
     refused = alembic(database_url, "downgrade", "0002")
     assert refused.returncode != 0
     assert "note jobs" in refused.stdout + refused.stderr
-    # PostgreSQL rolls the whole run back (still 0004); SQLite keeps the completed 0004 downgrade.
-    expected = "0004" if database_url.startswith("postgresql") else "0003"
+    # PostgreSQL rolls the whole run back (still head); SQLite keeps the completed 0004 downgrade.
+    expected = "0005" if database_url.startswith("postgresql") else "0003"
     assert ok(database_url, "current").stdout.split()[0] == expected
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
 
@@ -158,5 +158,52 @@ def test_0004_job_document_link_roundtrip(database_url):
     ok(database_url, "upgrade", "head")
     assert "ix_jobs_document_id" in {index["name"] for index in inspect(engine).get_indexes("jobs")}
     assert run(engine, "SELECT document_id FROM jobs WHERE id = 'jc'").scalar() is None
+    ok(database_url, "check")
+    engine.dispose()
+
+
+def seed_versioned_notes(engine):
+    run(engine, "INSERT INTO sources (id, url, title, kind, created_at) VALUES "
+        "('sv1', 'note:v1', 'N', 'note', :n), ('sv2', 'note:v2', 'N', 'note', :n)", n=NOW)
+    run(engine, "INSERT INTO documents (id, source_id, title, text, content_hash, "
+        "generation_coverage, extraction_truncated, created_at) VALUES "
+        "('d1', 'sv1', 'N', 'one', 'v1', 'excerpt', false, :n)", n=NOW)
+
+
+def test_0005_document_versions_roundtrip(database_url):
+    engine = create_engine(database_url)
+    ok(database_url, "upgrade", "0004")
+    seed_versioned_notes(engine)
+    ok(database_url, "upgrade", "head")
+    columns = {column["name"] for column in inspect(engine).get_columns("documents")}
+    assert {"version", "replaces_document_id", "superseded"} <= columns
+    row = run(engine, "SELECT version, replaces_document_id, superseded FROM documents WHERE id = 'd1'").one()
+    assert (row[0], row[1], bool(row[2])) == (1, None, False)
+    ok(database_url, "check")
+
+    run(engine, "INSERT INTO documents (id, source_id, title, text, content_hash, "
+        "generation_coverage, extraction_truncated, created_at, version, replaces_document_id) "
+        "VALUES ('d2', 'sv2', 'N', 'two', 'v2', 'excerpt', false, :n, 2, 'd1')", n=NOW)
+    run(engine, "UPDATE documents SET superseded = true WHERE id = 'd1'")
+    refused = alembic(database_url, "downgrade", "0004")
+    assert refused.returncode != 0
+    assert "superseded" in refused.stdout + refused.stderr
+    assert ok(database_url, "current").stdout.split()[0] == "0005"
+
+    run(engine, "DELETE FROM documents WHERE id = 'd1'")
+    run(engine, "INSERT INTO jobs (id, kind, url, status, attempts, payload_title, payload_text, "
+        "replaces_document_id, created_at) VALUES ('je', 'note', NULL, 'queued', 0, 't', 'b', 'd2', :n)",
+        n=NOW)
+    refused = alembic(database_url, "downgrade", "0004")
+    assert refused.returncode != 0
+    assert "edit jobs" in refused.stdout + refused.stderr
+
+    run(engine, "UPDATE jobs SET status = 'failed' WHERE id = 'je'")
+    ok(database_url, "downgrade", "0004")
+    columns = {column["name"] for column in inspect(engine).get_columns("documents")}
+    assert columns.isdisjoint({"version", "replaces_document_id", "superseded"})
+    assert run(engine, "SELECT COUNT(*) FROM documents").scalar() == 1
+    ok(database_url, "upgrade", "head")
+    assert run(engine, "SELECT version FROM documents WHERE id = 'd2'").scalar() == 1
     ok(database_url, "check")
     engine.dispose()

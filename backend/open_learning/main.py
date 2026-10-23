@@ -2,7 +2,7 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -38,6 +38,7 @@ from .schemas import (
     JobOutput,
     LimitsOutput,
     NoteOutput,
+    NoteTextOutput,
     ReviewOutput,
     TutorOutput,
 )
@@ -50,10 +51,12 @@ from .services import (
     today_feed,
     tutor_chat,
 )
+from .versions import NO_STORE, check_replaceable, current_documents, note_text
 
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
 # Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
 DEFAULT_BODY_LIMIT = 64 * 1024
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
 def create_app(settings: Settings | None = None, factory=None, model=None) -> FastAPI:
@@ -159,6 +162,9 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def ingest_text(payload: TextInput, request: Request, db=Depends(database)):
         settings = request.app.state.settings
         note = validate_note(payload.title, payload.text, payload.label, settings.max_document_chars)
+        replaces = payload.replaces_document_id and payload.replaces_document_id.lower()
+        if replaces is not None:
+            check_replaceable(db, replaces, note.text)
         purge_note_payloads(db, settings)
         db.commit()
         note_capacity_check(db, settings)
@@ -168,6 +174,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             payload_title=note.title,
             payload_text=note.text,
             payload_label=note.label,
+            replaces_document_id=replaces,
         )
         db.add(job)
         db.commit()
@@ -212,9 +219,16 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def notes(
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        include_superseded: bool = False,
         db=Depends(database),
     ):
-        return list_notes(db, limit, offset)
+        return list_notes(db, limit, offset, include_superseded)
+
+    @api.get("/notes/{document_id}/text", response_model=NoteTextOutput)
+    def get_note_text(document_id: str, response: Response, db=Depends(database)):
+        result = note_text(db, document_id)
+        response.headers.update(NO_STORE)
+        return result
 
     @api.patch("/notes/{document_id}", response_model=NoteOutput)
     def patch_note(document_id: str, payload: NotePatch, db=Depends(database)):
@@ -241,7 +255,11 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     @api.get("/library", response_model=list[InsightOutput])
     def library(db=Depends(database)):
         items = db.scalars(
-            select(Insight).join(SavedItem).order_by(SavedItem.created_at.desc()).limit(500)
+            select(Insight)
+            .join(SavedItem)
+            .where(Insight.document_id.in_(current_documents()))
+            .order_by(SavedItem.created_at.desc())
+            .limit(500)
         )
         return visible(db, items, serialize_insight)
 
@@ -276,11 +294,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             select(Insight)
             .join(SavedItem)
             .where(
+                Insight.document_id.in_(current_documents()),
                 or_(
                     Insight.title.ilike(term, escape="\\"),
                     Insight.idea.ilike(term, escape="\\"),
                     Insight.explanation.ilike(term, escape="\\"),
-                )
+                ),
             )
             .order_by(Insight.created_at.desc())
             .limit(100)
@@ -302,7 +321,12 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     def due(db=Depends(database)):
         items = db.scalars(
             select(ReviewItem)
-            .where(ReviewItem.due_at <= now())
+            .where(
+                ReviewItem.due_at <= now(),
+                ReviewItem.insight_id.in_(
+                    select(Insight.id).where(Insight.document_id.in_(current_documents()))
+                ),
+            )
             .order_by(ReviewItem.due_at)
             .limit(100)
         )
@@ -361,6 +385,8 @@ class TextInput(BaseModel):
     title: str
     text: str
     label: str | None = None
+    # Set to edit a note: the job publishes a new version of this (current) note document.
+    replaces_document_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
 
 class NotePatch(BaseModel):
@@ -394,6 +420,7 @@ def job_output(item: Job):
         "status": item.status,
         "error": item.error,
         "document_id": item.document_id,
+        "replaces_document_id": item.replaces_document_id,
     }
 
 

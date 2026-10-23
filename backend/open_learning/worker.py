@@ -12,6 +12,7 @@ from .fetching import FetchError
 from .forget import purge_note_payloads
 from .models import Job
 from .services import claim_job, process_job
+from .versions import NoteConflict
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def run_once(factory, settings, fetcher=None, model=None) -> bool:
                 job.status = "failed"
                 job.error = (
                     str(error)
-                    if isinstance(error, (ModelError, FetchError))
+                    if isinstance(error, (ModelError, FetchError, NoteConflict))
                     else "Processing failed"
                 )
                 job.lease_until, job.lease_token = None, None
