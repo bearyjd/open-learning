@@ -8,9 +8,9 @@ class PurgeFloorTest {
         val floor = PurgeFloor().added("A", setOf("d1"))
         assertEquals(setOf("d1"), floor.idsFor("A")); assertEquals(emptySet<String>(), floor.idsFor("B"))
     }
-    @Test fun addingForAnotherScopeReplacesTheOldScope() {
+    @Test fun addingForAnotherScopeKeepsTheOldScope() {
         val floor = PurgeFloor().added("A", setOf("d1")).added("B", setOf("d2"))
-        assertEquals(emptySet<String>(), floor.idsFor("A")); assertEquals(setOf("d2"), floor.idsFor("B"))
+        assertEquals(setOf("d1"), floor.idsFor("A")); assertEquals(setOf("d2"), floor.idsFor("B"))
     }
     @Test fun addingIsIdempotentAndMerges() {
         val floor = PurgeFloor().added("A", setOf("d1")).added("A", setOf("d1", "d2"))
@@ -47,7 +47,7 @@ class PurgeFloorTest {
         val floor = PurgeFloor().added("A", setOf("d1"), now = 1_000)
         assertEquals(setOf("d1"), floor.idsFor("A", 1_000 + PURGE_FLOOR_TTL_MS - 1))
         assertEquals(emptySet<String>(), floor.idsFor("A", 1_000 + PURGE_FLOOR_TTL_MS))
-        assertEquals(emptySet<String>(), floor.arrived("A", emptySet(), 1_000 + PURGE_FLOOR_TTL_MS).ids.keys)
+        assertEquals(emptySet<String>(), floor.arrived("A", emptySet(), 1_000 + PURGE_FLOOR_TTL_MS).idsFor("A", 0))
     }
     @Test fun theTtlIsTenMinutes() { assertEquals(600_000L, PURGE_FLOOR_TTL_MS) }
     @Test fun aStillPendingForgetStaysHiddenThroughTheRoomSetAfterTheFloorReleases() {

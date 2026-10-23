@@ -156,7 +156,7 @@ class ScreenPublisherTest {
         assertEquals(once, p.value); assertEquals(listOf("b"), feedIds(p))
     }
     @Test fun aLateOtherAccountPurgeNeverLowersTheActiveAccountsFloor() = runBlocking {
-        val p = publisher { emptySet() }.also { it.reset("A") }
+        val p = ScreenPublisher({ emptySet() }, { flowOf(emptySet()) }).also { it.reset("A") }
         p.hiddenArrived("A" to emptySet())
         p.publishLocal(both)
         forgetPurge(p)
