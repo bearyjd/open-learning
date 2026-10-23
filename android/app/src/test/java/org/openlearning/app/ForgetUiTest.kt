@@ -16,12 +16,22 @@ class ForgetUiTest {
         assertEquals(FORGET_REFUSED_ERROR, forgetFailedLine(PendingForget("s", "d1", 1, FORGET_FAILED, "SECRET-BODY")))
         assertEquals(FORGET_REFUSED_ERROR, forgetFailedLine(PendingForget("s", "d1", 1, FORGET_FAILED, null)))
     }
-    @Test fun bannerCarriesNoQueueCount() {
-        // A count in a banner goes stale once the queue drains; the live line on the list is the only count shown.
-        listOf(ForgetResult.Done(emptyList()), ForgetResult.Failed(RuntimeException("x"))).forEach {
-            assertFalse(it.message().contains("waiting for the server"))
-        }
-        assertEquals(FORGET_QUEUED_MESSAGE, ForgetResult.Done(emptyList()).message())
+    @Test fun bannerNeverCountsWaitingRows() {
+        val rows = listOf(PendingForget("s", "d1", 1, FORGET_PENDING, null), PendingForget("s", "d2", 2, FORGET_PENDING, null))
+        assertEquals(FORGET_QUEUED_MESSAGE, forgetBanner(ForgetResult.Done(emptyList()), rows))
+        assertEquals(FORGET_QUEUED_MESSAGE, forgetBanner(ForgetResult.Done(emptyList()), emptyList()))
+    }
+    @Test fun bannerKeepsFailedForgetGuidance() {
+        val rows = listOf(PendingForget("s", "d1", 1, FORGET_PENDING, null), PendingForget("s", "d2", 2, FORGET_FAILED, "SECRET-BODY"))
+        val banner = forgetBanner(ForgetResult.Done(emptyList()), rows)
+        assertEquals("$FORGET_QUEUED_MESSAGE 1 forgotten note could not be deleted. Retry from Your notes.", banner)
+        assertFalse(banner.contains("SECRET-BODY"))
+        assertFalse(banner.contains("waiting for the server"))
+        assertTrue(forgetBanner(ForgetResult.Done(emptyList()), rows + rows[1].copy(documentId = "d3")).contains("2 forgotten notes could not"))
+    }
+    @Test fun failedLocalSaveBannerHasNoQueueText() {
+        val rows = listOf(PendingForget("s", "d2", 2, FORGET_FAILED, null))
+        assertEquals(FORGET_LOCAL_FAILED_MESSAGE, forgetBanner(ForgetResult.Failed(RuntimeException("x")), rows))
     }
     @Test fun copyStatesHiddenNowDeletedLaterNoUndo() {
         assertTrue(FORGET_QUEUED_MESSAGE.contains("hidden on this device"))
