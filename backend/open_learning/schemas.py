@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class InsightOutput(BaseModel):
@@ -61,6 +61,8 @@ class DiscoveredOutput(BaseModel):
     snippet: str
     status: Literal["new", "ingested", "dismissed"]
     created_at: datetime
+    score: float = 0
+    matched_topics: list[str] = Field(default_factory=list)
 
 
 class DiscoveryPage(BaseModel):
