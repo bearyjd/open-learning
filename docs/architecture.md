@@ -38,15 +38,62 @@ in a quoted passage, not an independent verification of factual truth. An insigh
 with a valid citation can still make unsupported claims; source selection does
 not establish logical entailment.
 
-Discovery is bounded to ten cards from imported material. This milestone does
-not crawl the web, learn a recommendation profile, or guarantee ten new cards per
-day. Review ratings update a simple deterministic schedule with stored history.
-Later recommendations can add topic diversity and ranking without replacing
-document provenance or the review API.
+The daily insight feed is bounded to ten cards from imported material. RSS/Atom
+subscriptions also populate a separate discovery queue, described below. Neither
+path learns a recommendation profile or guarantees ten new cards per day. Review
+ratings update a simple deterministic schedule with stored history. Later ranking
+can add topic diversity without replacing document provenance or the review API.
 
 See [future adapters](../integrations/README.md) for Kobo/Libby boundaries. The
 database includes extension points for topics, collections, preferences, and
 embeddings; schema presence alone does not imply complete user-facing features.
+
+## Feed discovery (PR-F, backend only)
+
+Authenticated `/api/v1/feeds` supports adding and listing subscriptions;
+`DELETE /api/v1/feeds/{id}` removes one, and `POST /api/v1/feeds/{id}/refresh`
+explicitly refreshes it. Adding a feed validates and fetches it once. Duplicate
+subscriptions are rejected and there are at most 50 feeds. `GET /api/v1/discover`
+lists the queue by status with cursor pagination, newest first, at most 100 items
+per page, returning `items` and `next_cursor`. Cursors order by discovery creation
+time and UUID, so equal timestamps and intervening inserts remain stable.
+`POST /api/v1/discover/{id}/dismiss` dismisses an item;
+`POST /api/v1/discover/{id}/ingest` hands its URL to the existing article-ingest
+job path and marks it ingested. Discovery itself makes no model calls and never
+automatically ingests an article.
+
+The existing worker polls feeds using `OL_FEED_REFRESH_INTERVAL_SECONDS`
+(default 21600, six hours), jitter and exponential failure backoff. Conditional
+requests use stored ETag and Last-Modified validators. After ten consecutive
+failures a feed is paused rather than deleted; an explicit refresh provides a
+recovery path. Jitter is a stable per-feed offset of up to ten percent, surviving
+worker restarts. `last_fetched_at` records the latest attempt, including failures;
+an explicit refresh returns the feed state with its fixed `last_error` code.
+Polling makes no AI ranking, scraping or external search calls.
+
+Fetches hold no database transaction open. Refresh applies its result only if its
+saved feed snapshot is still current. Feed and item mutations lock the parent
+feed before changing queue state; PostgreSQL uses row locks and SQLite reserves
+the writer before reading. Subscription admission also serializes the 50-feed
+cap. Enqueueing an article job and marking its item ingested commit together.
+
+RSS 2.0 and Atom responses are bounded to 1 MiB and 50 items per fetch, with
+network deadlines and redirect limits. Discovery stores URLs, titles, publication
+times and plain-text snippets of at most 500 characters, never full article text.
+Each feed retains at most `MAX_STORED_ITEMS` (default 200), keeping the newest
+rows by creation time and UUID. Refresh prunes excess rows and dismissed/ingested
+metadata older than `ITEM_RETENTION_DAYS` (default 30, measured from discovery
+creation) in the same transaction as insertion, including on unchanged or failed
+fetches. Age pruning preserves `new` items; cap eviction preserves the newest
+configured number of rows. Article jobs and their document links survive metadata
+pruning. URL deduplication lasts while a row is retained; evicted URLs can be
+discovered again.
+Migration 0006 adds `feeds` and `discovered_items`, with per-feed URL deduplication,
+`new`/`ingested`/`dismissed` item states and cascading removal of a feed's queue
+items. Its `(status, created_at, id)` index serves newest-first queue pagination.
+Downgrade drops these discovery tables. Android subscription and queue UI
+are outside this backend slice. See [security](security.md) for fetch and XML
+boundaries and [verification](verification.md) for checks and remaining gaps.
 
 ## Note versions (E2b-4)
 

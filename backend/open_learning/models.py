@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -31,6 +32,37 @@ def ident() -> str:
 
 class Base(DeclarativeBase):
     pass
+
+
+class Feed(Base):
+    __tablename__ = "feeds"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
+    url: Mapped[str] = mapped_column(Text, unique=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    etag: Mapped[str | None] = mapped_column(Text)
+    last_modified: Mapped[str | None] = mapped_column(Text)
+    last_error: Mapped[str | None] = mapped_column(String(64))
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class DiscoveredItem(Base):
+    __tablename__ = "discovered_items"
+    __table_args__ = (
+        UniqueConstraint("feed_id", "url", name="uq_discovered_feed_url"),
+        CheckConstraint("status IN ('new', 'ingested', 'dismissed')", name="ck_discovered_status"),
+        CheckConstraint("length(snippet) <= 500", name="ck_discovered_snippet"),
+        Index("ix_discovered_items_status_created_at_id", "status", "created_at", "id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=ident)
+    feed_id: Mapped[str] = mapped_column(ForeignKey("feeds.id", ondelete="CASCADE"), index=True)
+    url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snippet: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(16), default="new", server_default="new")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Source(Base):

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from .ai import ModelError
 from .config import get_settings
 from .database import session_factory
+from .discovery import refresh_due_feed
 from .fetching import FetchError
 from .forget import purge_note_payloads
 from .models import Job
@@ -18,11 +19,12 @@ log = logging.getLogger(__name__)
 
 
 def run_once(factory, settings, fetcher=None, model=None) -> bool:
+    refreshed = refresh_due_feed(factory, settings)
     claim = claim_job(factory, settings.job_lease_seconds)
     if claim is None:
         with factory.begin() as db:
             purge_note_payloads(db, settings)
-        return False
+        return refreshed
     try:
         kwargs = {"model": model}
         if fetcher is not None:

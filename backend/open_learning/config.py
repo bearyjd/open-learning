@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = Field(default=90, gt=0, le=180)
     fetch_max_bytes: int = Field(default=2_000_000, ge=1024, le=10_000_000)
     fetch_timeout_seconds: float = Field(default=15, gt=0, le=30)
+    feed_refresh_interval_seconds: int = Field(default=21600, ge=60, le=604800)
     max_document_chars: int = Field(default=60_000, ge=1000, le=200_000)
     job_lease_seconds: int = Field(default=300, ge=240)
     note_max_pending_jobs: int = Field(default=20, ge=1, le=1000)
