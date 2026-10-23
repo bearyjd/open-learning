@@ -16,13 +16,17 @@ Responses, errors and logs never carry note text.
 import hashlib
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Document, Source
 
 NOTE_CONFLICT = "This text matches another note or version; change it or forget that note first"
 NOTE_STALE = "This note was changed or forgotten; edit its latest version"
+# One lineage never exceeds this many versions, so the X-Forgotten-Document-Ids header of a
+# whole-note forget (36 chars + comma per id, about 3.7 KB at 100) always fits an HTTP header.
+MAX_NOTE_VERSIONS = 100
+NOTE_VERSION_LIMIT = "This note has reached the version limit; forget it or start a new note"
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 
@@ -32,6 +36,20 @@ class NoteConflict(Exception):
 
 class NoteStale(NoteConflict):
     """The version an edit replaces is gone or superseded; the job's text is dropped at once."""
+
+
+class NoteVersionLimit(NoteStale):
+    """The note already has MAX_NOTE_VERSIONS versions; the job's text is dropped at once."""
+
+
+def version_count(db: Session, document: Document) -> int:
+    """Versions in the lineage of a (locked) document, current and superseded."""
+    key = document.note_id or document.id
+    return db.scalar(
+        select(func.count()).select_from(Document).where(
+            or_(Document.note_id == key, Document.id == key)
+        )
+    )
 
 
 def current_documents():
@@ -64,6 +82,8 @@ def lock_replaceable(db: Session, document_id: str, text: str) -> None:
         raise HTTPException(404, "Note not found")
     if document.superseded:
         raise HTTPException(409, "Only the latest version of a note can be edited")
+    if version_count(db, document) >= MAX_NOTE_VERSIONS:
+        raise HTTPException(409, NOTE_VERSION_LIMIT)
     if document.content_hash == hashlib.sha256(text.encode()).hexdigest():
         raise HTTPException(422, "Text is unchanged")
 

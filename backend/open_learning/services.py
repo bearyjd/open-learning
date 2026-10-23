@@ -25,14 +25,18 @@ from .models import (
 )
 from .notes import NOTE_KEY_PREFIX
 from .versions import (
+    MAX_NOTE_VERSIONS,
     NOTE_CONFLICT,
     NOTE_STALE,
+    NOTE_VERSION_LIMIT,
     NoteConflict,
     NoteStale,
+    NoteVersionLimit,
     current_documents,
     is_current,
     lock_current,
     lock_replaced,
+    version_count,
 )
 
 
@@ -464,6 +468,8 @@ def _process_note(factory, settings: Settings, claim, model) -> None:
                     job.document_id = successor  # An identical edit won the race: idempotent.
                     _complete(job)
                     return
+                if replaced is not None and version_count(db, replaced) >= MAX_NOTE_VERSIONS:
+                    raise NoteVersionLimit(NOTE_VERSION_LIMIT)
                 source = _upsert_source(db, key, kind="note", title=title, label=label)
                 job.document_id = _publish(
                     db, settings, source, title=title, text=text, digest=digest, texts=texts,

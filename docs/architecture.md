@@ -85,6 +85,15 @@ over a version published between their passes. The answer stays 204 with no body
 current Android client expects a 2xx and ignores the body) and adds the header
 `X-Forgotten-Document-Ids`: every forgotten document id, comma-separated and sorted.
 
+A note has at most `MAX_NOTE_VERSIONS` (100) versions, so the header holds at most 100 ids
+(36 characters plus a comma each, about 3.7 KB) and always fits an HTTP header; without a bound
+about 1,800 versions would exceed 64 KB, which a client rejects after the forget has committed.
+`POST /api/v1/ingest/text` with `replaces_document_id` answers 409 "This note has reached the
+version limit; forget it or start a new note" when the lineage already has 100 versions (counted
+by `note_id` under the replaced document's lock). The worker re-checks under the same lock
+before publishing, so concurrent edits cannot exceed the cap: the job fails with the same
+message and its payload text, title and label are cleared.
+
 **Required client change before any client can create versions:** Android today purges and
 tombstones only the id it sent, so after a whole-note forget a cached older version would
 stay readable offline. In practice no versions exist yet, because Android does not send

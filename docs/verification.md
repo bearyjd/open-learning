@@ -826,6 +826,14 @@ edit jobs whose target version is truly deleted before or during inference fail 
 version-only forget refused (409) for a current version with earlier versions, forgotten ids cleared from
 remaining edit jobs, and the `X-Forgotten-Document-Ids` header on 204.
 
+Version cap (Codex P2 on PR #24: an unbounded lineage could make the header exceed 64 KB after the
+forget committed): `MAX_NOTE_VERSIONS = 100`, enforced on `POST /ingest/text` (409 with a fixed
+message) and again in the worker publish path under the replaced document's lock (job fails with
+the same message, payload text/title/label nulled). `tests/test_note_version_limit.py`: refused at
+the cap, accepted one below, worker overflow fails with payload cleared, and a lineage of exactly
+100 versions is forgotten with a header under 8 KB. The header contract is at most
+`MAX_NOTE_VERSIONS` ids.
+
 NOT verified:
 
 - **Android is not lineage-aware yet (required client change).** After a whole-note forget the app purges
