@@ -141,6 +141,17 @@ keeps the first title: the title and label can now be changed after import, but
 resubmitting identical text still deduplicates to the first import and ignores the new
 title and label.
 
+Note versions (E2b-4, see architecture.md): `GET /api/v1/notes/{id}/text` is the one
+endpoint that returns stored note text, on purpose, for any version of a note (current or
+superseded) and never for article documents. It sends `Cache-Control: no-store`, including
+on its 404. Editing text creates a new version; the replaced version stays stored but is
+hidden from the feed, library, search, due reviews and the default notes list, and is NOT
+made visible again when the newer version is forgotten. Forget each version separately to
+remove its text. Forgetting a version cancels unfinished edits of it and clears their text.
+The tutor answers 404 for a superseded insight before any model call. An edit or a plain
+import whose text matches an existing version fails with a fixed message that never echoes
+the text; like other failed note jobs it keeps its text until the bounded retention purge.
+
 `GET /api/v1/limits` (authenticated) returns `max_document_chars` (`OL_MAX_DOCUMENT_CHARS`),
 `min_text_chars`, `max_title_chars` and `max_label_chars`, the same values ingest
 validates against. All new response fields are additive and optional.

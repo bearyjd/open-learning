@@ -110,7 +110,7 @@ def test_unchanged_text_is_422(client, factory, settings):
     assert response.json() == {"detail": "Text is unchanged"}
 
 
-def test_edit_matching_another_note_fails_with_fixed_message(client, factory, settings):
+def test_edit_matching_another_note_fails_with_fixed_message(client, factory, settings, caplog):
     v1 = import_note(client, factory, settings)
     other = OTHER * 2 + MARKER
     import_note(client, factory, settings, text=other)
@@ -119,6 +119,7 @@ def test_edit_matching_another_note_fails_with_fixed_message(client, factory, se
     body = job(client, response.json()["id"])
     assert (body["status"], body["error"], body["document_id"]) == ("failed", CONFLICT, None)
     assert MARKER not in str(body)
+    assert MARKER not in caplog.text
     assert document(factory, v1).superseded is False
 
 

@@ -129,3 +129,18 @@ def test_stale_edit_racing_forget_is_not_published(client, factory, settings):
     process_job(factory, settings, claim, model=Forgetting())
     assert client.get(f"{API}/jobs/{response.json()['id']}").json()["status"] == "cancelled"
     assert client.get(API + "/notes", params={"include_superseded": True}).json() == []
+
+
+def test_tutor_on_superseded_insight_is_404_without_model_call(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    (old,) = insight_ids(factory, v1)
+    edit_and_run(client, factory, settings, v1)
+    calls = []
+    client.app.state.model.tutor = lambda *a, **k: calls.append(1)
+    response = client.post(API + "/tutor/chat", json={"insight_id": old, "message": "Why?"})
+    assert (response.status_code, response.json()) == (404, {"detail": "Insight not found"})
+    assert calls == []
+    with factory() as db:
+        from open_learning.models import History
+
+        assert db.scalar(select(History.id)) is None

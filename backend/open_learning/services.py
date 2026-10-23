@@ -166,6 +166,9 @@ def ensure_review(db: Session, insight: Insight) -> ReviewItem:
 
 
 def tutor_chat(db: Session, insight: Insight, message: str, model: ModelClient) -> dict:
+    if not is_current(db, insight.document_id):
+        # Superseded note versions are not cited; same answer as a forgotten note, no writes.
+        raise RowVanished("Insight not found")
     chunk = db.get(Chunk, insight.chunk_id)
     if chunk is None:
         raise RowVanished("Insight not found")  # Deleted while we were working.

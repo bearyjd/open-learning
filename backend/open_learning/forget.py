@@ -22,7 +22,8 @@ The dedupe-job versus forget race is closed in two halves: jobs that exist when 
 cancelled by the hash pass (forget holds the document, so that pass cannot be overtaken), and a
 job that appears later can only link the document by share-locking it first, which waits for
 forget's commit and then finds the document gone (a fresh import). Responses and logs never
-carry note text.
+carry note text, except GET /notes/{id}/text, which returns it on purpose with Cache-Control:
+no-store (see versions.py).
 """
 
 import hashlib
@@ -151,34 +152,33 @@ def _matching_job_ids(db: Session, content_hash: str) -> list[str]:
     ]
 
 
-def _cancel_matching_jobs(db: Session, content_hash: str) -> None:
-    ids = _matching_job_ids(db, content_hash)
+def _edit_job_ids(db: Session, document_id: str) -> list[str]:
+    """Unfinished edits of this version; they carry the new text, so the hash pass misses them."""
+    return list(
+        db.scalars(
+            select(Job.id).where(
+                Job.kind == "note",
+                Job.replaces_document_id == document_id,
+                Job.status != "completed",
+            )
+        )
+    )
+
+
+def _cancel_matching_jobs(db: Session, content_hash: str, document_id: str) -> None:
+    """Cancel jobs carrying this text and unfinished edits of this version, in one locked pass."""
+    ids = set(_matching_job_ids(db, content_hash)) | set(_edit_job_ids(db, document_id))
     if not ids:
         return
     jobs = db.scalars(select(Job).where(Job.id.in_(ids)).order_by(Job.id).with_for_update())
     for job in jobs:
-        if job.payload_text is None:
-            continue  # Completed or purged while we waited for the lock.
-        if hashlib.sha256(job.payload_text.encode()).hexdigest() != content_hash:
+        if job.status == "completed":
+            continue  # Completed while we waited for the lock.
+        is_edit = job.replaces_document_id == document_id
+        if not is_edit and job.payload_text is None:
+            continue  # Purged while we waited for the lock.
+        if not is_edit and hashlib.sha256(job.payload_text.encode()).hexdigest() != content_hash:
             continue
-        job.status, job.error = "cancelled", "Note deleted"
-        job.payload_title = job.payload_text = job.payload_label = None
-        job.lease_token = job.lease_until = None
-
-
-def _cancel_edit_jobs(db: Session, document_id: str) -> None:
-    """Cancel unfinished edits of this version; they carry the new text, so the hash pass misses them."""
-    jobs = db.scalars(
-        select(Job)
-        .where(
-            Job.kind == "note",
-            Job.replaces_document_id == document_id,
-            Job.status != "completed",
-        )
-        .order_by(Job.id)
-        .with_for_update()
-    ).all()
-    for job in jobs:
         job.status, job.error = "cancelled", "Note deleted"
         job.payload_title = job.payload_text = job.payload_label = None
         job.lease_token = job.lease_until = None
@@ -237,8 +237,7 @@ def forget_note(db: Session, document_id: str) -> None:
         db.rollback()
         raise HTTPException(404, "Note not found")
     source_id, content_hash = locked
-    _cancel_matching_jobs(db, content_hash)
-    _cancel_edit_jobs(db, document_id)
+    _cancel_matching_jobs(db, content_hash, document_id)
     _delete_linked_jobs(db, document_id)
     _lock_graph(db, document_id)
     _delete_graph(db, document_id, source_id)

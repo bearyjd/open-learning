@@ -779,7 +779,7 @@ version, dedupe against the current version, two queued edits of one version, fo
 edit, forget of the latest version not resurrecting the previous one, forget of an old version, list
 fields, job list field), `tests/test_note_version_reads.py` (feed including today's cached feed, library,
 search and due reviews hide superseded insights; superseded insight still readable by id; `source_version`
-on insights and tutor citations; note text endpoint with `no-store`, 404s and auth; forget committed while
+on insights and tutor citations; tutor on a superseded insight is 404 with no model call or writes; note text endpoint with `no-store`, 404s and auth; forget committed while
 the edit's model call runs) and `test_0005_document_versions_roundtrip` in `tests/test_migrations.py`.
 Four existing exact-shape tests were widened for the additive fields.
 
@@ -789,5 +789,5 @@ NOT verified:
   order is reasoned about (replaced document, job, source) and the interleavings are tested sequentially.
 - Android does not use any of this yet. Gson ignores unknown fields, so the additive fields should not
   break the current app, but no Android build or device run was done for this slice.
-- The forget path now locks note jobs in three passes (hash matches, edit jobs, linked completed jobs),
-  each ordered by id but not globally ordered; the pre-existing two-pass pattern had the same shape.
+- Forget locks hash-matching jobs and unfinished edit jobs in one pass ordered by id, then linked
+  completed jobs in a second pass (the pre-existing shape); no threaded test exercises overlapping forgets.
