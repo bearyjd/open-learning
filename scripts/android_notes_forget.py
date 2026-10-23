@@ -11,6 +11,7 @@ import time
 
 DOC = "5eed0000-0000-4000-8000-0000000000b1"
 TITLE = "Beta list note"
+# fullmatch per text node: the forget banner also says "... waiting for the server" inside a longer sentence.
 WAITING = re.compile(r"(\d+) forgotten notes? waiting for the server")
 REPLAY_TIMEOUT = 150  # seconds: the first failed attempt backs off 30 s, the next one may back off 60 s
 POLL_GAP = 3.0        # mirrors MIN_POLL_GAP in android_notes.py
@@ -23,7 +24,7 @@ def deletes_for(log, doc=DOC) -> int:
 def waiting_count(texts):
     """The N in the list's waiting line, or None when the line is not shown."""
     for text in texts:
-        match = WAITING.search(text)
+        match = WAITING.fullmatch(text.strip())
         if match:
             return int(match.group(1))
     return None

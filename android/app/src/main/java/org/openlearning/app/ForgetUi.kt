@@ -13,14 +13,3 @@ fun forgetWaitingLine(count: Int): String? = if (count <= 0) null else "${notes(
 
 /** A failed row's text. Only the fixed errors are ever shown, whatever is stored. */
 fun forgetFailedLine(row: PendingForget): String = row.error?.takeIf { it in FORGET_FIXED_ERRORS } ?: FORGET_REFUSED_ERROR
-
-/** Waiting and failed counts for banners; null when there is nothing to report. */
-fun forgetQueueSummary(pending: Int, failed: Int): String? =
-    listOfNotNull(
-        if (pending > 0) "${notes(pending)} waiting for the server." else null,
-        if (failed > 0) "${notes(failed)} could not be deleted. Retry from Your notes." else null,
-    ).joinToString(" ").ifEmpty { null }
-
-/** The banner for a finished forget: its outcome, then the queue state when there is one. */
-fun forgetBanner(result: ForgetResult, pending: Int, failed: Int): String =
-    listOfNotNull(result.message(), if (result is ForgetResult.Done) forgetQueueSummary(pending, failed) else null).joinToString(" ")

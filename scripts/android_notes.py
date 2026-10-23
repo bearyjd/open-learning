@@ -536,7 +536,7 @@ def run_notes_list(dev, results):
     dev.tap(r"^Forget\|")  # the first row is the newest note
     dev.wait_for("Forget this note")
     dev.tap_last(r"^Forget\|")
-    results["list_forgotten_message"] = dev.wait_for("Note forgotten")
+    results["list_forgotten_message"] = dev.wait_for("Note hidden on this device")
     texts = dev.texts(dev.dump("04c-notes-list-after-forget"))
     results.update(list_summary(mock_log(), texts))
     dev.tap(r"^Close\|")
@@ -616,7 +616,7 @@ def main():
         results["forget_cancel_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
         dev.tap("Forget this note")
         dev.tap(r"^Forget\|")
-        dev.wait_for("Note forgotten")
+        dev.wait_for("Note hidden on this device")
         dev.dump("04-after-forget")
         results["forget_confirm_deletes"] = count_requests(mock_log(), "DELETE", "/api/v1/notes/5eed0000-0000-4000-8000-00000000000c")
 

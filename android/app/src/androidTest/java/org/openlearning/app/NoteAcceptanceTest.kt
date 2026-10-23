@@ -157,7 +157,7 @@ class NoteAcceptanceTest {
         fixture.down.set(false)
         // The first attempt failed with no answer: WorkManager backs off 30 s, so allow two periods.
         waitUntil(90_000) { fixture.count("DELETE", "/api/v1/notes/${TestIds.NOTE_DOC}") == 1 }
-        waitUntil { io { container.database.dao().forgets(scope()).isEmpty() } }
+        waitUntil { io { container.database.dao().forgets(scope()).map { it.status } == listOf(FORGET_CONFIRMED) } }
     }
 
     @Test fun removingAQueuedNoteBeforeSubmitSendsNothing() {

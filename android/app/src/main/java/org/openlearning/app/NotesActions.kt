@@ -2,7 +2,6 @@ package org.openlearning.app
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -56,12 +55,6 @@ internal class NotesActions(
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { ForgetResult.Failed(error) }
 
-    /** The outcome plus the queue state (waiting and failed counts, ids only) read from Room. */
-    private suspend fun banner(repository: LearningRepository, result: ForgetResult): String {
-        val scopeKey = repository.config.scope
-        return forgetBanner(result, queue.pendingForgetCount(scopeKey).first(), queue.failedForgets(scopeKey).first().size)
-    }
-
     fun forget(note: NoteSummary) {
         val repository = repo() ?: return
         if (note.documentId in state.value.notes.forgetting) return
@@ -73,7 +66,7 @@ internal class NotesActions(
                 is ForgetResult.Failed -> state.publishLocal { it.copy(notes = it.notes.forgetFailed(note.documentId, result.message())) }
                 is ForgetResult.Done -> {
                     onForgotten()
-                    val banner = banner(repository, result)
+                    val banner = result.message()
                     state.publishLocal { it.copy(notes = it.notes.forgetSucceeded(note.documentId, banner)) }
                 }
             }
@@ -91,7 +84,7 @@ internal class NotesActions(
                 is ForgetResult.Failed -> state.publishLocal { it.copy(error = result.message()) }
                 is ForgetResult.Done -> {
                     onForgotten()
-                    val banner = banner(repository, result)
+                    val banner = result.message()
                     state.publishLocal { it.copy(notice = Notice(banner)) }
                 }
             }

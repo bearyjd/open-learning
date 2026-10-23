@@ -284,6 +284,11 @@ class OfflineForgetHelperTests(unittest.TestCase):
         self.assertEqual(3, forget.waiting_count(["3 forgotten notes waiting for the server"]))
         self.assertIsNone(forget.waiting_count(["Your notes", "Beta list note"]))
 
+    def test_waiting_count_ignores_banner_text_that_merely_contains_the_phrase(self):
+        banner = "Note hidden on this device. 1 forgotten note waiting for the server."
+        self.assertIsNone(forget.waiting_count([banner]))
+        self.assertTrue(forget.online_summary([self.DELETE], [banner])["online_waiting_gone"])
+
     def test_offline_summary(self):
         got = forget.offline_summary([], ["1 forgotten note waiting for the server"])
         self.assertEqual({"offline_waiting_count": 1, "offline_deletes": 0, "offline_row_hidden": True}, got)

@@ -765,5 +765,19 @@ write epoch recorded when a request starts and compared when its result is store
 Codex review status: three adversarial passes ran on the final design (fc4b5a5, 56057a4, b8eea31). Findings from the first two were
 fixed; the third raised only the stale-response gap above. Static review only, no device and no Android runtime run by Codex.
 
+### E2b-3 device re-run after the tombstone change (2026-10-22, one run, no retries)
+
+Instrumented suite: 72 tests run, 4 failed. Script `scripts/android_notes.py`: exit 1 with `online_waiting_gone` false and
+`list_forgotten_message` false. Diagnosis (static, read-only agent, high confidence): stale tests and script, not app bugs. Since
+8f8467b a successful delete leaves a CONFIRMED `PendingForget` tombstone (7-day TTL), so the four tests that waited for
+`forgets().isEmpty()` (`ForgetQueueAcceptanceTest` restart, 404, 401-retry and 5xx cases; `NoteAcceptanceTest`
+`offlineForgetHidesNowThenDeletesOnReconnect`) could never pass, and the script matched the waiting phrase inside the forget banner
+and waited for the removed "Note forgotten" text.
+
+Fixes (code only, NOT re-run on a device): those waits now expect `[FORGET_CONFIRMED]`; the 5xx test also waits for a second DELETE;
+`ListFixture` records a 404 DELETE as deleted so the 404 check sees the note gone; the script matches the whole live waiting line
+only and waits for "Note hidden on this device". The forget banner no longer embeds a queue count (it went stale). Offline forget
+is not yet re-verified after these fixes.
+
 Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.

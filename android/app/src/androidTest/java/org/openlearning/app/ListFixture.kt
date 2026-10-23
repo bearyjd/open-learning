@@ -34,7 +34,7 @@ internal class ListFixture {
                     request.method == "GET" && path == "/api/v1/notes" -> json("[" + notes.filterKeys { it !in deleted }.values.joinToString(",") + "]")
                     request.method == "GET" && path == "/api/v1/limits" -> json("""{"max_document_chars":60000,"min_text_chars":100,"max_title_chars":100,"max_label_chars":100}""")
                     request.method == "DELETE" && path.startsWith("/api/v1/notes/") -> {
-                        if (deleteStatus.get() in 200..299) deleted += path.substringAfterLast('/')
+                        if (deleteStatus.get() in 200..299 || deleteStatus.get() == 404) deleted += path.substringAfterLast('/')
                         MockResponse().setResponseCode(deleteStatus.get())
                     }
                     path == "/api/v1/feed/today" || path == "/api/v1/library" -> json("[]")
