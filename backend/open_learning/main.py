@@ -56,6 +56,7 @@ from .versions import NO_STORE, current_documents, lock_current, lock_replaceabl
 TEXT_INGEST_PATH = "/api/v1/ingest/text"
 # Largest legitimate non-note body is a tutor message (4000 chars, <= ~24 KiB JSON-escaped).
 DEFAULT_BODY_LIMIT = 64 * 1024
+FORGOTTEN_IDS_HEADER = "X-Forgotten-Document-Ids"
 UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
@@ -253,9 +254,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         }
 
     @api.delete("/notes/{document_id}", status_code=204)
-    def delete_note(document_id: str, version_only: bool = False, db=Depends(database)):
+    def delete_note(
+        document_id: str, response: Response, version_only: bool = False, db=Depends(database)
+    ):
         # Forgets every version of the note unless version_only is set (privacy-safe default).
-        forget_note(db, document_id, version_only)
+        # Still 204 with no body; clients purge their caches of every id in the header.
+        forgotten = forget_note(db, document_id, version_only)
+        response.headers[FORGOTTEN_IDS_HEADER] = ",".join(forgotten)
 
     @api.get("/feed/today", response_model=list[InsightOutput])
     def feed(db=Depends(database)):

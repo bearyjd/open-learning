@@ -819,8 +819,18 @@ request's document lock (releasing it before the insert) fails the edit-versus-f
 5 runs only, because forget's job scan can still land after the request commits; that test proves the
 fixed path is correct, not that every regression is caught.
 
+Second review round: per-note forget advisory lock (threaded PostgreSQL test with two overlapping
+whole-note forgets and a publish between their passes; without the lock PostgreSQL reported a deadlock),
+an identical edit losing the publish race completes on the winner's version (deterministic interleaving),
+edit jobs whose target version is truly deleted before or during inference fail stale without text,
+version-only forget refused (409) for a current version with earlier versions, forgotten ids cleared from
+remaining edit jobs, and the `X-Forgotten-Document-Ids` header on 204.
+
 NOT verified:
 
+- **Android is not lineage-aware yet (required client change).** After a whole-note forget the app purges
+  only the id it sent; a cached older version would stay readable offline. No versions exist until Android
+  sends `replaces_document_id`; the Android E2b-4 PR must consume `X-Forgotten-Document-Ids` first.
 - No threaded PostgreSQL race test for two edit workers of one version; that interleaving is tested
   sequentially. Edit versus forget is covered by the two threaded tests above.
 - Android does not use any of this yet. Gson ignores unknown fields, so the additive fields should not

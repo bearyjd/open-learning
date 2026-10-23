@@ -304,12 +304,12 @@ def _serialise_note_forgets(db: Session, note_key: str) -> None:
         )
 
 
-def forget_note(db: Session, document_id: str, version_only: bool = False) -> None:
+def forget_note(db: Session, document_id: str, version_only: bool = False) -> list[str]:
     """Hard-delete a note and everything derived from it in one transaction.
 
     By default every version of the note (its lineage) is forgotten; version_only forgets just
     this version and leaves the others as they are; it is refused (409) for a current version
-    that still has earlier versions.
+    that still has earlier versions. Returns the forgotten document ids, sorted.
     """
     found = db.execute(
         select(Document.note_id)
@@ -338,6 +338,7 @@ def forget_note(db: Session, document_id: str, version_only: bool = False) -> No
     for id_, source_id, _ in rows:
         _delete_graph(db, id_, source_id)
     db.commit()
+    return sorted(ids)
 
 
 def forget_note_job(db: Session, job_id: str) -> None:

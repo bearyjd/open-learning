@@ -81,7 +81,17 @@ cleared from `replaces_document_id`, so job metadata keeps no forgotten ids. A v
 published while the forget waits for those locks is found by a second pass and forgotten
 too. Forgets of one note are serialised by a transaction-scoped PostgreSQL advisory lock on
 the lineage id, taken before any document lock, so two overlapping forgets cannot deadlock
-over a version published between their passes. This is a client-facing change from the first E2b-4 draft, where DELETE removed
+over a version published between their passes. The answer stays 204 with no body (the
+current Android client expects a 2xx and ignores the body) and adds the header
+`X-Forgotten-Document-Ids`: every forgotten document id, comma-separated and sorted.
+
+**Required client change before any client can create versions:** Android today purges and
+tombstones only the id it sent, so after a whole-note forget a cached older version would
+stay readable offline. In practice no versions exist yet, because Android does not send
+`replaces_document_id`. The Android E2b-4 PR must first make forget lineage-aware: purge and
+tombstone every id in `X-Forgotten-Document-Ids`, falling back to the versions listed by
+`GET /api/v1/notes?include_superseded=true` when it has no header (for example a forget
+verified after a 404). See the ROADMAP row. This is a client-facing change from the first E2b-4 draft, where DELETE removed
 one version only: forgetting a note must not silently leave its other versions behind.
 `DELETE /api/v1/notes/{id}?version_only=true` forgets one version, but only a superseded
 version or a note's only version: for the current version of a note that still has earlier

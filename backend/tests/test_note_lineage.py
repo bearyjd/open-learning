@@ -229,3 +229,16 @@ def test_forget_clears_forgotten_ids_from_edit_jobs(client, factory, settings):
         job = db.get(Job, pending)
         assert (job.status, job.replaces_document_id) == ("cancelled", None)
         assert db.scalar(select(Job.id).where(Job.replaces_document_id.is_not(None))) is None
+
+
+def test_delete_reports_every_forgotten_version_id_in_a_header(client, factory, settings):
+    versions = three_versions(client, factory, settings)
+    response = client.delete(f"{API}/notes/{versions[1]}")
+    assert (response.status_code, response.content) == (204, b"")  # Unchanged for old clients.
+    assert response.headers["x-forgotten-document-ids"].split(",") == sorted(versions)
+
+
+def test_version_only_delete_reports_just_that_id(client, factory, settings):
+    v1, v2, v3 = three_versions(client, factory, settings)
+    response = client.delete(f"{API}/notes/{v2}", params={"version_only": True})
+    assert response.headers["x-forgotten-document-ids"] == v2
