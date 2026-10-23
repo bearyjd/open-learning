@@ -77,7 +77,9 @@ whole note**: every version in the lineage, their insights, saved items, reviews
 tutor history, their linked jobs, and unfinished edit jobs of any version (cancelled,
 text cleared), in one transaction that locks the versions in id order. A version
 published while the forget waits for those locks is found by a second pass and forgotten
-too. This is a client-facing change from the first E2b-4 draft, where DELETE removed
+too. Forgets of one note are serialised by a transaction-scoped PostgreSQL advisory lock on
+the lineage id, taken before any document lock, so two overlapping forgets cannot deadlock
+over a version published between their passes. This is a client-facing change from the first E2b-4 draft, where DELETE removed
 one version only: forgetting a note must not silently leave its other versions behind.
 `DELETE /api/v1/notes/{id}?version_only=true` forgets one version, but only a superseded
 version or a note's only version: for the current version of a note that still has earlier

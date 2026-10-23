@@ -2,6 +2,8 @@
 
 Global lock order (every transaction that takes more than one of these must follow it):
 
+    0. the note's forget advisory lock (forget only, per lineage, before any document; see
+       _serialise_note_forgets and _lock_lineage)
     1. the Document row (forget, PATCH, edit ingest and the worker's note edit exclusive; the
        worker's dedupe path, tutor, save, feedback and review_answer shared)
     2. note Job rows, by id
@@ -11,7 +13,7 @@ Global lock order (every transaction that takes more than one of these must foll
     4. Insight rows, by id
     5. ReviewItem rows, by id
 
-Per path: forget = 1 (every version of the note, see _lock_lineage, or one version with
+Per path: forget = 0, 1 (every version of the note, see _lock_lineage, or one version with
 version_only),2,4,5 then deletes (including the Sources); PATCH edit_note = 1,3; worker
 dedupe = 1,2; worker note edit (versions.py) = 1 (only the replaced document, never a second
 one),2,3; worker fresh import = 2,3 and never waits for a document (if an identical document
@@ -57,6 +59,9 @@ from .models import (
 NOTE_LIMIT = 500
 PENDING_STATUSES = ("queued", "running")
 CAPACITY_LOCK_KEY = 0x4F4C4E4F  # Arbitrary constant serialising note admission on PostgreSQL.
+# Class of the two-key advisory locks serialising forgets per note (lineage). The two-key space
+# never overlaps the single-key CAPACITY_LOCK_KEY space.
+NOTE_FORGET_LOCK_CLASS = 0x4F4C4E46
 CAPACITY_MESSAGE = "Too many notes are waiting to be processed; try again shortly"
 RETRY_AFTER_SECONDS = "30"
 EXPIRED_MESSAGE = "Note text expired; submit it again"
@@ -251,8 +256,10 @@ def _lock_lineage(db: Session, note_id: str) -> list:
 
     Under READ COMMITTED a version committed while we waited (an edit that held the version it
     replaced) is missing from the first result, so we select again and lock the new ids. That
-    later pass can lock a lower id after a higher one; it cannot deadlock because lineage forget
-    is the only path that ever holds more than one document row.
+    later pass can lock a lower id after a higher one. Two forgets of one note could then
+    deadlock (each holding a version the other's pass wants), so the caller first takes the
+    note's advisory lock (_serialise_note_forgets): at most one forget per note holds its
+    versions, and every other path holds at most one document row and never that lock.
     """
     held: dict[str, tuple] = {}
     while True:
@@ -277,6 +284,14 @@ def _refuse_partial_forget(db: Session, document_id: str, note_key: str) -> None
         raise HTTPException(409, EARLIER_VERSIONS)
 
 
+def _serialise_note_forgets(db: Session, note_key: str) -> None:
+    """Take the note's transaction-scoped advisory lock (level 0, before any document)."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            select(func.pg_advisory_xact_lock(NOTE_FORGET_LOCK_CLASS, func.hashtext(note_key)))
+        )
+
+
 def forget_note(db: Session, document_id: str, version_only: bool = False) -> None:
     """Hard-delete a note and everything derived from it in one transaction.
 
@@ -293,6 +308,7 @@ def forget_note(db: Session, document_id: str, version_only: bool = False) -> No
         db.rollback()
         raise HTTPException(404, "Note not found")
     note_key = found[0] or document_id
+    _serialise_note_forgets(db, note_key)
     if version_only:
         rows = _lock_note_documents(db, Document.id == document_id)
     else:

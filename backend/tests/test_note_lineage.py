@@ -138,3 +138,71 @@ def test_forget_waiting_on_a_publishing_edit_also_forgets_the_new_version_on_pos
     assert results["forget"] == 204, results
     assert note_documents(factory) == set()
     assert count(factory, Insight) == 0
+
+
+def test_overlapping_whole_note_forgets_with_a_publish_do_not_deadlock_on_postgresql(
+    client, factory, settings, monkeypatch
+):
+    """Forget A waits on the version an edit is replacing; the edit publishes a lower-id version;
+    forget B starts. Without per-note serialisation B locks the new version and waits on A,
+    while A's second pass waits on B (a deadlock)."""
+    require_postgres(factory)
+    from fastapi import HTTPException
+
+    from open_learning import services
+
+    planned = iter(f"00000000-0000-4000-8000-00000000000{n}" for n in (2, 3, 1))
+    real_ident = services.ident
+
+    def ordered_ident():
+        caller = __import__("inspect").stack()[1].function
+        return next(planned) if caller == "_publish" else real_ident()
+
+    monkeypatch.setattr(services, "ident", ordered_ident)
+    v1 = import_note(client, factory, settings)
+    v2 = edit_and_run(client, factory, settings, v1)
+    edit(client, v2, EDITED_AGAIN)
+    claim = claim_job(factory, settings.job_lease_seconds)
+    engine = factory.kw["bind"]
+    url = engine.url.render_as_string(hide_password=False)
+    results, fired = {}, set()
+
+    def forget(name, document_id):
+        def target():
+            with factory() as db:
+                try:
+                    forget_note(db, document_id)
+                    results[name] = 204
+                except HTTPException as error:
+                    results[name] = error.status_code
+                except Exception as error:  # a deadlock surfaces here
+                    results[name] = repr(error)
+
+        return threading.Thread(target=target, name=name)
+
+    forget_a, forget_b = forget("a", v1), forget("b", v2)
+
+    def hook(conn, cursor, statement, parameters, *args):
+        values = tuple(parameters.values() if isinstance(parameters, dict) else parameters)
+        current = threading.current_thread()
+        if "FOR UPDATE" not in statement or "FROM documents" not in statement:
+            return
+        if current is forget_a and "a" not in fired:
+            fired.add("a")  # A holds v1 and v2 now; v3 was published while it waited.
+            forget_b.start()
+            assert wait_for_lock_waiter(url)
+        elif current not in (forget_a, forget_b) and v2 in values and "worker" not in fired:
+            fired.add("worker")  # The worker holds v2 until it publishes v3.
+            forget_a.start()
+            assert wait_for_lock_waiter(url)
+
+    event.listen(engine, "after_cursor_execute", hook)
+    try:
+        process_job(factory, settings, claim, model=FixtureModel())
+        forget_a.join(timeout=30)
+        forget_b.join(timeout=30)
+    finally:
+        event.remove(engine, "after_cursor_execute", hook)
+    assert fired == {"a", "worker"}
+    assert results["a"] == 204 and results["b"] in (204, 404), results
+    assert note_documents(factory) == set()
