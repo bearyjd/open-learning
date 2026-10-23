@@ -1,6 +1,11 @@
 # Historical note verification results
 
-Moved from [verification.md](verification.md) without changing the recorded results.
+Historical results retained from [verification.md](verification.md), with supersession annotations.
+The [2026-10-23 device re-run](verification.md#android-notes-device-re-run-2026-10-23)
+records 72 tests, 0 failures and script exit 0 on main `f832a1f` (PR #23 fixes included).
+Earlier unrun/failed status is superseded only for the recorded suite and script scope;
+confirm-dialog FLAG_SECURE, fold/recreate with the list open, SAF picker, token-rotation
+notice, sweep worker timing and real server/proxy behavior remain unverified.
 
 ### E2b-3 device re-run after the tombstone change (2026-10-22, one run, no retries)
 
@@ -12,7 +17,7 @@ waited for `forgets().isEmpty()` could never pass, and the script matched the wa
 for the removed "Note forgotten" text. The 404 case (`a404CountsAsSuccess`) was not among the device failures; it was changed the
 same way as a precaution, because it had the same stale wait.
 
-Fixes (code only, NOT re-run on a device): those waits now expect `[FORGET_CONFIRMED]`; the 5xx test switches the fixture to 204 only
+**Superseded device status (2026-10-23):** Fixes (code only, NOT re-run on a device): those waits now expect `[FORGET_CONFIRMED]`; the 5xx test switches the fixture to 204 only
 after the first 503 was served, then waits for a second DELETE; `ListFixture` records a 404 DELETE as deleted so the 404 check sees
 the note gone; the script matches the whole live waiting line only (and only on a dump that shows the list), waits for the DELETE
 before counting it, and requires "Note hidden on this device". The forget banner no longer embeds a waiting count (it went stale).
@@ -20,8 +25,71 @@ It still tells the person when earlier forgets failed ("N forgotten notes could 
 failed rows need manual action; they stay visible, with Retry and Stop trying, only inside Your notes. Offline forget is not yet
 re-verified on a device after these fixes.
 
-Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
+**Superseded for offline forget and 429/413 only (2026-10-23); other gaps below remain open:** Still unverified: offline forget end to end, the script's offline scenario, 429/413 after E2b-3, confirm-dialog FLAG_SECURE, fold/recreate
 with the list open, SAF picker via DocumentsUI, the token-rotation notice, sweep worker timing.
+
+## E2b-3 review and structural-fix history
+
+**Superseded device status (2026-10-23):** E2b-3 review fixes (still NOT device-verified). New JVM tests (`ForgetHardeningTest`): marker kept after confirm and cleared by a
+fresh list, enqueue policy, id validation, per-row scheduling failure, linked-only confirmation purge, review resolution (cap,
+short circuit, hidden), restore of a hidden note, marker ordering, post-commit best effort, token-rotation copy, Stop trying
+state and copy, replay table (410, 408, 425, attempt cap), malformed payload, dialog residual copy. Untested: APPEND_OR_REPLACE
+chaining in real WorkManager, a late network response in flight, the Room transaction and `Credentials.takePreviousServer`,
+the Stop trying dialog, and the notice banner. Compile-only instrumented additions are in `ForgetQueueRoomTest`.
+
+**Superseded device status (2026-10-23):** E2b-3 structural fix (durable tombstone, single card writer, derived view): STILL NOT device-verified. JVM tests added or changed:
+`CardWriterTest` (`cardRows`: hidden, blank id, inFeed and saved flags), `ForgetPruneTest` (`confirmedDecisions` TTL edge, incomplete
+page, still listed, request start versus delivery, other scopes; `serverPage`; sweep trigger), `HiddenViewTest` (`withoutHidden` for
+every field, citations, identity), `ForgetStructuralTest` (enqueue policy table with REPLACE and APPEND_OR_REPLACE, enqueue error
+classification, `resolveReviews` with `documentId` and 404, review JSON from an old server, notice computation, and three
+source scans). The source scans are text checks, not behaviour: only `CardWriter.kt` may call `dao.put(`; no `ForgottenNotes`
+marker remains; `confirmed()` calls `confirmForget` and not `deleteForget`; `NotesActions` calls `queue.reconcile(`.
+Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the seven interleavings (forget then stale write; write then
+forget; confirm then stale write; simulated restart then stale write; reconcile inside the TTL and on an incomplete page;
+confirmed and still listed after the TTL flips to pending; `forgetsOutside` excludes confirmed). `ForgetQueueRoomTest` was updated.
+NOT tested at all: the `writeCards` transaction on a real database as it runs; `ForgetWorker` and `ForgetSweepWorker` in WorkManager
+(REPLACE versus a running worker, the awaited enqueue, the periodic schedule, never returning a failed result); the derived
+`state` flow in the view model (scope switch, combine timing); `NotesActions.load` wiring beyond the source scan; resume
+wrapping in the view model; the once-per-start notice; `Credentials` deleting the old previous-server key; the Compose screens;
+and the server's `document_id` on reviews (a backend change in a separate PR). The earlier `ForgetHardeningTest` marker tests
+were removed with the marker.
+
+**Superseded device status (2026-10-23):** E2b-3 fourth-pass fixes (still NOT device-verified). New JVM tests: `ReviewScrubTest` (blank id from cache, network or payload is
+dropped and never mapped; a blank cached value falls through to the network; non-blank resolves), `PublishTest` (`published`: a
+late search, review, notes, jobs, detail or chat publication for a hidden document is not stored; nothing returns after the
+tombstone is pruned; another account's set is not applied), `JobWriteDecisionTest` (`jobWriteDecision`), and
+`SingleWriterScanTest.onlyThePublisherWritesTheScreenState` (a TEXT scan: no direct write to a screen-state flow outside
+`ScreenPublisher.kt`). Compile-only (androidTest, not run): `ForgetGuardRoomTest` covers the transactional `updateJobUnlessHidden`
+(forget committing between the response and the update). Untested: `ScreenPublisher` itself (the snapshot re-check loop, the Room
+flow collector, `publishFresh` DAO read), its wiring in the view model and `NotesActions`, the real transaction on a device, and the
+residual of an unlinked processing row whose worker never answers.
+
+**Superseded device status (2026-10-23):** E2b-3 fifth-pass fixes (best-effort against known interleavings; found by 5 adversarial passes; still NOT device-verified). New JVM
+tests: `ScreenPublisherTest` (real publisher, fake hidden source: old-scope publication dropped, transform runs once, DAO-fresh read
+beats a lagging snapshot, other-scope snapshot read from Room, chat cleared on a gained id, reply with a hidden citation dropped with
+its question, hidden selection never chats), `SingleWriterScanTest` (TEXT scans: any `MutableStateFlow<ScreenState>` name, no `publish(`,
+no content fields in `publishLocal`, guarded manual retry). Compile-only: `ForgetGuardRoomTest` holds the update transaction open with a
+hook while a forget starts (it cannot prove Room's lock order). Untested: the view model wiring (`showDetail`, `chat`), Room flows.
+
+**Superseded device status (2026-10-23):** E2b-3 sixth-pass fixes (best-effort; found by 6 adversarial passes; still NOT device-verified). Two-sided protocol: the forget commit
+is followed at once by `ScreenPublisher.purgeNow` (via `ForgetQueue.onHidden`), and every `publishFresh*` store is followed by a DAO
+re-read and an idempotent purge (never a transform re-run); the ordering argument is in `docs/security.md` and the
+`ScreenPublisher.purgeNow` comment. New JVM tests (written first, run RED against stubs: 13 of 31 failed): `ScreenPublisherTest`
+(read, commit, store; commit between store and re-read; store then commit; commit, read, store; stale snapshot and read; purge
+idempotent and scope-checked; derived view includes the purge ids), `PurgeFloorTest`, `ChatSessionTest` (collector bump, new chat,
+forget-completion bump: not stuck busy; a late final never clears a newer chat's busy flag), and `SingleWriterScanTest` (TEXT scans:
+`ForgetQueue` calls `onHidden` after its transaction; the view model wires it to `purgeNow`; no `chatGeneration` outside `ChatSession`).
+Compile-only (androidTest, not run): `ForgetQueueRoomTest.forgetCommitCallsTheHiddenHookAfterTheCommit`.
+NOT tested: `ScreenPublisher` under real concurrency, the view model and `NotesActions` wiring at runtime, Room flows and their
+delivery order, and the floor's two-arrival aging against real Room emissions.
+
+**Superseded device status (2026-10-23):** E2b-3 seventh-pass fix (best-effort; found by 7 adversarial passes, the last found one P2; still NOT device-verified). Purge-floor
+release: `ForgetQueue.onReleased` (-> `ScreenPublisher.release`) runs after every PendingForget delete (`stopTrying`, `reconcile` prune),
+and floor entries also expire after 10 minutes (`PURGE_FLOOR_TTL_MS`, injected clock), besides the Room-arrival rules. New JVM tests
+(written first, RED: test compile failed on the missing API): `PurgeFloorTest` (release at once, the exact Codex sequence leaves the id
+out of the floor, the unreleased sequence stays hidden, fake-clock TTL, still-pending forget stays hidden via the Room set),
+`ScreenPublisherTest` (release shows the note again; clock TTL), `ForgetStructuralTest` (TEXT scan: every deleteForget(s) call in
+`ForgetQueue` is followed by `onReleased`). NOT tested: Room flows and delivery order, the view model wiring at runtime.
 
 ## E2b-4 note versions (backend only)
 
