@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .ai import ModelClient, ModelError, normalized
 from .config import Settings
-from .fetching import fetch_document
+from .fetching import fetch_document, validate_url
 from .models import (
     Chunk,
     DailyFeed,
@@ -42,6 +42,14 @@ from .versions import (
 
 class RowVanished(LookupError):
     """A row this request depended on was deleted (e.g. a note forgotten) while it ran."""
+
+
+def enqueue_url(db: Session, url: str) -> Job:
+    """Stage a validated URL job; the caller commits its entire transaction."""
+    job = Job(url=validate_url(url))
+    db.add(job)
+    db.flush()
+    return job
 
 
 def chunk_text(text: str, size: int = 2400) -> list[str]:

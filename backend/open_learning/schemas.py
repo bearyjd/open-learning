@@ -41,6 +41,33 @@ class JobListItem(BaseModel):
     replaces_document_id: str | None = None
 
 
+class FeedOutput(BaseModel):
+    id: str
+    url: str
+    title: str
+    created_at: datetime
+    last_fetched_at: datetime | None
+    last_error: str | None
+    consecutive_failures: int
+    paused: bool
+
+
+class DiscoveredOutput(BaseModel):
+    id: str
+    feed_id: str
+    url: str
+    title: str
+    published_at: datetime | None
+    snippet: str
+    status: Literal["new", "ingested", "dismissed"]
+    created_at: datetime
+
+
+class DiscoveryPage(BaseModel):
+    items: list[DiscoveredOutput]
+    next_cursor: str | None
+
+
 class NoteOutput(BaseModel):
     document_id: str
     title: str

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 
 BACKEND = Path(__file__).resolve().parents[1]
 PG_URL = os.environ.get("OL_TEST_MIGRATION_DATABASE_URL")
@@ -92,7 +92,7 @@ def test_upgrade_downgrade_roundtrip(database_url):
     assert refused.returncode != 0
     assert "note jobs" in refused.stdout + refused.stderr
     # PostgreSQL rolls the whole run back (still head); SQLite keeps the completed 0004 downgrade.
-    expected = "0005" if database_url.startswith("postgresql") else "0003"
+    expected = "0006" if database_url.startswith("postgresql") else "0003"
     assert ok(database_url, "current").stdout.split()[0] == expected
     assert run(engine, "SELECT COUNT(*) FROM jobs WHERE kind = 'note'").scalar() == 3
 
@@ -170,6 +170,35 @@ def seed_versioned_notes(engine):
         "('d1', 'sv1', 'N', 'one', 'v1', 'excerpt', false, :n)", n=NOW)
 
 
+def test_0006_discovery_roundtrip(database_url):
+    engine = create_engine(database_url)
+    ok(database_url, "upgrade", "0006")
+    assert {"feeds", "discovered_items"} <= set(inspect(engine).get_table_names())
+    run(engine, "INSERT INTO feeds (id,url,title,created_at,consecutive_failures) VALUES "
+        "('f1','https://example.com/feed','T',:n,0)", n=NOW)
+    insert = "INSERT INTO discovered_items (id,feed_id,url,title,snippet,status,created_at) "
+    run(engine, insert + "VALUES ('i1','f1','https://example.com/a','T','short','new',:n)", n=NOW)
+    for values in (
+        "('i2','f1','https://example.com/a','T','short','new',:n)",
+        "('i3','f1','https://example.com/b','T','short','bogus',:n)",
+        "('i4','f1','https://example.com/c','T',:snippet,'new',:n)",
+    ):
+        with pytest.raises((IntegrityError, DataError)):
+            run(engine, insert + "VALUES " + values, n=NOW, snippet="a" * 501)
+    ok(database_url, "check")
+    # Cascading parent deletion is guaranteed by the DB when FK enforcement is on.
+    with engine.begin() as connection:
+        if engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.execute(text("DELETE FROM feeds WHERE id='f1'"))
+        assert connection.execute(text("SELECT COUNT(*) FROM discovered_items")).scalar() == 0
+    ok(database_url, "downgrade", "0005")
+    assert {"feeds", "discovered_items"}.isdisjoint(inspect(engine).get_table_names())
+    ok(database_url, "upgrade", "head")
+    ok(database_url, "check")
+    engine.dispose()
+
+
 def test_0005_document_versions_roundtrip(database_url):
     engine = create_engine(database_url)
     ok(database_url, "upgrade", "0004")
@@ -191,7 +220,8 @@ def test_0005_document_versions_roundtrip(database_url):
     refused = alembic(database_url, "downgrade", "0004")
     assert refused.returncode != 0
     assert "superseded" in refused.stdout + refused.stderr
-    assert ok(database_url, "current").stdout.split()[0] == "0005"
+    expected = "0006" if database_url.startswith("postgresql") else "0005"
+    assert ok(database_url, "current").stdout.split()[0] == expected
 
     run(engine, "DELETE FROM documents WHERE id = 'd1'")
     run(engine, "INSERT INTO jobs (id, kind, url, status, attempts, payload_title, payload_text, "

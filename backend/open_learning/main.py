@@ -13,7 +13,8 @@ from sqlalchemy import or_, select, text
 from .ai import ModelClient, ModelError
 from .config import Settings, get_settings
 from .database import session_factory
-from .fetching import FetchError, validate_url
+from .discovery_api import mount_discovery
+from .fetching import FetchError
 from .forget import (
     edit_note,
     forget_note,
@@ -45,6 +46,7 @@ from .schemas import (
 from .services import (
     RowVanished,
     answer_review,
+    enqueue_url,
     ensure_review,
     serialize_insight,
     serialize_review,
@@ -158,11 +160,9 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
     @api.post("/ingest/url", status_code=202, response_model=JobOutput)
     def ingest(payload: UrlInput, db=Depends(database)):
         try:
-            url = validate_url(payload.url)
+            job = enqueue_url(db, payload.url)
         except FetchError as error:
             raise HTTPException(422, str(error)) from error
-        job = Job(url=url)
-        db.add(job)
         db.commit()
         return job_output(job)
 
@@ -397,6 +397,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
             )
         ]
 
+    mount_discovery(api, database)
     app.include_router(api)
     return app
 

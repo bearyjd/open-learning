@@ -22,6 +22,33 @@ This is intentionally separate from the administrator-configured local AI
 endpoint, which can be private. Keep the backend patched and apply egress
 restrictions as an additional deployment defense.
 
+Feed discovery uses the same public HTTP(S), standard-port and DNS-pinning
+boundary as article fetch. Every redirect hop is resolved and validated before
+connecting, and item URLs are resolved and validated before they enter the queue.
+This prevents private-address links from being stored for a later ingest; the
+article fetcher checks again when the user requests ingest. Remote feed data is
+untrusted even when the subscription URL was previously safe.
+
+RSS/Atom XML uses the standard-library ElementTree parser with a custom
+`TreeBuilder.doctype` rejection hook. The parser recognizes declarations across
+supported XML encodings; a byte-string search alone would miss encoded DTDs.
+Rejecting every DTD blocks external entities and entity-expansion payloads
+without introducing an XML dependency. HTML is stripped from snippets, which are
+bounded to 500 plain-text characters; no remote markup or article body is stored
+by discovery.
+
+Resource boundaries include 50 subscriptions, a 1 MiB response cap, 50 items per
+fetch (at most 100 candidate entries examined), XML depth 64, a 100-item page cap,
+connection/read deadlines and bounded redirects. A spawned process also bounds
+DNS, response headers, parsing and item DNS checks by the fetch deadline. Stored
+URLs are limited to 2048 UTF-8 bytes, and conditional headers are bounded printable
+ASCII values without control characters.
+Conditional polling, failure backoff and pause after ten consecutive failures
+bound repeated work. An explicit feed refresh allows recovery from pause. Feed
+failures use fixed codes; remote response bodies, parser exception text, URL
+credentials and secrets must never enter API errors or logs. Stored feed URLs,
+item metadata and snippets remain private library data and occur in backups.
+
 Only extracted plain text is rendered; scripts and HTML are not displayed in a
 WebView. There is no file upload endpoint; the only endpoint accepting user-supplied
 content is `POST /api/v1/ingest/text`, described below. Future upload
