@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Discovery acceptance helpers; these tests never call adb or touch a device."""
+import ast
+import inspect
 import json
 import io
 import sys
@@ -107,6 +109,7 @@ def window_dump(focus=None, foreign=None, visible=True):
     dump = (f"mCurrentFocus=Window{{abc u0 {focus}}}\n"
             f"  Window #0 Window{{abc u0 {package}/.MainActivity}}:\n"
             f"    mOwnerUid=123 package={package}\n"
+            "    mAttrs={ty=BASE_APPLICATION}\n"
             "    mHasSurface=true isOnScreen=true isVisible=true\n")
     if foreign:
         state = str(visible).lower()
@@ -157,6 +160,10 @@ class InputSafetyTests(unittest.TestCase):
                      window_dump(foreign="com.android.systemui"),
                      window_dump(foreign="com.google.android.inputmethod.latin"),
                      window_dump(foreign="com.example.autofill"),
+                     window_dump().replace("BASE_APPLICATION", "APPLICATION_OVERLAY"),
+                     window_dump().replace("ty=BASE_APPLICATION", "unknown=true"),
+                     window_dump().replace("package=" + discovery.notes.PACKAGE,
+                                           "package=com.google.android.inputmethod.latin").replace("BASE_APPLICATION", "INPUT_METHOD"),
                      window_dump().replace("isOnScreen=true isVisible=true", "unknown=true"),
                      window_dump().replace("package=", "unknown="),
                      window_dump().replace("isOnScreen=true isVisible=true", "isVisible=false"),
@@ -216,23 +223,167 @@ class InputSafetyTests(unittest.TestCase):
                     self.device.run("shell", "input", "keyevent", "KEYCODE_BACK")
                 self.assertEqual(1, run.call_count)
 
-    def test_system_bars_require_known_thin_edge_geometry(self):
-        for title, kind in (("StatusBar", "STATUS_BAR"), ("NavigationBar0", "NAVIGATION_BAR")):
-            for geometry in ("", "Frames: display=unknown frame=[0,0][1080,64]",
-                             "Frames: display=[0,0][1080,1920] frame=[0,0][1080,1920]",
-                             "Frames: display=[0,0][1080,1920] frame=[0,0][1080,600]",
-                             "Frames: display=[0,0][1080,1920] frame=[0,100][1080,164]",
-                             "Frames: display=[0,0][1080,1920] frame=[0,0][1090,64]",
-                             "Frames: display=[0,0][1080,1920] frame=[0,0][100,64]"):
+    def test_bars_do_not_depend_on_display_geometry(self):
+        for kind, title in (("STATUS_BAR", "StatusBar"), ("NAVIGATION_BAR", "NavigationBar0")):
+            for frame in ("", "Frames: display=[0,0][480,800] frame=[0,0][480,800]",
+                          "Frames: display=[0,0][2560,1600] frame=[0,0][2560,1600]"):
                 bar = (f"  Window #1 Window{{def u0 {title}}}:\n"
                        "    mOwnerUid=1000 package=com.android.systemui\n"
-                       f"    mAttrs={{ty={kind}}}\n    {geometry}\n"
-                       "    mHasSurface=true isOnScreen=true isVisible=true\n")
-                with self.subTest(title=title, geometry=geometry), \
-                     patch.object(discovery.notes.Device, "run", return_value=window_dump() + bar) as run:
+                       f"    mAttrs={{ty={kind}}}\n    {frame}\n"
+                       "    isOnScreen=true isVisible=true\n")
+                with self.subTest(kind=kind, frame=frame), patch.object(discovery.notes.Device, "run", return_value=window_dump() + bar):
+                    self.device.shell("input", "keyevent", "KEYCODE_BACK")
+
+    def test_ime_allowed_only_with_acceptance_focus_and_input_method_type(self):
+        ime = ("  Window #1 Window{def u0 InputMethod}:\n"
+               "    mOwnerUid=456 package=com.google.android.inputmethod.latin\n"
+               "    mAttrs={ty=INPUT_METHOD}\n"
+               "    isOnScreen=true isVisible=true\n")
+        with patch.object(discovery.notes.Device, "run", return_value=window_dump() + ime) as run:
+            self.device.type("private-token")
+        self.assertEqual(2, run.call_count)
+        for bad in (window_dump(focus="com.google.android.inputmethod.latin/.Ime") + ime,
+                    window_dump() + ime.replace("INPUT_METHOD", "APPLICATION_OVERLAY"),
+                    window_dump() + ime.replace("com.google.android.inputmethod.latin", "com.example.autofill"),
+                    window_dump() + ime + window_dump(foreign="com.example.share")):
+            with self.subTest(bad=bad), patch.object(discovery.notes.Device, "run", return_value=bad) as run:
+                with self.assertRaises(discovery.notes.SupervisedAbort):
+                    self.device.type("private-token")
+                self.assertEqual(1, run.call_count)
+
+    def test_all_am_pm_mutations_are_guarded_at_both_entrypoints(self):
+        for command in (("am", "start", "-n", discovery.notes.ACTIVITY),
+                        ("am", "kill", discovery.notes.PACKAGE),
+                        ("am", "force-stop", discovery.notes.PACKAGE),
+                        ("pm", "clear", discovery.notes.PACKAGE)):
+            for entry in (self.device.shell, lambda *args: self.device.run("shell", *args)):
+                with self.subTest(command=command), patch.object(discovery.notes.Device, "run", return_value=window_dump(foreign="com.example.autofill")) as run:
                     with self.assertRaises(discovery.notes.SupervisedAbort):
-                        self.device.run("shell", "input", "keyevent", "KEYCODE_BACK")
-                    self.assertEqual(1, run.call_count)
+                        entry(*command)
+                    self.assertEqual([("shell", "dumpsys", "window", "windows")], [call.args for call in run.call_args_list])
+                calls = []
+                def run(_device, *args, **kwargs):
+                    calls.append(args)
+                    return window_dump()
+                with patch.object(discovery.notes.Device, "run", run):
+                    entry(*command)
+                self.assertEqual(("shell", "dumpsys", "window", "windows"), calls[-2])
+                self.assertEqual(("shell", *command), calls[-1])
+
+    def test_startup_precheck_and_each_connect_mutation(self):
+        launcher = "com.example.launcher"
+        launcher_dump = window_dump().replace(discovery.notes.PACKAGE, launcher)
+        for unsafe in (False, True):
+            calls = []
+            def run(_device, *args, **kwargs):
+                calls.append(args)
+                if args[:3] == ("shell", "cmd", "package"):
+                    return launcher + "/.Home\n"
+                if args == ("shell", "dumpsys", "window", "windows"):
+                    return window_dump(foreign="com.example.share") if unsafe else launcher_dump
+                return ""
+            def connect(dev, *_args):
+                dev.shell("pm", "clear", discovery.notes.PACKAGE)
+                dev.shell("am", "start", "-n", discovery.notes.ACTIVITY)
+            with self.subTest(unsafe=unsafe), patch.object(discovery.notes.Device, "run", run), patch.object(discovery.notes, "connect", side_effect=connect):
+                if unsafe:
+                    with self.assertRaises(discovery.notes.SupervisedAbort):
+                        self.device.connect(18767, {})
+                else:
+                    self.device.connect(18767, {})
+            mutations = [i for i, c in enumerate(calls) if c[:2] in (("shell", "pm"), ("shell", "am"))]
+            self.assertEqual(0 if unsafe else 2, len(mutations))
+            for index in mutations:
+                self.assertEqual(("shell", "dumpsys", "window", "windows"), calls[index - 1])
+        with patch.object(discovery.notes.Device, "run", return_value=launcher_dump):
+            with self.assertRaises(discovery.notes.SupervisedAbort):
+                self.device.shell("am", "kill", discovery.notes.PACKAGE)
+            with self.assertRaises(discovery.notes.SupervisedAbort):
+                self.device.shell("input", "keyevent", "KEYCODE_BACK")
+
+    def test_launcher_keyboard_and_failed_home_resolution_abort_before_connect(self):
+        launcher_dump = window_dump().replace(discovery.notes.PACKAGE, "com.example.launcher")
+        keyboard = ("  Window #1 Window{def u0 InputMethod}:\n"
+                    "    mOwnerUid=456 package=com.google.android.inputmethod.latin\n"
+                    "    mAttrs={ty=INPUT_METHOD}\n    isVisible=true\n")
+        for home, windows in (("No activity found", launcher_dump),
+                              ("android/.ResolverActivity", launcher_dump),
+                              ("com.example.launcher/.Home", launcher_dump + keyboard)):
+            calls = []
+            def run(_device, *args, **kwargs):
+                calls.append(args)
+                return windows if args == ("shell", "dumpsys", "window", "windows") else home
+            with self.subTest(home=home), patch.object(discovery.notes.Device, "run", run), patch.object(discovery.notes, "connect") as connect:
+                with self.assertRaises(discovery.notes.SupervisedAbort):
+                    self.device.connect(18767, {})
+                connect.assert_not_called()
+            self.assertFalse(any(c[:2] in (("shell", "am"), ("shell", "pm"), ("shell", "input")) for c in calls))
+
+    def test_repository_mutating_shell_call_sites_use_the_guard(self):
+        commands = set()
+        for module in (discovery, discovery.notes):
+            for call in ast.walk(ast.parse(inspect.getsource(module))):
+                if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+                    continue
+                args = [arg.value if isinstance(arg, ast.Constant) else "fixture" for arg in call.args]
+                if call.func.attr == "run" and args[:1] == ["shell"]:
+                    args = args[1:]
+                elif call.func.attr != "shell":
+                    continue
+                if args and args[0] in ("input", "am", "pm"):
+                    commands.add(tuple(args))
+        self.assertTrue({"input", "am", "pm"}.issubset({c[0] for c in commands}))
+        for command in commands:
+            with self.subTest(command=command), patch.object(self.device, "check_input_window", side_effect=discovery.notes.SupervisedAbort("stop")) as guard, patch.object(discovery.notes.Device, "run") as transport:
+                with self.assertRaises(discovery.notes.SupervisedAbort):
+                    self.device.shell(*command)
+                guard.assert_called_once()
+                transport.assert_not_called()
+
+    def test_inherited_restart_checks_home_kill_and_start_separately(self):
+        for overlay in (False, True):
+            calls = []
+            def run(_device, *args, **kwargs):
+                calls.append(args)
+                if args[:3] == ("shell", "cmd", "package"):
+                    return "com.example.launcher/.Home\n"
+                if args == ("shell", "dumpsys", "window", "windows"):
+                    if ("shell", "input", "keyevent", "KEYCODE_HOME") in calls:
+                        return (window_dump(foreign="com.example.share") if overlay else
+                                window_dump().replace(discovery.notes.PACKAGE, "com.example.launcher"))
+                    return window_dump()
+                return ""
+            with self.subTest(overlay=overlay), patch.object(discovery.notes.Device, "run", run), patch.object(self.device, "pid", side_effect=["11", "22"]):
+                if overlay:
+                    with self.assertRaises(discovery.notes.SupervisedAbort):
+                        self.device.kill_and_relaunch()
+                else:
+                    self.assertEqual(("11", "22"), self.device.kill_and_relaunch())
+            mutations = [i for i, c in enumerate(calls) if c[:2] in (("shell", "input"), ("shell", "am"))]
+            self.assertEqual(1 if overlay else 3, len(mutations))
+            for index in mutations:
+                self.assertEqual(("shell", "dumpsys", "window", "windows"), calls[index - 1])
+            self.assertIsNone(self.device._startup_launcher)
+
+    def test_mutation_transport_has_only_one_guarded_parent_call(self):
+        # All inherited helpers must dispatch through self.shell/self.run; no direct
+        # parent or subprocess transport may bypass the discovery guard.
+        tree = ast.parse(inspect.getsource(discovery))
+        parent_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Attribute) and n.func.attr in ("run", "shell")
+                        and isinstance(n.func.value, ast.Call) and isinstance(n.func.value.func, ast.Name)
+                        and n.func.value.func.id == "super"]
+        self.assertEqual(1, len(parent_calls))
+        guard = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Device")
+        guarded_run = next(n for n in guard.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+        self.assertIn(parent_calls[0], list(ast.walk(guarded_run)))
+        self.assertIn("self.check_input_window(", ast.get_source_segment(inspect.getsource(discovery), guarded_run))
+        for method in (discovery.notes.Device.shell, discovery.notes.Device.type,
+                       discovery.notes.Device.tap, discovery.notes.Device.kill_and_relaunch):
+            source = inspect.getsource(method)
+            self.assertNotIn("subprocess", source)
+            self.assertNotIn("Device.run(", source)
+            self.assertNotIn("Device.shell(", source)
 
     def test_field_focus_overlay_prevents_delete_text_and_back(self):
         calls = []

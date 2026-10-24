@@ -195,45 +195,53 @@ def make_handler(mock):
 
 class Device(notes.Device):
     def shell(self, *args, check=True):
-        if args and args[0] == "input":
-            return self.run("shell", *args, check=check)
-        return super().shell(*args, check=check)
+        # Keep inherited helpers on the same paced, guarded transport as run().
+        return self.run("shell", *args, check=check)
 
-    @staticmethod
-    def ordinary_bar_geometry(block, status_bar):
-        rectangle = r"(\[-?\d+,-?\d+\]\[-?\d+,-?\d+\])"
-        frames = re.findall(r"(?m)^\s*Frames:([^\n]+)$", block)
-        if frames:
-            if len(frames) != 1:
-                return False
-            display = re.findall(r"\bdisplay=" + rectangle, frames[0])
-            frame = re.findall(r"\bframe=" + rectangle, frames[0])
-        else:
-            display = re.findall(r"\bmDisplayFrame=" + rectangle, block)
-            frame = re.findall(r"\bmFrame=" + rectangle, block)
-        if len(display) != 1 or len(frame) != 1:
-            return False
-        dx1, dy1, dx2, dy2 = map(int, re.findall(r"-?\d+", display[0]))
-        x1, y1, x2, y2 = map(int, re.findall(r"-?\d+", frame[0]))
-        if not (dx1 <= x1 < x2 <= dx2 and dy1 <= y1 < y2 <= dy2):
-            return False
-        # A bar must occupy a full display edge and at most a thin strip of it.
-        thickness = min(160, min(dx2 - dx1, dy2 - dy1) // 10)
-        horizontal = x1 == dx1 and x2 == dx2 and y2 - y1 <= thickness
-        if status_bar:
-            return horizontal and y1 == dy1
-        vertical = y1 == dy1 and y2 == dy2 and x2 - x1 <= thickness
-        return ((horizontal and y2 == dy2)
-                or (vertical and (x1 == dx1 or x2 == dx2)))
+    def resolve_launcher(self):
+        # Resolve the actual HOME handler without changing the foreground app.
+        try:
+            home = self.shell("cmd", "package", "resolve-activity", "--brief",
+                              "-a", "android.intent.action.MAIN",
+                              "-c", "android.intent.category.HOME")
+            components = re.findall(r"(?m)^([\w.]+)/(?:[\w.$]+)$", home)
+            if len(components) != 1 or components[0] == "android":
+                raise ValueError("unknown launcher")
+            return components[0]
+        except Exception:
+            raise notes.SupervisedAbort("launcher check failed; input stopped") from None
 
-    def check_input_window(self):
+    def connect(self, port, results):
+        self._startup_launcher = self.resolve_launcher()
+        try:
+            self.check_input_window(allow_launcher=True)
+            notes.connect(self, port, results)
+        finally:
+            self._startup_launcher = None
+
+    def kill_and_relaunch(self):
+        self._startup_launcher = self.resolve_launcher()
+        self._restarting = True
+        try:
+            # The inherited helper starts with HOME (acceptance focus required),
+            # then kills and starts only the acceptance package from HOME.
+            return super().kill_and_relaunch()
+        finally:
+            self._startup_launcher = None
+            self._restarting = False
+
+    def check_input_window(self, allow_launcher=False):
         """Fail closed on stale XML: inspect actual windows just before each input."""
         try:
             windows = self.run("shell", "dumpsys", "window", "windows")
             focus_lines = re.findall(r"(?m)^\s*mCurrentFocus=(.*)$", windows)
             focus = re.fullmatch(r"Window\{([^}\n]+)\}", focus_lines[0]) if len(focus_lines) == 1 else None
-            if not focus or not re.search(
-                    r"\s" + re.escape(notes.PACKAGE) + r"(?:/|\s|$)", focus[1]):
+            allowed = {notes.PACKAGE}
+            if allow_launcher and getattr(self, "_startup_launcher", None):
+                allowed.add(self._startup_launcher)
+            focused_package = next((package for package in allowed if focus and re.search(
+                r"\s" + re.escape(package) + r"/", focus[1])), None)
+            if not focused_package:
                 raise ValueError("unknown focus")
             blocks = re.split(r"(?m)^\s*Window #\d+ Window\{", windows)[1:]
             focused_visible = False
@@ -244,15 +252,28 @@ class Device(notes.Device):
                     raise ValueError("unknown window")
                 if "true" not in visibility:
                     continue
-                if owner[1] != notes.PACKAGE:
-                    # Ordinary system bars are chrome; sheets, dialogs and IMEs are not.
+                kind = re.search(r"\bmAttrs=\{[^\n]*\bty=(\w+)\b", block)
+                if owner[1] != focused_package:
+                    # Full-display navigation surfaces are ordinary on some devices;
+                    # classify bars by their identity/type, never pixel geometry.
                     title = re.match(r"\S+ u\d+ (StatusBar|NavigationBar\d*)\}:", block)
-                    kind = re.search(r"\bmAttrs=\{[^\n]*\bty=(STATUS_BAR|NAVIGATION_BAR)\b", block)
-                    if (owner[1] != "com.android.systemui" or not title or not kind
-                            or (title[1] == "StatusBar") != (kind[1] == "STATUS_BAR")
-                            or not self.ordinary_bar_geometry(block, kind[1] == "STATUS_BAR")):
+                    bar = (owner[1] == "com.android.systemui" and title and kind
+                           and kind[1] == ("STATUS_BAR" if title[1] == "StatusBar" else "NAVIGATION_BAR"))
+                    ime = (focused_package == notes.PACKAGE and kind
+                           and kind[1] in ("INPUT_METHOD", "2011")
+                           and owner[1] in notes.ALLOWED_PACKAGES - {notes.PACKAGE, "com.android.systemui"})
+                    if not bar and not ime:
                         raise ValueError("foreign window")
                 if block.startswith(focus[1] + "}"):
+                    app_types = {"BASE_APPLICATION", "APPLICATION", "APPLICATION_STARTING",
+                                 "DRAWN_APPLICATION", "APPLICATION_PANEL", "APPLICATION_MEDIA",
+                                 "APPLICATION_SUB_PANEL", "APPLICATION_ATTACHED_DIALOG",
+                                 "APPLICATION_MEDIA_OVERLAY", "APPLICATION_ABOVE_SUB_PANEL"}
+                    application = (kind and (kind[1] in app_types
+                                   or kind[1].isdigit() and (1 <= int(kind[1]) <= 99
+                                                            or 1000 <= int(kind[1]) <= 1999)))
+                    if owner[1] != focused_package or not application:
+                        raise ValueError("focus is not an owned application window")
                     focused_visible = True
             if not focused_visible:
                 raise ValueError("focused window missing or hidden")
@@ -263,13 +284,21 @@ class Device(notes.Device):
         if args[:3] == ("shell", "input", "keyevent") and len(args) > 4:
             # adb accepts several keys in one command; each is a separate input event.
             return "".join(self.run("shell", "input", "keyevent", key, check=check) for key in args[3:])
-        if args[:2] == ("shell", "input"):
+        mutating = (args[:2] in (("shell", "input"), ("shell", "am"), ("shell", "pm"))
+                    and args != ("shell", "pm", "list", "packages", notes.PACKAGE))
+        if mutating:
             wait = notes.STEP["last_input"] + notes.MIN_INPUT_GAP - time.time()
             if wait > 0:
                 time.sleep(wait)
             notes.STEP["last_input"] = time.time()
             # Every entry point paces first, then makes this final read before input.
-            self.check_input_window()
+            startup = (bool(getattr(self, "_startup_launcher", None))
+                       and args in (("shell", "pm", "clear", notes.PACKAGE),
+                                    ("shell", "am", "start", "-n", notes.ACTIVITY)))
+            if (getattr(self, "_restarting", False)
+                    and args == ("shell", "am", "kill", notes.PACKAGE)):
+                startup = True
+            self.check_input_window(allow_launcher=startup)
         # Parent failures include command arguments/stderr; those may contain credentials.
         try:
             return super().run(*args, check=check)
@@ -417,7 +446,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         dev.run("reverse", "--no-rebind", remote, remote)
         owns_reverse = True
-        notes.connect(dev, args.port, results)
+        dev.connect(args.port, results)
         run_scenarios(dev, mock, results)
         return 0 if scenarios_pass(results) else 1
     except notes.SupervisedAbort:
