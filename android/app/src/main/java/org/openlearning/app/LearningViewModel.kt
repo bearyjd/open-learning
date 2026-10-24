@@ -24,13 +24,19 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private val container = (application as LearningApplication).container
     val connection = container.credentials.connection
     private var repo: LearningRepository? = null
+    private var discoverySession: DiscoverySession? = null
+    internal val discoveryActions = DiscoveryActions(viewModelScope, { discoverySession }, ::trackDiscoveryIngest, topicsAllowed = { scope ->
+        container.database.dao().forgets(scope).none { it.status != FORGET_CONFIRMED }
+    })
+    val discovery = discoveryActions.state
+    private fun clearDiscovery() { discoveryActions.clear() }
     private var purgeJob: Job? = null
     private var feedFlow: Job? = null
     private var jobsFlow: Job? = null
     private var forgetFlow: Job? = null
-    private val publisher: ScreenPublisher = ScreenPublisher(container.forgetQueue::hidden, container.forgetQueue::hiddenIds) { memory.clear(); chatSession.reset() }
+    private val publisher: ScreenPublisher = ScreenPublisher(container.forgetQueue::hidden, container.forgetQueue::hiddenIds) { memory.clear(); chatSession.reset(); clearDiscovery() }
     private val chatSession = ChatSession(publisher)
-    init { container.forgetQueue.apply { onHidden = publisher::purgeNow; onReleased = publisher::release } }
+    init { container.forgetQueue.apply { onHidden = { scope, ids -> publisher.purgeNow(scope, ids); clearDiscovery() }; onReleased = publisher::release } }
     /** The queue is app-scoped and outlives this view model: it must not keep calling a publisher nobody reads. */
     override fun onCleared() {
         container.forgetQueue.apply { onHidden = { _, _ -> }; onReleased = { _, _ -> } }
@@ -47,7 +53,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private var activeOperations = 0
     private var requestGeneration = 0
     private var detailJob: Job? = null
-    private val notesActions = NotesActions(viewModelScope, container.forgetQueue, { repo }, publisher, { memory.clear(); detailJob?.cancel(); chatSession.reset() }, ::resumeForgets)
+    private val notesActions = NotesActions(viewModelScope, container.forgetQueue, { repo }, publisher, { memory.clear(); detailJob?.cancel(); chatSession.reset(); clearDiscovery() }, ::resumeForgets)
     // The draft lives in Compose state and is persisted (debounced) to Room, never to saved instance state.
     var draft by mutableStateOf(NoteDraftFields()); private set
     var noteMessage by mutableStateOf<String?>(null); private set
@@ -73,9 +79,12 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 if (step.clearMemory) memory.clear()
                 feedFlow?.cancel(); jobsFlow?.cancel(); forgetFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatSession.reset(); activeOperations = 0; cached = emptyList()
+                clearDiscovery()
+                discoverySession = null
                 publisher.reset(config?.scope.orEmpty())
                 draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
                 repo = config?.let(container::repository)
+                discoverySession = repo?.let { DiscoverySession(it.config.scope, it.api) }
                 repo?.let { repository ->
                     purgeJob = launch { purgeInactiveScopes(repository) }
                     launch { loadDraft(repository) }
@@ -187,7 +196,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
             if (job.scope != repository.config.scope) return@request
             if (job.isNoteJob()) { retryNote(repository, job); return@request }
             val retry = if (job.jobId != null && job.status.lowercase() in listOf("failed", "error")) repository.api.retryJob(job.jobId) else null
-            container.database.dao().putJob(job.copy(jobId = retry?.id ?: job.jobId, status = retry?.status ?: "queued", error = null))
+            container.database.dao().putJob(job.copy(jobId = retry?.id ?: job.jobId, status = job.discoveryStoredStatus(retry?.status ?: "queued"), error = null))
             IngestWorker.schedule(getApplication(), job.scope, job.id, replace = true)
         }
     }
@@ -374,6 +383,13 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     fun search(query: String) = request { repository ->
         val results = repository.api.search(query.trim())
         if (repo === repository) publisher.publishFresh(repository.config.scope) { it.copy(results = results, searched = true) }
+    }
+    /** Persist only job identifiers: discovery titles, original URLs and topics stay in memory. */
+    private suspend fun trackDiscoveryIngest(session: DiscoverySession, item: DiscoveryItem, job: IngestJob) {
+        if (discoverySession !== session || repo?.config?.scope != session.scope) return
+        val row = PendingIngest(session.scope, java.util.UUID.randomUUID().toString(), "", jobId = job.id, status = job.status, kind = "discovery").let { it.copy(status = it.discoveryStoredStatus(job.status)) }
+        container.database.dao().putJob(row)
+        IngestWorker.schedule(getApplication(), row.scope, row.id)
     }
     fun loadNotes() = notesActions.load()
     fun closeNotes() = notesActions.close()

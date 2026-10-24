@@ -16,9 +16,9 @@ internal fun ImportJobs(jobs: List<PendingIngest>, model: LearningViewModel) {
         jobs.forEach { job ->
             Surface(shape = RoundedCornerShape(12.dp), color = Color.White) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text(job.displayName(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                    Text(job.status.replaceFirstChar(Char::uppercase), color = Clay, style = MaterialTheme.typography.labelMedium)
-                    job.error?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    Text(if (job.kind == "discovery") job.discoveryJobLabel() else job.displayName(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                    Text(if (job.kind == "discovery") job.discoveryJobStatus() else job.status.replaceFirstChar(Char::uppercase), color = Clay, style = MaterialTheme.typography.labelMedium)
+                    (if (job.kind == "discovery") job.discoveryJobError() else job.error)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Row {
                         if (job.canRetry()) TextButton(onClick = { model.retryImport(job) }) { Text("Retry import") }
                         if (job.canRemove()) TextButton(onClick = { model.removeNoteJob(job) }) { Text("Remove note") }

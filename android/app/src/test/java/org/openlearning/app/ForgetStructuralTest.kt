@@ -127,7 +127,7 @@ class ForgetStructuralTest {
     // A text scan, NOT a runtime guarantee: the view model hands both queue hooks to the screen publisher.
     @Test fun theViewModelWiresTheQueueHooksToThePublisher() {
         val text = source("LearningViewModel.kt")
-        assertTrue("onHidden is not wired", Regex("""onHidden\s*=\s*publisher::purgeNow""").containsMatchIn(text))
+        assertTrue("onHidden is not wired", Regex("""onHidden\s*=\s*\{\s*scope,\s*ids\s*->\s*publisher\.purgeNow\(scope, ids\);\s*clearDiscovery\(\)\s*\}""").containsMatchIn(text))
         assertTrue("onReleased is not wired", Regex("""onReleased\s*=\s*publisher::release""").containsMatchIn(text))
         val cleared = text.substringAfter("override fun onCleared(", "").substringBefore("super.onCleared()")
         assertTrue("onHidden is not reset in onCleared", Regex("""onHidden\s*=\s*\{\s*_\s*,\s*_\s*->\s*\}""").containsMatchIn(cleared))
