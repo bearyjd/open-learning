@@ -78,3 +78,7 @@ verification.
 
 No Android build or device run, model call, live feed provider test, or
 sustained production polling verification is claimed for this slice.
+
+The later Android discovery slice is tracked separately in
+[Android discovery verification](verification-android-discovery.md); the backend
+results above do not establish Android device behavior.
