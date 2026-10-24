@@ -194,7 +194,82 @@ def make_handler(mock):
 
 
 class Device(notes.Device):
+    def shell(self, *args, check=True):
+        if args and args[0] == "input":
+            return self.run("shell", *args, check=check)
+        return super().shell(*args, check=check)
+
+    @staticmethod
+    def ordinary_bar_geometry(block, status_bar):
+        rectangle = r"(\[-?\d+,-?\d+\]\[-?\d+,-?\d+\])"
+        frames = re.findall(r"(?m)^\s*Frames:([^\n]+)$", block)
+        if frames:
+            if len(frames) != 1:
+                return False
+            display = re.findall(r"\bdisplay=" + rectangle, frames[0])
+            frame = re.findall(r"\bframe=" + rectangle, frames[0])
+        else:
+            display = re.findall(r"\bmDisplayFrame=" + rectangle, block)
+            frame = re.findall(r"\bmFrame=" + rectangle, block)
+        if len(display) != 1 or len(frame) != 1:
+            return False
+        dx1, dy1, dx2, dy2 = map(int, re.findall(r"-?\d+", display[0]))
+        x1, y1, x2, y2 = map(int, re.findall(r"-?\d+", frame[0]))
+        if not (dx1 <= x1 < x2 <= dx2 and dy1 <= y1 < y2 <= dy2):
+            return False
+        # A bar must occupy a full display edge and at most a thin strip of it.
+        thickness = min(160, min(dx2 - dx1, dy2 - dy1) // 10)
+        horizontal = x1 == dx1 and x2 == dx2 and y2 - y1 <= thickness
+        if status_bar:
+            return horizontal and y1 == dy1
+        vertical = y1 == dy1 and y2 == dy2 and x2 - x1 <= thickness
+        return ((horizontal and y2 == dy2)
+                or (vertical and (x1 == dx1 or x2 == dx2)))
+
+    def check_input_window(self):
+        """Fail closed on stale XML: inspect actual windows just before each input."""
+        try:
+            windows = self.run("shell", "dumpsys", "window", "windows")
+            focus_lines = re.findall(r"(?m)^\s*mCurrentFocus=(.*)$", windows)
+            focus = re.fullmatch(r"Window\{([^}\n]+)\}", focus_lines[0]) if len(focus_lines) == 1 else None
+            if not focus or not re.search(
+                    r"\s" + re.escape(notes.PACKAGE) + r"(?:/|\s|$)", focus[1]):
+                raise ValueError("unknown focus")
+            blocks = re.split(r"(?m)^\s*Window #\d+ Window\{", windows)[1:]
+            focused_visible = False
+            for block in blocks:
+                owner = re.search(r"(?m)^\s*mOwnerUid=\d+\b[^\n]*\bpackage=([^\s]+)", block)
+                visibility = re.findall(r"\b(?:isOnScreen|isVisible|isReadyForDisplay\(\))=(true|false)\b", block)
+                if not owner or not visibility:
+                    raise ValueError("unknown window")
+                if "true" not in visibility:
+                    continue
+                if owner[1] != notes.PACKAGE:
+                    # Ordinary system bars are chrome; sheets, dialogs and IMEs are not.
+                    title = re.match(r"\S+ u\d+ (StatusBar|NavigationBar\d*)\}:", block)
+                    kind = re.search(r"\bmAttrs=\{[^\n]*\bty=(STATUS_BAR|NAVIGATION_BAR)\b", block)
+                    if (owner[1] != "com.android.systemui" or not title or not kind
+                            or (title[1] == "StatusBar") != (kind[1] == "STATUS_BAR")
+                            or not self.ordinary_bar_geometry(block, kind[1] == "STATUS_BAR")):
+                        raise ValueError("foreign window")
+                if block.startswith(focus[1] + "}"):
+                    focused_visible = True
+            if not focused_visible:
+                raise ValueError("focused window missing or hidden")
+        except Exception:
+            raise notes.SupervisedAbort("unexpected foreground or overlay; input stopped") from None
+
     def run(self, *args, check=True):
+        if args[:3] == ("shell", "input", "keyevent") and len(args) > 4:
+            # adb accepts several keys in one command; each is a separate input event.
+            return "".join(self.run("shell", "input", "keyevent", key, check=check) for key in args[3:])
+        if args[:2] == ("shell", "input"):
+            wait = notes.STEP["last_input"] + notes.MIN_INPUT_GAP - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            notes.STEP["last_input"] = time.time()
+            # Every entry point paces first, then makes this final read before input.
+            self.check_input_window()
         # Parent failures include command arguments/stderr; those may contain credentials.
         try:
             return super().run(*args, check=check)
@@ -209,7 +284,8 @@ class Device(notes.Device):
 
 
 def scenarios_pass(results):
-    return all(results.get(key) is True for key in REQUIRED_RESULTS)
+    return (not results.get("aborted") and not results.get("runner_failed")
+            and all(results.get(key) is True for key in REQUIRED_RESULTS))
 
 
 def saw(mock, method, path, status):
@@ -357,7 +433,7 @@ def main():
             dev.run("reverse", "--remove", remote, check=False)
         if server:
             server.shutdown()
-        print("Discovery acceptance:", "PASS" if scenarios_pass(results) else "INCOMPLETE")
+        print("Discovery acceptance:", "PASS" if scenarios_pass(results) else "FAIL")
 
 
 if __name__ == "__main__":
