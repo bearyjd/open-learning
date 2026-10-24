@@ -82,3 +82,24 @@ sustained production polling verification is claimed for this slice.
 The later Android discovery slice is tracked separately in
 [Android discovery verification](verification-android-discovery.md); the backend
 results above do not establish Android device behavior.
+
+## Android discovery review fixes
+
+Queue mutations retain their per-item busy guard across screen exits, and feed
+Retry-After deadlines survive late responses after leaving Feeds. Both guards
+belong to the connection scope; cooldown deadlines use a monotonic clock.
+The acceptance runner checks focus and visible windows with read-only dumpsys
+before every input event, including each key in a batch, and aborts before
+input on unsafe or unverifiable window state. Aborts and runner failures prevent
+a PASS verdict, including failures during the final evidence dump.
+
+Regression-first runs reproduced the queue/cooldown and input/verdict failures.
+The requested Java 21/SDK gate (`testDebugUnitTest
+:app:assembleAcceptanceAndroidTest lintDebug`, with the specified Gradle cache)
+passed: **409 JVM tests, zero failures/errors/skips**, acceptance test APK
+assembled, and lint with zero errors and 16 existing warnings. Full
+`python3 -m unittest discover -s scripts/tests` passed **72 tests**, including
+20 discovery helper tests. Host checks required local socket access for Gradle
+and the existing loopback mock servers. Independent review found no remaining
+blocking findings. No adb, device, emulator or instrumented tests ran;
+device acceptance and runtime window-format compatibility remain unverified.
