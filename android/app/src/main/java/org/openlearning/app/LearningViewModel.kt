@@ -79,8 +79,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 if (step.clearMemory) memory.clear()
                 feedFlow?.cancel(); jobsFlow?.cancel(); forgetFlow?.cancel(); detailJob?.cancel(); purgeJob?.cancel()
                 requestGeneration++; chatSession.reset(); activeOperations = 0; cached = emptyList()
-                clearDiscovery()
                 discoverySession = null
+                discoveryActions.resetScope()
                 publisher.reset(config?.scope.orEmpty())
                 draftReady = false; draft = NoteDraftFields(); noteMessage = null; pendingFile = null; pendingFromShare = false; limits = DEFAULT_LIMITS; limitsLoaded = false
                 repo = config?.let(container::repository)

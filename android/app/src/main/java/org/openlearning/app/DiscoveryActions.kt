@@ -18,8 +18,9 @@ class DiscoveryActions(
     private val scope: CoroutineScope,
     private val session: () -> DiscoverySession?,
     private val onIngested: suspend (DiscoverySession, DiscoveryItem, IngestJob) -> Unit = { _, _, _ -> },
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val topicsAllowed: suspend (String) -> Boolean = { true },
+    private val wallClock: () -> Long = System::currentTimeMillis,
 ) {
     private val mutable = MutableStateFlow(DiscoveryState())
     val state = mutable.asStateFlow()
@@ -32,6 +33,9 @@ class DiscoveryActions(
     private fun update(block: (DiscoveryState) -> DiscoveryState) { mutable.update(block) }
     private fun guarded(ticket: Ticket, predicate: (DiscoveryState) -> Boolean = { true }, block: (DiscoveryState) -> DiscoveryState) {
         mutable.update { value -> if (session() === ticket.session && value.epoch == ticket.epoch && predicate(value)) block(value) else value }
+    }
+    private fun guardedSession(ticket: Ticket, block: (DiscoveryState) -> DiscoveryState) {
+        mutable.update { value -> if (session() === ticket.session) block(value) else value }
     }
     private fun queue(block: (DiscoveryQueueState) -> DiscoveryQueueState) = update { it.copy(queue = block(it.queue)) }
     private fun feeds(block: (DiscoveryFeedsState) -> DiscoveryFeedsState) = update { it.copy(feeds = block(it.feeds)) }
@@ -138,13 +142,12 @@ class DiscoveryActions(
 
     fun refreshFeed(feed: DiscoveryFeed) {
         if (state.value.feeds.items.none { it.id == feed.id }) return
-        if ((state.value.feeds.retryAtMillis[feed.id] ?: 0) > clock()) {
+        if (state.value.feeds.retryAtMillis[feed.id]?.let { it > clock() } == true) {
             feeds { it.copy(message = "The server is busy. Wait before trying again.") }; return
         }
         mutateFeed(feed.id) { ticket ->
             val result = ticket.session.api.refreshDiscoveryFeed(feed.id).safe() ?: throw IllegalStateException()
             val transform = { feedState: DiscoveryFeedsState -> feedState.copy(items = feedState.items.map { if (it.id == feed.id) result else it },
-                retryAtMillis = feedState.retryAtMillis - feed.id,
                 message = if (result.lastError == null) "Feed refreshed." else feedErrorMessage(result.lastError)) }
             transform
         }
@@ -163,11 +166,16 @@ class DiscoveryActions(
                 if (fresh()) feeds { result(it).copy(loading = false, loaded = true, generation = it.generation + 1) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (fresh()) feeds { f ->
-                    val retry = if (error is HttpException && error.code() == 429)
-                        f.retryAtMillis + (id to (clock() + discoveryRetryDelay(error.response()?.headers()?.get("Retry-After"), clock()))) else f.retryAtMillis
-                    f.copy(message = discoveryError(error), retryAtMillis = retry)
+                if (error is HttpException && error.code() == 429) {
+                    val deadline = clock() + discoveryRetryDelay(error.response()?.headers()?.get("Retry-After"), wallClock())
+                    // A screen may close while refresh runs. Cooldowns belong to the connection session.
+                    guardedSession(ticket) { value ->
+                        val retry = value.feeds.retryAtMillis
+                        value.copy(feeds = value.feeds.copy(retryAtMillis = retry +
+                            (id to (retry[id]?.coerceAtLeast(deadline) ?: deadline))))
+                    }
                 }
+                if (fresh()) feeds { it.copy(message = discoveryError(error)) }
             } finally { if (fresh()) feeds { it.copy(operating = it.operating - id) } }
         }
     }
@@ -266,8 +274,10 @@ class DiscoveryActions(
                 }
                 if (session() !== ticket.session) return@launch
                 // Once accepted, never repeat POST if tracking later fails. A concurrent page cannot bring it back.
-                queue { it.copy(items = it.items.filterNot { row -> row.id == item.id },
-                    removedIds = (it.removedIds + item.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet(), generation = it.generation + 1, loading = false) }
+                guardedSession(ticket) { value -> value.copy(queue = value.queue.let {
+                    it.copy(items = it.items.filterNot { row -> row.id == item.id },
+                        removedIds = (it.removedIds + item.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet(), generation = it.generation + 1, loading = false)
+                }) }
                 if (job != null) {
                     if (job.id.isNullOrBlank()) { if (fresh()) queue { it.copy(message = JOB_TRACKING_FAILED) }; return@launch }
                     try {
@@ -278,15 +288,20 @@ class DiscoveryActions(
                 } else if (fresh()) queue { it.copy(message = "Article dismissed.") }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (fresh()) queue { it.copy(message = discoveryError(error)) } }
-            finally { if (current(ticket)) queue { it.copy(operating = it.operating - item.id) } }
+            finally { guardedSession(ticket) { it.copy(queue = it.queue.copy(operating = it.queue.operating - item.id)) } }
         }
     }
 
-    /** Clear increments a monotonic epoch: an old A request is stale even after an A → B → A switch. */
-    fun clear() { mutable.update { DiscoveryState(epoch = it.epoch + 1) } }
+    /** Reset private screen content without forgetting requests still running in this session. */
+    fun clear() { mutable.update { DiscoveryState(epoch = it.epoch + 1,
+        queue = DiscoveryQueueState(operating = it.queue.operating),
+        feeds = DiscoveryFeedsState(retryAtMillis = it.feeds.retryAtMillis)) } }
+    /** Connection replacement invalidates all guards, including an A → B → A switch. */
+    fun resetScope() { mutable.update { DiscoveryState(epoch = it.epoch + 1) } }
     fun closeQueue() {
         queueLifetime++
-        queue { DiscoveryQueueState(sort = it.sort, generation = it.generation + 1, removedIds = it.removedIds, removedFeeds = it.removedFeeds) }
+        queue { DiscoveryQueueState(sort = it.sort, generation = it.generation + 1, operating = it.operating,
+            removedIds = it.removedIds, removedFeeds = it.removedFeeds) }
     }
     fun closeFeeds() { feedLifetime++; feeds { DiscoveryFeedsState(generation = it.generation + 1, retryAtMillis = it.retryAtMillis) } }
     fun closeTopics() { topicLifetime++; topics { DiscoveryTopicsState(generation = it.generation + 1) } }

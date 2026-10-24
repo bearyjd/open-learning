@@ -8,6 +8,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Headers.Companion.headersOf
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
@@ -18,6 +19,12 @@ import java.io.IOException
 class DiscoveryLogicTest {
     private fun http(code: Int, detail: String) = HttpException(Response.error<Unit>(code,
         "{\"detail\":\"$detail\"}".toResponseBody("application/json".toMediaType())))
+
+    private fun rateLimit(retryAfter: String) = HttpException(Response.error<Unit>(
+        "{}".toResponseBody("application/json".toMediaType()),
+        okhttp3.Response.Builder().request(okhttp3.Request.Builder().url("https://example.org").build())
+            .protocol(okhttp3.Protocol.HTTP_1_1).code(429).message("Too Many Requests")
+            .headers(headersOf("Retry-After", retryAfter)).build()))
 
     @Test fun topicValidationMatchesUnicodeBackendRules() {
         assertEquals("café physics", normalizeTopic("  ＣＡＦÉ...Physics  "))
@@ -80,6 +87,8 @@ class DiscoveryLogicTest {
         var getTopics: suspend () -> TopicsResponse = { TopicsResponse() }
         var ingestCount = 0
         var ingestResult: suspend () -> IngestJob = { IngestJob("job", "queued") }
+        var dismissCount = 0
+        var dismissResult: suspend () -> Response<Unit> = { Response.success(null) }
         var feedRows: List<DiscoveryFeed> = emptyList()
         var refreshResult: suspend (String) -> DiscoveryFeed = { DiscoveryFeed(id = it) }
         override suspend fun discover(sort: String, limit: Int, cursor: String?): DiscoveryPage { pages += sort to cursor; return getPage(sort, cursor) }
@@ -88,7 +97,7 @@ class DiscoveryLogicTest {
         override suspend fun deleteDiscoveryFeed(id: String): Response<Unit> = Response.success(null)
         override suspend fun refreshDiscoveryFeed(id: String) = refreshResult(id)
         override suspend fun ingestDiscovered(id: String): IngestJob { ingestCount++; return ingestResult() }
-        override suspend fun dismissDiscovered(id: String): Response<Unit> = Response.success(null)
+        override suspend fun dismissDiscovered(id: String): Response<Unit> { dismissCount++; return dismissResult() }
         override suspend fun discoveryTopics() = getTopics()
         override suspend fun pinDiscoveryTopic(body: PinTopicRequest) = PinnedTopic("pin", body.term, "date")
         override suspend fun unpinDiscoveryTopic(id: String): Response<Unit> = Response.success(null)
@@ -190,6 +199,77 @@ class DiscoveryLogicTest {
         }
     }
 
+    @Test fun pendingItemMutationBlocksOppositeActionAfterLeavingAndReturning() = runBlocking {
+        for ((ingestFirst, closeRoute) in listOf(true to false, false to false, true to true, false to true)) {
+            val response = CompletableDeferred<Unit>()
+            val row = item("a")
+            val api = FakeApi().apply {
+                getPage = { _, _ -> DiscoveryPage(listOf(row)) }
+                ingestResult = { response.await(); IngestJob("job", "queued") }
+                dismissResult = { response.await(); Response.success(null) }
+            }
+            val session = DiscoverySession("scope", api)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val actions = DiscoveryActions(scope, { session })
+                actions.loadQueue()
+                if (ingestFirst) actions.ingest(row) else actions.dismiss(row)
+                if (closeRoute) actions.clear() else actions.closeQueue()
+                actions.loadQueue()
+                if (ingestFirst) actions.dismiss(row) else actions.ingest(row)
+                assertEquals(1, api.ingestCount + api.dismissCount)
+                assertEquals(setOf(row.id), actions.state.value.queue.operating)
+                response.complete(Unit)
+                assertTrue(actions.state.value.queue.operating.isEmpty())
+                assertTrue(actions.state.value.queue.items.isEmpty())
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun failedItemMutationAfterLeavingReleasesItemForOppositeAction() = runBlocking {
+        val response = CompletableDeferred<IngestJob>()
+        val row = item("a")
+        val api = FakeApi().apply {
+            getPage = { _, _ -> DiscoveryPage(listOf(row)) }
+            ingestResult = { response.await() }
+        }
+        val session = DiscoverySession("scope", api)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val actions = DiscoveryActions(scope, { session })
+            actions.loadQueue(); actions.ingest(row); actions.closeQueue(); actions.loadQueue()
+            assertEquals(setOf(row.id), actions.state.value.queue.operating)
+            response.completeExceptionally(IOException("private"))
+            assertTrue(actions.state.value.queue.operating.isEmpty())
+            assertNull(actions.state.value.queue.message)
+            actions.dismiss(row)
+            assertEquals(1, api.dismissCount)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun clearedScopeAllowsSameItemAndOldCompletionCannotUnlockNewMutation() = runBlocking {
+        val oldResponse = CompletableDeferred<IngestJob>()
+        val newResponse = CompletableDeferred<IngestJob>()
+        val row = item("a")
+        val api = FakeApi().apply {
+            getPage = { _, _ -> DiscoveryPage(listOf(row)) }
+            ingestResult = { if (ingestCount == 1) oldResponse.await() else newResponse.await() }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        var session = DiscoverySession("old", api)
+        try {
+            val actions = DiscoveryActions(scope, { session })
+            actions.loadQueue(); actions.ingest(row)
+            session = DiscoverySession("new", api); actions.resetScope()
+            actions.loadQueue(); actions.ingest(row)
+            assertEquals(2, api.ingestCount)
+            oldResponse.complete(IngestJob("old", "queued"))
+            assertEquals(setOf(row.id), actions.state.value.queue.operating)
+            newResponse.complete(IngestJob("new", "queued"))
+            assertTrue(actions.state.value.queue.operating.isEmpty())
+        } finally { scope.cancel() }
+    }
+
     @Test fun privacyPermissionRecheckedAfterResponseAndOldErrorsCannotCrossClear() = runBlocking {
         var allowed = true
         val response = CompletableDeferred<TopicsResponse>()
@@ -244,6 +324,120 @@ class DiscoveryLogicTest {
         assertEquals(1, calls)
         now = 31_000; actions.refreshFeed(feed); assertEquals(2, calls)
         scope.cancel()
+    }
+
+    @Test fun lateFeedRateLimitSurvivesLeavingAndReturningUntilDeadline() = runBlocking {
+        for (closeRoute in listOf(false, true)) {
+            var now = 1_000L
+            var calls = 0
+            val response = CompletableDeferred<DiscoveryFeed>()
+            val feed = DiscoveryFeed(id = "feed")
+            val api = FakeApi().apply {
+                feedRows = listOf(feed)
+                refreshResult = { calls++; if (calls == 1) response.await() else feed }
+            }
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val session = DiscoverySession("scope", api)
+            try {
+                val actions = DiscoveryActions(scope, { session }, clock = { now })
+                actions.loadFeeds(); actions.refreshFeed(feed)
+                if (closeRoute) actions.clear() else actions.closeFeeds()
+                response.completeExceptionally(rateLimit("60"))
+                assertEquals(61_000L, actions.state.value.feeds.retryAtMillis[feed.id])
+                assertNull(actions.state.value.feeds.message)
+                actions.loadFeeds(); actions.refreshFeed(feed)
+                assertEquals(1, calls)
+                now = 61_000L; actions.refreshFeed(feed)
+                assertEquals(2, calls)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun lateShorterRateLimitCannotReduceCurrentScopeDeadline() = runBlocking {
+        val first = CompletableDeferred<DiscoveryFeed>()
+        val second = CompletableDeferred<DiscoveryFeed>()
+        var calls = 0
+        val feed = DiscoveryFeed(id = "feed")
+        val api = FakeApi().apply {
+            feedRows = listOf(feed)
+            refreshResult = { if (++calls == 1) first.await() else second.await() }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = DiscoverySession("scope", api)
+        try {
+            val actions = DiscoveryActions(scope, { session }, clock = { 1_000L })
+            actions.loadFeeds(); actions.refreshFeed(feed); actions.closeFeeds()
+            actions.loadFeeds(); actions.refreshFeed(feed)
+            second.completeExceptionally(rateLimit("60"))
+            first.completeExceptionally(rateLimit("10"))
+            assertEquals(61_000L, actions.state.value.feeds.retryAtMillis[feed.id])
+        } finally { scope.cancel() }
+    }
+
+    @Test fun httpDateCooldownUsesElapsedTimeAndSurvivesFullRouteClear() = runBlocking {
+        var elapsed = 1_000L
+        var wall = 1_700_000_000_000L
+        var calls = 0
+        val retryDate = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(
+            java.time.Instant.ofEpochMilli(wall + 60_000).atZone(java.time.ZoneOffset.UTC))
+        val feed = DiscoveryFeed(id = "feed")
+        val api = FakeApi().apply {
+            feedRows = listOf(feed)
+            refreshResult = { calls++; throw rateLimit(retryDate) }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = DiscoverySession("scope", api)
+        try {
+            val actions = DiscoveryActions(scope, { session }, clock = { elapsed }, wallClock = { wall })
+            actions.loadFeeds(); actions.refreshFeed(feed)
+            assertEquals(61_000L, actions.state.value.feeds.retryAtMillis[feed.id])
+            actions.clear(); actions.loadFeeds()
+            elapsed = 60_999L; wall += 7 * 86_400_000L
+            actions.refreshFeed(feed)
+            assertEquals(1, calls)
+            elapsed = 61_000L; wall -= 14 * 86_400_000L
+            actions.refreshFeed(feed)
+            assertEquals(2, calls)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun concurrentRefreshSuccessCannotClearRateLimitFromAnotherRequest() = runBlocking {
+        val first = CompletableDeferred<DiscoveryFeed>()
+        val second = CompletableDeferred<DiscoveryFeed>()
+        var calls = 0
+        val feed = DiscoveryFeed(id = "feed")
+        val api = FakeApi().apply {
+            feedRows = listOf(feed)
+            refreshResult = { if (++calls == 1) first.await() else second.await() }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val session = DiscoverySession("scope", api)
+        try {
+            val actions = DiscoveryActions(scope, { session }, clock = { 1_000L })
+            actions.loadFeeds(); actions.refreshFeed(feed); actions.closeFeeds()
+            actions.loadFeeds(); actions.refreshFeed(feed)
+            first.completeExceptionally(rateLimit("60")); second.complete(feed)
+            actions.refreshFeed(feed)
+            assertEquals(2, calls)
+            assertEquals(61_000L, actions.state.value.feeds.retryAtMillis[feed.id])
+        } finally { scope.cancel() }
+    }
+
+    @Test fun clearedScopeDiscardsCooldownAndLateRateLimitFromOldScope() = runBlocking {
+        val response = CompletableDeferred<DiscoveryFeed>()
+        val feed = DiscoveryFeed(id = "feed")
+        val api = FakeApi().apply { feedRows = listOf(feed); refreshResult = { response.await() } }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        var session = DiscoverySession("old", api)
+        try {
+            val actions = DiscoveryActions(scope, { session }, clock = { 1_000L })
+            actions.loadFeeds(); actions.refreshFeed(feed)
+            session = DiscoverySession("new", api); actions.resetScope(); actions.loadFeeds()
+            response.completeExceptionally(rateLimit("60"))
+            assertTrue(actions.state.value.feeds.retryAtMillis.isEmpty())
+            api.refreshResult = { feed }; actions.refreshFeed(feed)
+            assertEquals("Feed refreshed.", actions.state.value.feeds.message)
+        } finally { scope.cancel() }
     }
 
     @Test fun forgetBetweenFreshnessCheckAndAtomicPublicationCannotResurrectContent() = runBlocking {
