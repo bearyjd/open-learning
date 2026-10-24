@@ -88,18 +88,25 @@ results above do not establish Android device behavior.
 Queue mutations retain their per-item busy guard across screen exits, and feed
 Retry-After deadlines survive late responses after leaving Feeds. Both guards
 belong to the connection scope; cooldown deadlines use a monotonic clock.
+Mutation completion preserves pending queue GETs. Cooldowns prune on expiry,
+successful refresh and feed reload; late 429s cannot restore deleted feed entries.
 The acceptance runner checks focus and visible windows with read-only dumpsys
-before every input event, including each key in a batch, and aborts before
-input on unsafe or unverifiable window state. Aborts and runner failures prevent
-a PASS verdict, including failures during the final evidence dump.
+before every state-changing `input`/`am`/`pm` command, including each key in a
+batch. Startup/relaunch requires launcher or acceptance focus; input requires
+acceptance focus. Typed IME windows with acceptance app focus and ordinary
+status/navigation bars are allowed without pixel thresholds. Unsafe or
+unverifiable windows abort; aborts and runner failures prevent a PASS verdict,
+including failures during the final evidence dump.
 
 Regression-first runs reproduced the queue/cooldown and input/verdict failures.
 The requested Java 21/SDK gate (`testDebugUnitTest
 :app:assembleAcceptanceAndroidTest lintDebug`, with the specified Gradle cache)
-passed: **409 JVM tests, zero failures/errors/skips**, acceptance test APK
+passed: **413 JVM tests, zero failures/errors/skips**, acceptance test APK
 assembled, and lint with zero errors and 16 existing warnings. Full
-`python3 -m unittest discover -s scripts/tests` passed **72 tests**, including
-20 discovery helper tests. Host checks required local socket access for Gradle
+`python3 -m unittest discover -s scripts/tests` passed **79 tests**, including
+27 discovery helper tests. Host checks required local socket access for Gradle
 and the existing loopback mock servers. Independent review found no remaining
 blocking findings. No adb, device, emulator or instrumented tests ran;
 device acceptance and runtime window-format compatibility remain unverified.
+The discovery script guard has NEVER run on a device; the successful real-device
+runs of `scripts/android_notes.py` do not verify this guard.
