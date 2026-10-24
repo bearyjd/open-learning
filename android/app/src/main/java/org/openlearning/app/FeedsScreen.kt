@@ -60,4 +60,3 @@ internal fun FeedsScreen(state: DiscoveryFeedsState, actions: DiscoveryActions, 
         } }
     }
 }
-
