@@ -26,7 +26,7 @@ class IngestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (row.kind == "note") return runNote(container, repository, row)
         try {
             val job = if (row.jobId == null) repository.api.ingest(UrlRequest(row.url)) else repository.api.job(row.jobId)
-            row = row.copy(jobId = job.id, status = job.status, error = job.error)
+            row = row.copy(jobId = job.id, status = row.discoveryStoredStatus(job.status), error = row.discoveryStoredError(job.error))
             dao.putJob(row)
             return when (job.status.lowercase()) {
                 "completed", "complete", "succeeded", "success", "done" -> {

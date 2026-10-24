@@ -751,3 +751,8 @@ the blanket device-unverified claims. The specific limitations and pending work 
 
 Feed discovery and topic-ranking checks continue in
 [discovery verification](verification-discovery.md).
+
+Android's Reading queue, feeds and topics implementation has a separate
+[verification record](verification-android-discovery.md). Its instrumented tests
+and adb runner have not run on a device; prior notes-device results do not
+verify discovery UI or privacy behavior.

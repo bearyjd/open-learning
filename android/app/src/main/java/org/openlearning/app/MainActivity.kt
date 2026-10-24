@@ -76,6 +76,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
     // Only this flag survives process death; the note text is a Room-backed draft in the view model.
     var composingNote by rememberSaveable { mutableStateOf(false) }
     var showingNotes by rememberSaveable { mutableStateOf(false) }
+    var showingDiscovery by rememberSaveable { mutableStateOf(false) }
     val accountReady = connection != null && state.scope == connection?.scope
     LaunchedEffect(shared, accountReady, model.draftReady, model.limitsLoaded) { if (shared != null) {
         val route = routeShare(shared, model.limits)
@@ -83,13 +84,14 @@ private enum class Destination(val title: String, val icon: ImageVector) {
             importTextFor(route)?.let { importText = it }
             if (route is ShareRoute.Note) model.receiveSharedNote(route)
             if (route is ShareRoute.TooLong) model.reportShareRejected(route)
-            destination = Destination.Discover; composingNote = route is ShareRoute.Note; showingNotes = false; model.closeDetail(); consumeShare()
+            destination = Destination.Discover; composingNote = route is ShareRoute.Note; showingNotes = false; showingDiscovery = false; model.closeDetail(); consumeShare()
         }
     } }
     LaunchedEffect(destination, connection?.scope) { if (destination == Destination.Review && connection != null) model.loadReviews() }
     BackHandler(state.selected != null) { model.closeDetail() }
     BackHandler(composingNote && state.selected == null) { composingNote = false }
     BackHandler(showingNotes && !composingNote && state.selected == null) { showingNotes = false }
+    BackHandler(showingDiscovery && !composingNote && state.selected == null) { showingDiscovery = false }
     if (settings || connection == null) ConnectionDialog(connection, model, onDismiss = { settings = false })
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val expanded = maxWidth >= 840.dp
@@ -118,8 +120,9 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                         if (state.learning) Tutor(state, model) else InsightDetail(state.selected!!, model)
                     } else when (destination) {
                         Destination.Discover -> if (composingNote) NoteEditor(model, state.busy) { composingNote = false }
+                            else if (showingDiscovery) DiscoveryScreen(model, state.scope, state.jobs) { showingDiscovery = false }
                             else if (showingNotes) NotesList(state.notes, state.forgetWaiting, state.forgetFailed, model) { showingNotes = false }
-                            else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, { showingNotes = true }, model)
+                            else Discover(state, importText, { importText = it }, { model.importUrl(importText); importText = "" }, { composingNote = true }, { showingNotes = true }, { showingDiscovery = true }, model)
                         Destination.Library -> InsightList("Your library", "Keep the ideas you want to return to. Saved ideas stay readable offline.", state.library, "No saved ideas yet", "Save an idea from Discover to keep its explanation and source here.", model)
                         Destination.Learn -> InsightList("A little deeper", "Choose an idea. Your tutor explains it, then asks you to recall it in your own words.", state.library, "Choose something worth learning", "Save an idea first, then start a source-grounded conversation.", model, true)
                         Destination.Review -> ReviewScreen(state, model)
@@ -150,7 +153,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
-@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, writeNote: () -> Unit, openNotes: () -> Unit, model: LearningViewModel) {
+@Composable private fun Discover(state: ScreenState, input: String, change: (String) -> Unit, import: () -> Unit, writeNote: () -> Unit, openNotes: () -> Unit, openDiscovery: () -> Unit, model: LearningViewModel) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageTitle("Follow a good idea.", "Turn something you read into something you understand.") }
         item {
@@ -163,6 +166,7 @@ private enum class Destination(val title: String, val icon: ImageVector) {
                     Text("Or share a link from your browser. Imports continue in the background.", style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = writeNote) { Icon(Icons.Default.EditNote, null); Spacer(Modifier.width(6.dp)); Text("Write or import a note") }
                     OutlinedButton(onClick = openNotes) { Icon(Icons.Default.Bookmarks, null); Spacer(Modifier.width(6.dp)); Text("Your notes") }
+                    OutlinedButton(onClick = openDiscovery, modifier = Modifier.heightIn(min = 48.dp)) { Text("Reading queue") }
                 }
             }
         }
@@ -201,9 +205,9 @@ private enum class Destination(val title: String, val icon: ImageVector) {
         items(items, key = { it.id }) { InsightCard(it, model, learn) }
     }
 }
-@Composable private fun SourceLink(url: String?, label: String = "Open original source") {
+@Composable internal fun SourceLink(url: String?, label: String = "Open original source") {
     val uri = LocalUriHandler.current
-    if (url != null) TextButton(onClick = { runCatching { uri.openUri(url) } }, contentPadding = PaddingValues(0.dp)) {
+    if (url != null) TextButton(onClick = { runCatching { uri.openUri(url) } }, modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(0.dp)) {
         Icon(Icons.Default.OpenInNew, null, Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text(label)
     }
 }

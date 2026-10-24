@@ -131,7 +131,38 @@ mounted under a path prefix.
 
 No model, embedding, paid API or external search call is involved. Ranking does
 not fetch or automatically ingest articles. Android topics and ranking UI are
-outside this slice. See [discovery verification](verification-discovery.md).
+outside this backend slice. See [discovery verification](verification-discovery.md).
+
+## Android discovery
+
+Discover's "Reading queue" entry opens queue, feed and topic screens. The queue
+uses the existing authenticated Retrofit client for newest/relevance sorting,
+bounded cursor pagination, explicit refresh, dismiss and article ingest. A
+relevance-page 409 clears the cursor and restarts from page one with fixed copy.
+Feed subscriptions support add, confirmed remove and explicit refresh with
+Retry-After handling. Topics show derived terms and explicit pins, with local
+term validation and the server's 30-pin cap. External article links use the
+existing browser-link handling.
+
+A separate discovery StateFlow publisher owns these private lists in memory.
+Atomic session, epoch and generation checks prevent late responses from restoring
+data after a scope change, forget or screen close. Private inputs use ordinary
+Compose remember state keyed to scope and the clearing epoch; topic terms are
+also excluded from lazy-list saveable keys. Pending or failed forgets block topic
+and relevance loads, and newest results have matched topics stripped until server
+deletion is confirmed. Content is excluded from saved state and Room.
+Discovery ingestion hands only job identifiers to the existing import-job
+tracking path, with an empty URL; queue titles, URLs, snippets and topic terms
+are not persisted there. This slice changes no Room schema or backend contract.
+
+Private discovery screens set FLAG_SECURE and opt text fields out of autofill
+and personalized keyboard learning. Server errors become fixed local copy;
+request/response content is never logged. The shared client retains HTTP
+consent, token isolation and disabled redirects. Discovery does not poll in the
+background, auto-ingest, call a model, or cache these screens for offline use;
+offline actions show a fixed connection message. Runtime screen, privacy and
+accessibility behavior remains device-unverified. See
+[Android discovery verification](verification-android-discovery.md).
 
 ## Note versions (E2b-4)
 

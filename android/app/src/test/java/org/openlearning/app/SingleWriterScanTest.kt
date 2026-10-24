@@ -109,7 +109,7 @@ class SingleWriterScanTest {
         assertTrue(forget.indexOf("onHidden(") < forget.indexOf("return purged"))
         val confirmed = queue.substringAfter("suspend fun confirmed").substringBefore("suspend fun reconcile")
         assertTrue(confirmed.indexOf("onHidden(") > confirmed.indexOf("withTransaction"))
-        assertTrue("onHidden = publisher::purgeNow" in File(dir(), "LearningViewModel.kt").readText())
+        assertTrue("onHidden = { scope, ids -> publisher.purgeNow(scope, ids); clearDiscovery() }" in File(dir(), "LearningViewModel.kt").readText())
     }
     @Test fun onlyChatSessionOwnsTheChatGeneration() {
         val offenders = mainSources().filter { it.name != "ChatSession.kt" && "chatGeneration" in it.readText() }

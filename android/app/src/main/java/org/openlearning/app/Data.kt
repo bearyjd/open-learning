@@ -49,7 +49,7 @@ data class Rating(val rating: String)
 /** DELETE succeeded, or the server already has nothing to delete. */
 fun Response<Unit>.isGone() = isSuccessful || code() == 404
 
-interface LearningApi {
+interface LearningApi : DiscoveryService {
     @GET("api/v1/feed/today") suspend fun feed(): List<Insight>
     @GET("api/v1/library") suspend fun library(): List<Insight>
     @GET("api/v1/insights/{id}") suspend fun insight(@Path("id") id: String): Insight
