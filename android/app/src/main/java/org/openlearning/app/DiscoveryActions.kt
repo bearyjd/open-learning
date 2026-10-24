@@ -27,6 +27,8 @@ class DiscoveryActions(
     private var queueLifetime = 0L
     private var feedLifetime = 0L
     private var topicLifetime = 0L
+    // Retain authoritative membership when a screen clears its private rows.
+    private var knownFeedIds: Set<String>? = null
     private data class Ticket(val session: DiscoverySession, val epoch: Long)
     private fun ticket() = session()?.let { Ticket(it, state.value.epoch) }
     private fun current(ticket: Ticket) = session() === ticket.session && state.value.epoch == ticket.epoch
@@ -40,6 +42,12 @@ class DiscoveryActions(
     private fun queue(block: (DiscoveryQueueState) -> DiscoveryQueueState) = update { it.copy(queue = block(it.queue)) }
     private fun feeds(block: (DiscoveryFeedsState) -> DiscoveryFeedsState) = update { it.copy(feeds = block(it.feeds)) }
     private fun topics(block: (DiscoveryTopicsState) -> DiscoveryTopicsState) = update { it.copy(topics = block(it.topics)) }
+    private fun DiscoveryFeedsState.pruneCooldowns(ids: Set<String>? = knownFeedIds): DiscoveryFeedsState {
+        val now = clock()
+        return copy(retryAtMillis = retryAtMillis.filter { (id, deadline) ->
+            deadline > now && (ids == null || id in ids)
+        })
+    }
 
     /** User actions run on the view-model dispatcher; clear can also be called by a forget worker. */
     fun loadQueue() = startQueue()
@@ -102,13 +110,16 @@ class DiscoveryActions(
 
     fun loadFeeds() {
         val ticket = ticket() ?: return
-        feeds { it.copy(loading = true, error = null, generation = it.generation + 1) }
+        feeds { it.pruneCooldowns().copy(loading = true, error = null, generation = it.generation + 1) }
         val generation = state.value.feeds.generation
         fun feeds(block: (DiscoveryFeedsState) -> DiscoveryFeedsState) = guarded(ticket, { it.feeds.generation == generation }) { it.copy(feeds = block(it.feeds)) }
         scope.launch {
             try {
                 val rows = ticket.session.api.discoveryFeeds().orEmpty().filterNotNull().mapNotNull { it.safe() }.distinctBy { it.id }.take(50)
-                if (current(ticket) && state.value.feeds.generation == generation) feeds { it.copy(items = rows, loading = false, loaded = true, error = null) }
+                feeds {
+                    knownFeedIds = rows.map { row -> row.id }.toSet()
+                    it.pruneCooldowns().copy(items = rows, loading = false, loaded = true, error = null)
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (current(ticket) && state.value.feeds.generation == generation) feeds { it.copy(loading = false, error = discoveryError(error)) }
@@ -122,6 +133,10 @@ class DiscoveryActions(
         if (state.value.feeds.items.size >= 50) { feeds { it.copy(message = "You can subscribe to up to 50 feeds.") }; return }
         mutateFeed(ADD_FEED) { ticket ->
             val result = ticket.session.api.addDiscoveryFeed(FeedRequest(url)).safe() ?: throw IllegalStateException()
+            guardedSession(ticket) { value ->
+                knownFeedIds = (knownFeedIds ?: value.feeds.items.map { it.id }.toSet()) + result.id
+                value
+            }
             val transform = { feedState: DiscoveryFeedsState -> feedState.copy(items = (listOf(result) + feedState.items).distinctBy { it.id }.take(50), message = "Feed added.") }
             transform
         }
@@ -132,8 +147,12 @@ class DiscoveryActions(
         mutateFeed(feed.id) { ticket ->
             val response = ticket.session.api.deleteDiscoveryFeed(feed.id)
             if (!response.isGone()) throw HttpException(response)
+            guardedSession(ticket) { value ->
+                knownFeedIds = (knownFeedIds ?: value.feeds.items.map { it.id }.toSet()) - feed.id
+                value.copy(feeds = value.feeds.copy(retryAtMillis = value.feeds.retryAtMillis - feed.id))
+            }
             guarded(ticket) { value -> value.copy(queue = value.queue.let { q -> q.copy(items = q.items.filterNot { it.feedId == feed.id },
-                removedFeeds = (q.removedFeeds + feed.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet(), generation = q.generation + 1, loading = false) }) }
+                removedFeeds = (q.removedFeeds + feed.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet()) }) }
             val transform = { feedState: DiscoveryFeedsState -> feedState.copy(items = feedState.items.filterNot { it.id == feed.id },
                 retryAtMillis = feedState.retryAtMillis - feed.id, message = "Feed removed.") }
             transform
@@ -141,13 +160,16 @@ class DiscoveryActions(
     }
 
     fun refreshFeed(feed: DiscoveryFeed) {
+        feeds { it.pruneCooldowns() }
         if (state.value.feeds.items.none { it.id == feed.id }) return
         if (state.value.feeds.retryAtMillis[feed.id]?.let { it > clock() } == true) {
             feeds { it.copy(message = "The server is busy. Wait before trying again.") }; return
         }
         mutateFeed(feed.id) { ticket ->
+            val previousDeadline = state.value.feeds.retryAtMillis[feed.id]
             val result = ticket.session.api.refreshDiscoveryFeed(feed.id).safe() ?: throw IllegalStateException()
             val transform = { feedState: DiscoveryFeedsState -> feedState.copy(items = feedState.items.map { if (it.id == feed.id) result else it },
+                retryAtMillis = if (feedState.retryAtMillis[feed.id] == previousDeadline) feedState.retryAtMillis - feed.id else feedState.retryAtMillis,
                 message = if (result.lastError == null) "Feed refreshed." else feedErrorMessage(result.lastError)) }
             transform
         }
@@ -159,19 +181,20 @@ class DiscoveryActions(
         val lifetime = feedLifetime
         fun fresh() = current(ticket) && lifetime == feedLifetime
         fun feeds(block: (DiscoveryFeedsState) -> DiscoveryFeedsState) = guarded(ticket, { lifetime == feedLifetime }) { it.copy(feeds = block(it.feeds)) }
-        feeds { it.copy(operating = it.operating + id, message = null) }
+        feeds { it.pruneCooldowns().copy(operating = it.operating + id, message = null) }
         scope.launch {
             try {
                 val result = work(ticket)
-                if (fresh()) feeds { result(it).copy(loading = false, loaded = true, generation = it.generation + 1) }
+                if (fresh()) feeds { result(it).pruneCooldowns().copy(loading = false, loaded = true, generation = it.generation + 1) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (error is HttpException && error.code() == 429) {
+                if (id != ADD_FEED && error is HttpException && error.code() == 429) {
                     val deadline = clock() + discoveryRetryDelay(error.response()?.headers()?.get("Retry-After"), wallClock())
                     // A screen may close while refresh runs. Cooldowns belong to the connection session.
                     guardedSession(ticket) { value ->
-                        val retry = value.feeds.retryAtMillis
-                        value.copy(feeds = value.feeds.copy(retryAtMillis = retry +
+                        val pruned = value.feeds.pruneCooldowns()
+                        val retry = pruned.retryAtMillis
+                        value.copy(feeds = if (knownFeedIds?.contains(id) == false) pruned else pruned.copy(retryAtMillis = retry +
                             (id to (retry[id]?.coerceAtLeast(deadline) ?: deadline))))
                     }
                 }
@@ -276,7 +299,7 @@ class DiscoveryActions(
                 // Once accepted, never repeat POST if tracking later fails. A concurrent page cannot bring it back.
                 guardedSession(ticket) { value -> value.copy(queue = value.queue.let {
                     it.copy(items = it.items.filterNot { row -> row.id == item.id },
-                        removedIds = (it.removedIds + item.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet(), generation = it.generation + 1, loading = false)
+                        removedIds = (it.removedIds + item.id).toList().takeLast(DISCOVERY_MAX_ITEMS).toSet())
                 }) }
                 if (job != null) {
                     if (job.id.isNullOrBlank()) { if (fresh()) queue { it.copy(message = JOB_TRACKING_FAILED) }; return@launch }
@@ -297,7 +320,7 @@ class DiscoveryActions(
         queue = DiscoveryQueueState(operating = it.queue.operating),
         feeds = DiscoveryFeedsState(retryAtMillis = it.feeds.retryAtMillis)) } }
     /** Connection replacement invalidates all guards, including an A → B → A switch. */
-    fun resetScope() { mutable.update { DiscoveryState(epoch = it.epoch + 1) } }
+    fun resetScope() { knownFeedIds = null; mutable.update { DiscoveryState(epoch = it.epoch + 1) } }
     fun closeQueue() {
         queueLifetime++
         queue { DiscoveryQueueState(sort = it.sort, generation = it.generation + 1, operating = it.operating,
