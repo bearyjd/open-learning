@@ -57,5 +57,5 @@ dependencies {
     // 3.7 uses the public input service API required by Android 17 devices.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.room:room-testing:2.7.1")
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.1")
 }
