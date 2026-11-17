@@ -21,6 +21,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+JOB_QUEUED = "queued"
+JOB_RUNNING = "running"
+JOB_COMPLETED = "completed"
+JOB_FAILED = "failed"
+JOB_CANCELLED = "cancelled"
+JOB_PENDING_STATUSES = (JOB_QUEUED, JOB_RUNNING)
+
 
 def now() -> datetime:
     return datetime.now(UTC)
@@ -223,7 +230,7 @@ class Job(Base):
     payload_title: Mapped[str | None] = mapped_column(Text)
     payload_text: Mapped[str | None] = mapped_column(Text)
     payload_label: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    status: Mapped[str] = mapped_column(String(20), default=JOB_QUEUED, index=True)
     error: Mapped[str | None] = mapped_column(Text)
     # Set when a note job completes; no foreign key (forget_note deletes linked jobs itself).
     document_id: Mapped[str | None] = mapped_column(String(36), index=True)

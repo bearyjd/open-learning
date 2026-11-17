@@ -25,7 +25,18 @@ from .forget import (
     purge_note_payloads,
 )
 from .limits import BodyLimitMiddleware
-from .models import History, Insight, Interaction, Job, Preference, ReviewItem, SavedItem, now
+from .models import (
+    JOB_FAILED,
+    JOB_QUEUED,
+    History,
+    Insight,
+    Interaction,
+    Job,
+    Preference,
+    ReviewItem,
+    SavedItem,
+    now,
+)
 from .notes import (
     MAX_LABEL_CHARS,
     MAX_TITLE_CHARS,
@@ -215,13 +226,13 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         item = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
         if item is None:
             raise HTTPException(404, "Job not found")
-        if item.status != "failed":
+        if item.status != JOB_FAILED:
             raise HTTPException(409, "Only failed jobs can be retried")
         if item.kind == "note" and item.payload_text is None:
             raise HTTPException(409, "Note text is no longer available; submit it again")
         if item.kind == "note":
             note_capacity_check(db, request.app.state.settings)
-        item.status, item.error = "queued", None
+        item.status, item.error = JOB_QUEUED, None
         db.commit()
         return job_output(item)
 

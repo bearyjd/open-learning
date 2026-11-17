@@ -11,7 +11,7 @@ from .database import session_factory
 from .discovery import refresh_due_feed
 from .fetching import FetchError
 from .forget import purge_note_payloads
-from .models import Job
+from .models import JOB_FAILED, Job
 from .services import claim_job, process_job
 from .versions import NoteConflict, NoteStale
 
@@ -35,7 +35,7 @@ def run_once(factory, settings, fetcher=None, model=None) -> bool:
         with factory.begin() as db:
             job = db.scalar(select(Job).where(Job.id == claim[0]).with_for_update())
             if job and job.lease_token == claim[2]:
-                job.status = "failed"
+                job.status = JOB_FAILED
                 job.error = (
                     str(error)
                     if isinstance(error, (ModelError, FetchError, NoteConflict))
