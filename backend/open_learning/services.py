@@ -16,6 +16,7 @@ from .models import (
     Insight,
     Interaction,
     Job,
+    Preference,
     ReviewHistory,
     ReviewItem,
     SavedItem,
@@ -115,7 +116,20 @@ def serialize_review(db: Session, item: ReviewItem) -> dict:
     }
 
 
+DEFAULT_DAILY_LIMIT = 10
+CANDIDATE_SCAN = 200
+
+
+def saved_preference(db: Session, key: str, default):
+    row = db.get(Preference, key)
+    if row is None or not isinstance(row.value, dict):
+        return default
+    return row.value.get("value", default)
+
+
 def today_feed(db: Session) -> list[dict]:
+    limit = saved_preference(db, "daily_limit", DEFAULT_DAILY_LIMIT)
+    interests = {str(topic).casefold() for topic in saved_preference(db, "interests", [])}
     day = now().date().isoformat()
     feed = db.get(DailyFeed, day, with_for_update=True)
     if feed is None:
@@ -134,9 +148,11 @@ def today_feed(db: Session) -> list[dict]:
             select(Insight)
             .where(Insight.dismissed.is_(False), Insight.document_id.in_(current_documents()))
             .order_by(Insight.created_at.desc())
-            .limit(10)
+            .limit(CANDIDATE_SCAN)
         )
     )
+    # Stable sort keeps newest-first order within matching and non-matching insights.
+    candidates.sort(key=lambda item: not interests.intersection(t.casefold() for t in item.tags))
     # Cached ids drop out once dismissed, forgotten, or superseded by a newer note version.
     keep = set(
         db.scalars(
@@ -148,7 +164,7 @@ def today_feed(db: Session) -> list[dict]:
         )
     )
     valid_ids = [key for key in feed.insight_ids if key in keep]
-    ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:10]
+    ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:limit]
     feed.insight_ids = ids
     db.commit()
     items = (db.get(Insight, key) for key in ids)
