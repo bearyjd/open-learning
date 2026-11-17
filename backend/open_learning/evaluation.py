@@ -24,6 +24,9 @@ Score = Annotated[int, Field(strict=True, ge=0, le=2)]
 Dimension = Literal["support", "citation", "clarity", "assessment", "follow_up", "uncertainty"]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Output = InsightBatch | TutorResult
+# Bump when prompts or model-facing behavior in ai.py change in a way that
+# invalidates prior evaluation runs; unrelated edits to ai.py must not.
+EVALUATION_VERSION = "ai-prompts-1"
 DEFAULT_CORPUS = Path(__file__).resolve().parents[1] / "evaluation" / "corpus.json"
 
 
@@ -132,7 +135,7 @@ def digest(value):
 
 
 def production_digest():
-    return hashlib.sha256(Path(__file__).with_name("ai.py").read_bytes()).hexdigest()
+    return digest(EVALUATION_VERSION)
 
 
 def load_corpus(path=DEFAULT_CORPUS):
