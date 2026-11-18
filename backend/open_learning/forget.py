@@ -43,6 +43,10 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import (
+    JOB_CANCELLED,
+    JOB_COMPLETED,
+    JOB_FAILED,
+    JOB_PENDING_STATUSES,
     Chunk,
     Document,
     History,
@@ -57,7 +61,6 @@ from .models import (
 )
 
 NOTE_LIMIT = 500
-PENDING_STATUSES = ("queued", "running")
 CAPACITY_LOCK_KEY = 0x4F4C4E4F  # Arbitrary constant serialising note admission on PostgreSQL.
 # Class of the two-key advisory locks serialising forgets per note (lineage). The two-key space
 # never overlaps the single-key CAPACITY_LOCK_KEY space.
@@ -173,7 +176,7 @@ def _edit_job_ids(db: Session, document_ids: set[str]) -> list[str]:
             select(Job.id).where(
                 Job.kind == "note",
                 Job.replaces_document_id.in_(document_ids),
-                Job.status != "completed",
+                Job.status != JOB_COMPLETED,
             )
         )
     )
@@ -186,7 +189,7 @@ def _cancel_matching_jobs(db: Session, content_hashes: set[str], document_ids: s
         return
     jobs = db.scalars(select(Job).where(Job.id.in_(ids)).order_by(Job.id).with_for_update())
     for job in jobs:
-        if job.status == "completed":
+        if job.status == JOB_COMPLETED:
             continue  # Completed while we waited for the lock.
         is_edit = job.replaces_document_id in document_ids
         if not is_edit and job.payload_text is None:
@@ -194,8 +197,8 @@ def _cancel_matching_jobs(db: Session, content_hashes: set[str], document_ids: s
         if not is_edit and _hash(job.payload_text) not in content_hashes:
             continue
         job.payload_title = job.payload_text = job.payload_label = None
-        if job.status in PENDING_STATUSES:  # A failed or cancelled job keeps its outcome.
-            job.status, job.error = "cancelled", "Note deleted"
+        if job.status in JOB_PENDING_STATUSES:  # A failed or cancelled job keeps its outcome.
+            job.status, job.error = JOB_CANCELLED, "Note deleted"
             job.lease_token = job.lease_until = None
 
 
@@ -203,7 +206,7 @@ def _delete_linked_jobs(db: Session, document_ids: set[str]) -> None:
     """Delete completed note jobs that produced these documents (null-link jobs are untouched)."""
     jobs = db.scalars(
         select(Job)
-        .where(Job.kind == "note", Job.status == "completed", Job.document_id.in_(document_ids))
+        .where(Job.kind == "note", Job.status == JOB_COMPLETED, Job.document_id.in_(document_ids))
         .order_by(Job.id)
         .with_for_update()
     ).all()
@@ -356,7 +359,7 @@ def purge_note_payloads(db: Session, settings: Settings) -> int:
     cutoff = now() - timedelta(hours=settings.note_failed_payload_hours)
     rows = db.execute(
         select(Job.id, Job.created_at)
-        .where(Job.kind == "note", Job.status == "failed", Job.payload_text.is_not(None))
+        .where(Job.kind == "note", Job.status == JOB_FAILED, Job.payload_text.is_not(None))
         .order_by(Job.created_at.desc(), Job.id.desc())
     ).all()
     stale = [
@@ -368,7 +371,7 @@ def purge_note_payloads(db: Session, settings: Settings) -> int:
         return 0
     locked = db.scalars(
         select(Job.id)
-        .where(Job.id.in_(stale), Job.status == "failed")
+        .where(Job.id.in_(stale), Job.status == JOB_FAILED)
         .order_by(Job.id)
         .with_for_update(skip_locked=True)
     ).all()
@@ -393,7 +396,7 @@ def note_capacity_check(db: Session, settings: Settings) -> None:
     pending = db.scalar(
         select(func.count())
         .select_from(Job)
-        .where(Job.kind == "note", Job.status.in_(PENDING_STATUSES))
+        .where(Job.kind == "note", Job.status.in_(JOB_PENDING_STATUSES))
     )
     if pending >= settings.note_max_pending_jobs:
         raise HTTPException(429, CAPACITY_MESSAGE, headers={"Retry-After": RETRY_AFTER_SECONDS})

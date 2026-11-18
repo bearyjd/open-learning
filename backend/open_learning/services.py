@@ -9,6 +9,9 @@ from .ai import ModelClient, ModelError, normalized
 from .config import Settings
 from .fetching import fetch_document, validate_url
 from .models import (
+    JOB_COMPLETED,
+    JOB_QUEUED,
+    JOB_RUNNING,
     Chunk,
     DailyFeed,
     Document,
@@ -272,8 +275,8 @@ def claim_job(factory, lease_seconds: int) -> tuple[str, str | None, str] | None
             select(Job)
             .where(
                 or_(
-                    Job.status == "queued",
-                    (Job.status == "running") & (Job.lease_until < timestamp),
+                    Job.status == JOB_QUEUED,
+                    (Job.status == JOB_RUNNING) & (Job.lease_until < timestamp),
                 )
             )
             .order_by(Job.created_at)
@@ -282,7 +285,7 @@ def claim_job(factory, lease_seconds: int) -> tuple[str, str | None, str] | None
         )
         if job is None:
             return None
-        job.status, job.lease_token = "running", ident()
+        job.status, job.lease_token = JOB_RUNNING, ident()
         job.error = None
         job.lease_until = timestamp + timedelta(seconds=lease_seconds)
         job.attempts += 1
@@ -291,13 +294,13 @@ def claim_job(factory, lease_seconds: int) -> tuple[str, str | None, str] | None
 
 def _lease_holder(db: Session, job_id: str, token: str) -> Job | None:
     job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
-    if job is None or job.status != "running" or job.lease_token != token:
+    if job is None or job.status != JOB_RUNNING or job.lease_token != token:
         return None  # A reclaimed lease owns completion now.
     return job
 
 
 def _complete(job: Job) -> None:
-    job.status, job.error, job.lease_until, job.lease_token = "completed", None, None, None
+    job.status, job.error, job.lease_until, job.lease_token = JOB_COMPLETED, None, None, None
     job.payload_title = job.payload_text = job.payload_label = None
 
 
@@ -372,7 +375,7 @@ def _load_note(factory, job_id: str, token: str):
     """Return (title, text, label, replaces_document_id), or None if the lease was lost."""
     with factory() as db:
         job = db.scalar(select(Job).where(Job.id == job_id))
-        if job is None or job.status != "running" or job.lease_token != token:
+        if job is None or job.status != JOB_RUNNING or job.lease_token != token:
             return None
         if job.payload_text is None or job.payload_title is None:
             raise RuntimeError("Note payload is missing")
