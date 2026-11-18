@@ -436,3 +436,7 @@ def test_cli_offline_commands_and_absent_execute_never_construct_client(
         == 1
     )
     assert "pending_review" in capsys.readouterr().out
+
+
+def test_production_digest_tracks_version_identifier_not_ai_source():
+    assert ev.production_digest() == ev.digest(ev.EVALUATION_VERSION)
