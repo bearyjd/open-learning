@@ -19,6 +19,7 @@ from .models import (
     Insight,
     Interaction,
     Job,
+    Preference,
     ReviewHistory,
     ReviewItem,
     SavedItem,
@@ -118,7 +119,33 @@ def serialize_review(db: Session, item: ReviewItem) -> dict:
     }
 
 
+DEFAULT_DAILY_LIMIT = 10
+MAX_DAILY_LIMIT = 20
+FEED_CANDIDATE_WINDOW = 100
+
+
+def preference_value(db: Session, key: str):
+    row = db.get(Preference, key)
+    return row.value.get("value") if row is not None and isinstance(row.value, dict) else None
+
+
+def feed_limit(db: Session) -> int:
+    value = preference_value(db, "daily_limit")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return DEFAULT_DAILY_LIMIT
+    return max(1, min(MAX_DAILY_LIMIT, value))
+
+
+def feed_interests(db: Session) -> set[str]:
+    value = preference_value(db, "interests")
+    if not isinstance(value, list):
+        return set()
+    return {item.strip().casefold() for item in value if isinstance(item, str)}
+
+
 def today_feed(db: Session) -> list[dict]:
+    limit = feed_limit(db)
+    interests = feed_interests(db)
     day = now().date().isoformat()
     feed = db.get(DailyFeed, day, with_for_update=True)
     if feed is None:
@@ -137,9 +164,13 @@ def today_feed(db: Session) -> list[dict]:
             select(Insight)
             .where(Insight.dismissed.is_(False), Insight.document_id.in_(current_documents()))
             .order_by(Insight.created_at.desc())
-            .limit(10)
+            .limit(FEED_CANDIDATE_WINDOW if interests else limit)
         )
     )
+    if interests:  # Stable sort: matches first, recency within each group.
+        candidates.sort(
+            key=lambda item: not any(str(tag).casefold() in interests for tag in item.tags or [])
+        )
     # Cached ids drop out once dismissed, forgotten, or superseded by a newer note version.
     keep = set(
         db.scalars(
@@ -151,7 +182,7 @@ def today_feed(db: Session) -> list[dict]:
         )
     )
     valid_ids = [key for key in feed.insight_ids if key in keep]
-    ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:10]
+    ids = list(dict.fromkeys(valid_ids + [item.id for item in candidates]))[:limit]
     feed.insight_ids = ids
     db.commit()
     items = (db.get(Insight, key) for key in ids)
