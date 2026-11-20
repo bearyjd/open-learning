@@ -10,6 +10,7 @@ import httpx
 import simplejson
 from sqlalchemy import select
 
+from .config import OPENROUTER_BASE, REQUEST_MAX
 from .models import CloudAttempt, CloudSettlement
 from .spending import (
     Quote,
@@ -20,10 +21,10 @@ from .spending import (
     settle_attempt,
 )
 
-BASE = "https://openrouter.ai/api/v1"
 METADATA_MAX = 8 * 1024 * 1024
 RESPONSE_MAX = 2 * 1024 * 1024
-REQUEST_MAX = 256 * 1024
+# Provider capabilities the request body built in ai.py depends on (pinned by a test).
+REQUIRED_PARAMETERS = frozenset({"structured_outputs", "response_format", "temperature"})
 
 
 class CloudError(ValueError):
@@ -69,7 +70,7 @@ def _request(
     try:
         with client.stream(
             method,
-            BASE + path,
+            OPENROUTER_BASE + path,
             headers=headers,
             content=body,
             params=params,
@@ -179,8 +180,7 @@ def fetch_quote(client: httpx.Client, settings) -> tuple[Quote, Decimal]:
     parameters = endpoint.get("supported_parameters")
     if not isinstance(parameters, list) or any(not isinstance(p, str) for p in parameters):
         raise CloudError("Invalid provider parameters")
-    needed = {"structured_outputs", "response_format", "temperature"}
-    if not needed.issubset(parameters):
+    if not REQUIRED_PARAMETERS.issubset(parameters):
         raise CloudError("Provider does not support strict structured output")
     token_parameter = "max_tokens" if "max_tokens" in parameters else "max_completion_tokens"
     if token_parameter not in parameters:

@@ -678,3 +678,32 @@ def test_bounded_diagnostic_never_releases_unverified_endpoint_hold(pg_factory, 
         budget = db.get(CloudBudget, 1)
         assert budget.held == Decimal("0.0112")
         assert budget.spent == 0
+
+
+def test_request_constants_have_one_home():
+    from open_learning import config, openrouter, spending
+
+    assert openrouter.OPENROUTER_BASE is config.OPENROUTER_BASE
+    assert openrouter.REQUEST_MAX is config.REQUEST_MAX
+    assert spending.REQUEST_MAX is config.REQUEST_MAX
+    assert cloud_settings().effective_ai_endpoint == config.OPENROUTER_BASE
+    assert Settings.model_fields["openrouter_output_tokens"].default == config.OUTPUT_TOKEN_CAP
+
+
+def test_ai_request_keys_are_covered_by_openrouter_required_parameters(monkeypatch):
+    """A new sampling key in ai.py (top_p, seed...) must also be required of providers."""
+    from open_learning import config, openrouter
+
+    sent = {}
+
+    def fake_post(self, url, **kwargs):
+        sent.update(kwargs["json"])
+        raise httpx.ConnectError("captured")
+
+    monkeypatch.setattr(httpx.Client, "post", fake_post)
+    with pytest.raises(ModelError):
+        ModelClient(Settings(api_token=TOKEN)).insights([PASSAGE])
+    assert sent["max_tokens"] == config.OUTPUT_TOKEN_CAP
+    # Keys the quote/transport layer supplies itself, not provider sampling features.
+    transport_keys = {"model", "messages", "max_tokens"}
+    assert (set(sent) - transport_keys) <= openrouter.REQUIRED_PARAMETERS
