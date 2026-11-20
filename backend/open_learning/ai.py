@@ -7,7 +7,7 @@ from typing import Annotated, Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
-from .config import Settings
+from .config import OUTPUT_TOKEN_CAP, Settings
 
 
 class ModelError(ValueError):
@@ -181,7 +181,7 @@ class ModelClient:
         body = {
             "model": self.settings.ai_model,
             "temperature": 0.2,
-            "max_tokens": 3000,
+            "max_tokens": OUTPUT_TOKEN_CAP,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {

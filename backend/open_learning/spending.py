@@ -7,6 +7,7 @@ from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
 
 from sqlalchemy import select, text
 
+from .config import REQUEST_MAX
 from .models import CloudAttempt, CloudBudget, CloudSettlement, ident, now
 
 QUANTUM = Decimal("0.000000000001")
@@ -110,7 +111,7 @@ def reserve_attempt(
     amount = quote.reservation
     if amount > settings.openrouter_request_budget_usd:
         raise SpendingError("Cloud request budget exceeded")
-    if request_bytes <= 0 or request_bytes > 256 * 1024:
+    if request_bytes <= 0 or request_bytes > REQUEST_MAX:
         raise SpendingError("Cloud request size exceeded")
     attempt_id = ident()
     with factory.begin() as db:

@@ -7,6 +7,10 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+REQUEST_MAX = 256 * 1024
+OUTPUT_TOKEN_CAP = 3000
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -30,7 +34,7 @@ class Settings(BaseSettings):
     openrouter_lifetime_budget_usd: Decimal | None = None
     openrouter_key_limit_usd: Decimal | None = None
     openrouter_request_fee_cap_usd: Decimal | None = None
-    openrouter_output_tokens: int = Field(default=3000, ge=1, le=3000)
+    openrouter_output_tokens: int = Field(default=OUTPUT_TOKEN_CAP, ge=1, le=OUTPUT_TOKEN_CAP)
     embedding_model: str = ""
     ai_timeout_seconds: float = Field(default=90, gt=0, le=180)
     fetch_max_bytes: int = Field(default=2_000_000, ge=1024, le=10_000_000)
@@ -113,9 +117,7 @@ class Settings(BaseSettings):
 
     @property
     def effective_ai_endpoint(self) -> str:
-        return (
-            "https://openrouter.ai/api/v1" if self.ai_backend == "openrouter" else self.ai_base_url
-        )
+        return OPENROUTER_BASE if self.ai_backend == "openrouter" else self.ai_base_url
 
 
 @lru_cache
