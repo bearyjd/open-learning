@@ -1,11 +1,13 @@
 """Superseded note versions are hidden from listings; note text and version attribution."""
 
+from datetime import UTC, datetime, timedelta
+
 from conftest import FixtureModel
 from sqlalchemy import func, select
 from test_note_forget import NOTE, import_note, url_job
 from test_note_versions import EDITED, MARKER, edit_and_run
 
-from open_learning.models import Insight
+from open_learning.models import History, Insight
 from open_learning.services import claim_job, process_job
 
 API = "/api/v1"
@@ -183,3 +185,20 @@ def test_writes_on_superseded_insight_are_404_without_writes(client, factory, se
         assert db.scalar(select(func.count()).select_from(SavedItem)) == 0
         assert db.scalar(select(func.count()).select_from(ReviewHistory)) == 0
         assert db.get(Insight, old).dismissed is False
+
+
+def test_history_filters_by_insight_id_oldest_first(client, factory, settings):
+    v1 = import_note(client, factory, settings)
+    (iid,) = insight_ids(factory, v1)
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    with factory() as db:
+        for n, (role, text) in enumerate([("user", "Q1"), ("assistant", "A1"), ("user", "Q2")]):
+            db.add(
+                History(
+                    insight_id=iid, role=role, message=text, created_at=base + timedelta(minutes=n)
+                )
+            )
+        db.commit()
+    rows = client.get(API + "/history", params={"insight_id": iid}).json()
+    assert [r["message"] for r in rows] == ["Q1", "A1", "Q2"]
+    assert client.get(API + "/history", params={"insight_id": "missing"}).json() == []

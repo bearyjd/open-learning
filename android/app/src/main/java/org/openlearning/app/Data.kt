@@ -41,6 +41,7 @@ data class ChatRequest(val insightId: String, val message: String)
 data class Citation(val documentId: String = "", val sourceUrl: String = "", val passage: String = "",
     val sourceKind: String = "url", val sourceLabel: String = "")
 data class ChatReply(val answer: String = "", val question: String = "", val citations: List<Citation> = emptyList(), val reviewId: String = "")
+data class HistoryLine(val insightId: String = "", val role: String = "", val message: String = "", val createdAt: String = "")
 data class Review(val id: String, val insightId: String, val question: String, val dueAt: String, val intervalDays: Double, val insightTitle: String = "",
     /** Additive: servers that predate it send nothing. Gson can leave it null, so read it through [docId]. */
     val documentId: String = "")
@@ -65,6 +66,7 @@ interface LearningApi {
     @POST("api/v1/jobs/{id}/retry") suspend fun retryJob(@Path("id") id: String): IngestJob
     @GET("api/v1/search") suspend fun search(@HttpQuery("q") query: String): List<Insight>
     @POST("api/v1/tutor/chat") suspend fun chat(@Body body: ChatRequest): ChatReply
+    @GET("api/v1/history") suspend fun history(@HttpQuery("insight_id") insightId: String): List<HistoryLine>
     @GET("api/v1/reviews/due") suspend fun reviews(): List<Review>
     @POST("api/v1/reviews/{id}/answer") suspend fun rate(@Path("id") id: String, @Body body: Rating): Review
 }

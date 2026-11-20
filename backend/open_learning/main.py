@@ -402,7 +402,17 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
         return payload
 
     @api.get("/history")
-    def history(db=Depends(database)):
+    def history(insight_id: str | None = None, db=Depends(database)):
+        query = select(History).where(
+            History.insight_id.in_(
+                select(Insight.id).where(Insight.document_id.in_(current_documents()))
+            )
+        )
+        if insight_id is not None:
+            # One card's conversation reads oldest first, like the chat it restores.
+            query = query.where(History.insight_id == insight_id).order_by(History.created_at.asc())
+        else:
+            query = query.order_by(History.created_at.desc())
         return [
             {
                 "insight_id": item.insight_id,
@@ -410,16 +420,7 @@ def create_app(settings: Settings | None = None, factory=None, model=None) -> Fa
                 "message": item.message,
                 "created_at": item.created_at.isoformat(),
             }
-            for item in db.scalars(
-                select(History)
-                .where(
-                    History.insight_id.in_(
-                        select(Insight.id).where(Insight.document_id.in_(current_documents()))
-                    )
-                )
-                .order_by(History.created_at.desc())
-                .limit(200)
-            )
+            for item in db.scalars(query.limit(200))
         ]
 
     mount_discovery(api, database)

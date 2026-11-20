@@ -16,3 +16,14 @@ fun ScreenState.withReply(reply: ChatLine, hidden: Set<String>): ScreenState =
 
 /** A chat request for a selected note that is hidden is never sent. */
 fun chatMayProceed(selected: Insight, hidden: Set<String>): Boolean = !selected.isHiddenBy(hidden)
+
+/** Saved tutor turns as chat lines; unknown roles are skipped. The server returns them oldest first. */
+fun List<HistoryLine>.toChatLines(): List<ChatLine> = mapNotNull {
+    when (it.role) { "user" -> ChatLine("You", it.message); "assistant" -> ChatLine("Tutor", it.message); else -> null }
+}
+
+/** Fills an untouched chat with [lines] only for the same card, the same chat generation and a card that is not hidden. */
+fun ScreenState.withHistory(itemId: String, lines: List<ChatLine>, hidden: Set<String>, current: Boolean): ScreenState {
+    val card = selected
+    return if (!current || card == null || card.id != itemId || card.isHiddenBy(hidden) || chat.isNotEmpty() || chatBusy) this else copy(chat = lines)
+}

@@ -123,7 +123,9 @@ using the [data policy](https://openrouter.ai/docs/guides/privacy/data-collectio
 
 **Deliver:** Recover pending ingestion, cached reading state, tutor history, and
 review state across process death, backend/worker restart, and device reboot;
-verify compact, expanded, and folded/unfolded transitions.
+verify compact, expanded, and folded/unfolded transitions. Opening a card refetches
+its saved tutor turns from `GET /history?insight_id=` (oldest first) into memory only;
+the app persists no chat text, and a stale or hidden card never receives lines.
 
 **Accept:** Physical-device and service-restart scenarios show no duplicate
 publication, lost saved cards, or repeated review ratings. Check disconnected
