@@ -318,6 +318,7 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
     private fun showDetail(item: Insight, afterShown: () -> Unit = {}) {
         detailJob?.cancel()
         chatSession.reset()
+        val generation = chatSession.generation
         val repository = repo ?: return
         val scope = repository.config.scope
         detailJob = viewModelScope.launch {
@@ -329,6 +330,8 @@ class LearningViewModel(application: Application, savedState: SavedStateHandle) 
                 val fresh = repository.api.insight(item.id)
                 repository.remember(fresh)
                 if (repo === repository && publisher.value.selected?.id == item.id) publisher.publishFresh(scope) { it.copy(selected = fresh) }
+                val lines = repository.api.history(item.id).toChatLines()
+                if (repo === repository) publisher.publishFreshWith(scope) { state, hidden -> state.withHistory(item.id, lines, hidden, chatSession.isCurrent(generation)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Cached detail remains readable offline. */ }
         }
