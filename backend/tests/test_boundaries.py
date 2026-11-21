@@ -232,3 +232,18 @@ def test_real_trafilatura_extracts_article_title_and_body(monkeypatch, settings)
     assert PASSAGE.strip() in article.text
     assert "Subscribe for updates" not in article.text
     assert not article.truncated
+
+
+def test_model_client_rejects_non_postgres_factory_for_openrouter():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from open_learning.spending import is_postgres_factory
+
+    sqlite = sessionmaker(bind=create_engine("sqlite://"))
+    assert not is_postgres_factory(sqlite)
+    assert not is_postgres_factory(None)
+    assert not is_postgres_factory(sessionmaker())
+    for factory in (None, sqlite):
+        with pytest.raises(ModelError, match="PostgreSQL"):
+            ModelClient(SimpleNamespace(ai_backend="openrouter"), factory)
