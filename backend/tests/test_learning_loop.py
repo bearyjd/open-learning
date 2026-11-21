@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from open_learning.ai import ModelError
 from open_learning.models import Document, Insight, Job, ReviewHistory, now
-from open_learning.services import claim_job, process_job
+from open_learning.services import claim_job, fail_job, process_job
 from open_learning.worker import run_once
 
 API = "/api/v1"
@@ -184,3 +184,16 @@ def test_review_payloads_carry_additive_document_id(client, factory, settings):
     answered = client.post(API + "/reviews/" + due[0]["id"] + "/answer", json={"rating": "easy"})
     assert answered.status_code == 200
     assert answered.json()["document_id"] == insight["document_id"]
+
+
+def test_fail_job_releases_only_the_current_lease_owner(client, factory, settings):
+    job = client.post(API + "/ingest/url", json={"url": "https://example.com"}).json()
+    first = claim_job(factory, 300)
+    with factory.begin() as db:
+        db.get(Job, job["id"]).lease_until = now() - timedelta(seconds=1)
+    second = claim_job(factory, 300)
+    fail_job(factory, settings, first, RuntimeError("stale"))
+    assert client.get(API + "/jobs/" + job["id"]).json()["status"] == "running"
+    fail_job(factory, settings, second, RuntimeError("secret detail"))
+    failed = client.get(API + "/jobs/" + job["id"]).json()
+    assert failed["status"] == "failed" and failed["error"] == "Processing failed"
