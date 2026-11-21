@@ -7,9 +7,11 @@ from sqlalchemy.orm import Session
 
 from .ai import ModelClient, ModelError, normalized
 from .config import Settings
-from .fetching import fetch_document, validate_url
+from .fetching import FetchError, fetch_document, validate_url
+from .forget import purge_note_payloads
 from .models import (
     JOB_COMPLETED,
+    JOB_FAILED,
     JOB_QUEUED,
     JOB_RUNNING,
     Chunk,
@@ -551,3 +553,22 @@ def process_job(
             texts=texts, batch=batch, truncated=article.truncated,
         )
         _complete(job)
+
+
+def fail_job(factory, settings: Settings, claim: tuple[str, str | None, str], error: Exception) -> None:
+    """Release a claimed job as failed, unless its lease has since been lost to another owner."""
+    with factory.begin() as db:
+        job = db.scalar(select(Job).where(Job.id == claim[0]).with_for_update())
+        if job is None or job.status != JOB_RUNNING or job.lease_token != claim[2]:
+            return
+        job.status = JOB_FAILED
+        job.error = (
+            str(error)
+            if isinstance(error, (ModelError, FetchError, NoteConflict))
+            else "Processing failed"
+        )
+        job.lease_until, job.lease_token = None, None
+        if isinstance(error, NoteStale):  # Retrying cannot succeed; keep no text.
+            job.payload_title = job.payload_text = job.payload_label = None
+        db.flush()
+        purge_note_payloads(db, settings)
