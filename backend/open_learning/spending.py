@@ -87,12 +87,17 @@ class Quote:
         )
 
 
+def is_postgres_factory(factory) -> bool:
+    """The one place that knows how to tell whether a session factory is bound to PostgreSQL."""
+    return (
+        factory is not None
+        and factory.kw.get("bind") is not None
+        and factory.kw["bind"].dialect.name == "postgresql"
+    )
+
+
 def _require_postgres(factory):
-    if (
-        factory is None
-        or factory.kw.get("bind") is None
-        or factory.kw["bind"].dialect.name != "postgresql"
-    ):
+    if not is_postgres_factory(factory):
         raise SpendingError("Cloud spending requires a PostgreSQL session factory")
 
 

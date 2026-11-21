@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from .config import OUTPUT_TOKEN_CAP, Settings
+from .spending import is_postgres_factory
 
 
 class ModelError(ValueError):
@@ -143,11 +144,7 @@ class ModelClient:
     def __init__(self, settings: Settings, factory=None):
         self.settings = settings
         self.factory = factory
-        if settings.ai_backend == "openrouter" and (
-            factory is None
-            or factory.kw.get("bind") is None
-            or factory.kw["bind"].dialect.name != "postgresql"
-        ):
+        if settings.ai_backend == "openrouter" and not is_postgres_factory(factory):
             raise ModelError("Cloud spending requires a PostgreSQL session factory")
 
     def complete(
